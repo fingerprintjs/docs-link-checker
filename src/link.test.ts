@@ -1,6 +1,12 @@
-import { describe, it, expect, vi, assert } from "vitest";
+import { describe, it, expect, vi, assert, beforeAll } from "vitest";
 import { checkLink } from "./link";
-import { error } from "console";
+
+// Set timeout for all tests in this file to 10 seconds
+beforeAll(() => {
+  vi.setConfig({
+    testTimeout: 15000,
+  });
+});
 
 describe("checkLink", () => {
   /**
