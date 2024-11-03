@@ -3,7 +3,7 @@
 A GitHub workflow that checks for broken links in our documentation, public GitHub readmes, and our website.
 
 * Run periodically every day.
-* You can start the workflow manually from inside **Actions**.
+* You can start the workflow manually from inside [**Actions**](https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml).
 * Failed runs send a notification to the `#integrations-notifications` Slack channel. Once we fix all links and stabilize the workflow, we can send the notification to the `#documentation` channel.
 * The latest results are deployed to GitHub pages of this repository.
 
