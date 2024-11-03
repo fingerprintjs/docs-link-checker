@@ -39,7 +39,6 @@ So a proper documentation link checker must:
 - [x] Nicer Readme
 - [x] Clean up promise pool
 - [x] Run tests in CI
-- [ ] Move repository
 - [ ] Fix Github `#L{number}` links occasional false positives 
 - [ ] Add more tests for everything
 - [ ] Nicer report styling
