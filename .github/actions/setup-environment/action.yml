@@ -1,0 +1,39 @@
+name: 'Setup Environment'
+description: 'Sets up Node.js environment with pnpm and Playwright'
+# https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cache node modules
+      uses: actions/cache@v4
+      with:
+        path: node_modules
+        key: nodemodules-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: nodemodules-
+
+    - name: 'Install pnpm'
+      uses: pnpm/action-setup@129abb77bf5884e578fcaf1f37628e41622cc371
+      with:
+        version: 9
+
+    - name: Install node modules
+      shell: bash
+      run: pnpm install --prefer-offline --frozen-lockfile
+
+    - name: Get installed Playwright version (used in cache key)
+      shell: bash
+      run: echo "PLAYWRIGHT_VERSION=$(node -e "process.stdout.write(require('playwright/package.json').version)")" >> $GITHUB_ENV
+
+    - name: Cache Chromium browser binary
+      uses: actions/cache@v4
+      id: playwright-cache
+      with:
+        path: |
+          ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-chrome-${{ env.PLAYWRIGHT_VERSION }}
+
+    - name: Install Chromium browser binary if cache missed
+      shell: bash
+      run: npx playwright install --with-deps chromium
+      if: steps.playwright-cache.outputs.cache-hit != 'true'

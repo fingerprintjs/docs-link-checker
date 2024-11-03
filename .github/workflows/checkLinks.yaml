@@ -1,0 +1,205 @@
+name: Run link checker on dev.fingerprint.com, fingerprint.com and public GitHub READMEs
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *' # Every day at midnight
+  workflow_dispatch:
+env:
+  README_API_KEY: ${{ secrets.README_API_KEY }}
+  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  DEV_REPORT: dev-fingerprint-com.html
+  GITHUB_REPORT: fingerprintjs-github-readmes.html
+  WEB_REPORT: fingerprint-com.html
+
+jobs:
+  docs:
+    name: Check links on dev.fingerprint.com
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-environment
+      
+      - name: Run link checker
+        run: pnpm run checkLinks:docs
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ env.DEV_REPORT }}
+          path: results/${{ env.DEV_REPORT }}
+          retention-days: 30
+
+  githubReadmes:
+    name: Check links on public GitHub READMEs in the `fingerprintjs` organization
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-environment
+      
+      - name: Run link checker
+        run: pnpm run checkLinks:github
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ env.GITHUB_REPORT }}
+          path: results/${{ env.GITHUB_REPORT }}
+          retention-days: 30
+
+  web:
+    name: Check links to our resources on fingerprint.com
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-environment
+      
+      - name: Run link checker
+        run: pnpm run checkLinks:web
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ env.WEB_REPORT }}
+          path: results/${{ env.WEB_REPORT }}
+          retention-days: 30
+
+  combine-artifacts:
+    name: Combine all reports
+    needs: [docs, githubReadmes, web]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Create reports directory
+        run: mkdir reports
+      - name: Download dev.fingerprint.com report
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.DEV_REPORT }}
+          path: reports
+      - name: Download GitHub READMEs report
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.GITHUB_REPORT }}
+          path: reports
+      - name: Download fingerprint.com report
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.WEB_REPORT }}
+          path: reports
+      - name: Create combined archive
+        run: |
+          cd reports
+          zip -r ../combined-reports.zip ./*
+          
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-reports
+          path: combined-reports.zip
+          retention-days: 30
+
+  deploy:
+    name: Deploy reports to GitHub Pages
+    needs: [docs, githubReadmes, web]
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: Create index page
+        run: |
+          TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
+          cat > reports/index.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Link Checker Reports</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 40px; }
+              h1 { color: #333; }
+              .report-list { margin-top: 20px; }
+              .report-item { margin: 10px 0; }
+              a { color: #0366d6; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+            </style>
+          </head>
+          <body>
+            <h1>Link Checker Reports</h1>
+            <div class="report-list">
+              <div class="report-item">
+                <a href="${DEV_REPORT}/${DEV_REPORT}">dev.fingerprint.com Report</a>
+              </div>
+              <div class="report-item">
+                <a href="${GITHUB_REPORT}/${GITHUB_REPORT}">GitHub READMEs Report</a>
+              </div>
+              <div class="report-item">
+                <a href="${WEB_REPORT}/${WEB_REPORT}">fingerprint.com Report</a>
+              </div>
+            </div>
+            <p>Last updated: ${TIMESTAMP}</p>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+  report-status:
+    name: Report status to Slack
+    needs: [docs, githubReadmes, web]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare message
+        id: message
+        run: |
+          MESSAGE="*Link Checker Results*
+          • dev.fingerprint.com check: ${{ needs.docs.result }}
+          • GitHub READMEs check: ${{ needs.githubReadmes.result }}
+          • fingerprint.com check: ${{ needs.web.result }}
+
+          View reports: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          
+          # Escape newlines for JSON
+          MESSAGE="${MESSAGE//$'\n'/\\n}"
+          echo "text=$MESSAGE" >> $GITHUB_OUTPUT
+
+      - uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": "${{ steps.message.outputs.text }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
