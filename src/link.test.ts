@@ -1,13 +1,6 @@
 import { describe, it, expect, vi, assert, beforeAll } from "vitest";
 import { checkLink } from "./link";
 
-// Set timeout for all tests in this file to 10 seconds
-beforeAll(() => {
-  vi.setConfig({
-    testTimeout: 15000,
-  });
-});
-
 describe("checkLink", () => {
   /**
    * Simple response checks
@@ -72,7 +65,7 @@ describe("checkLink", () => {
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
-  it("should return 'hash not found' for broken L{number} hashes on GitHub ", async () => {
+  it("should return 'hash not found' for broken L{number} hashes on GitHub ", { timeout: 10000 }, async () => {
     const result = await checkLink(
       "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999",
       true
@@ -80,13 +73,17 @@ describe("checkLink", () => {
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
   });
 
-  it("should return 'hash not found' for broken L{number}-L{number} hashes on GitHub ", async () => {
-    const result = await checkLink(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999",
-      true
-    );
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-  });
+  it(
+    "should return 'hash not found' for broken L{number}-L{number} hashes on GitHub ",
+    { timeout: 10000 },
+    async () => {
+      const result = await checkLink(
+        "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999",
+        true
+      );
+      expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    }
+  );
 
   /**
    * Text fragments
