@@ -102,8 +102,16 @@ export const checkLink = async (url: string, verbose = false): Promise<LinkCheck
   }
 };
 
-async function isHashPresent(page: Page, hash: string, timeout = 3000) {
-  const locator = page.locator(`[id="${hash}"], [href="#${hash}"], [href="#${hash.toLowerCase()}"]`).first();
+async function isHashPresent(page: Page, hash: string, url: string, timeout = 3000) {
+  const selectors = [
+    '[id="${hash}"]',
+    `[href="#${hash}"]`,
+    `[href="#${hash.toLowerCase()}"]`,
+    // GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
+    isGithubCodeLineLink(url) && `[data-line-number="${hash.split("-")[0].slice(1)}"]`,
+  ];
+
+  const locator = page.locator(selectors.join(", ")).first();
 
   try {
     // Wait for the locator to be visible with a custom timeout
@@ -132,10 +140,7 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
 
   try {
     // Navigate to the URL
-    const response = await Promise.race([
-      page.goto(url),
-      page.waitForResponse((response) => response.url() === url && response.status() > 99),
-    ]);
+    const response = await page.goto(url);
 
     log(`Navigation response: ${response?.status()}`, verbose);
     if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
@@ -161,7 +166,7 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
       return { ok: true, status: response.status(), note: "Text Fragment" };
     }
 
-    if (hash && !(await isHashPresent(page, hash))) {
+    if (hash && !(await isHashPresent(page, hash, url))) {
       log(`Hash not found`, verbose);
       return {
         ok: false,
