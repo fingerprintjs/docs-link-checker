@@ -144,12 +144,14 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
     // Navigate to the URL
     const response = await page.goto(url);
 
+
     log(`Navigation response: ${response?.status()}`, verbose);
     if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
       return {
         ok: false,
         error: "could not check",
-        errorDetail: `Status ${response.status()}, ${response.statusText()}`,
+        status: response.status(),
+        errorDetail: `${response.statusText()} ${await response.text()}`,
       };
     }
 
@@ -159,6 +161,7 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
         ok: false,
         error: "broken link",
         status: response?.status() ?? 0,
+        errorDetail: `${response?.statusText()} ${await response?.text()}`,
       };
     }
 
