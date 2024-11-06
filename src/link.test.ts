@@ -26,13 +26,23 @@ describe("checkLink", () => {
   /**
    * Hashes
    */
-  it("should return OK for hashes that exist", async () => {
+  it("should return OK for hashes that exist (server-rendered", async () => {
     const result = await checkLink("https://dev.fingerprint.com/docs/quick-start-guide#whats-next", true);
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
-  it("should return 'hash not found' for broken hash links", { timeout: 10000 }, async () => {
+  it("should return 'hash not found' for broken hash links (server-rendered)", { timeout: 10000 }, async () => {
     const result = await checkLink("https://dev.fingerprint.com/#this-hash-does-not-exist", true);
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+
+  it("should return OK for hashes that exist (client-rendered)", async () => {
+    const result = await checkLink("https://developer.apple.com/documentation/webkit#overview", true);
+    expect(result).toEqual({ ok: true, status: 200 });
+  });
+
+  it("should return 'hash not found' for broken hash links (client-rendered)", { timeout: 10000 }, async () => {
+    const result = await checkLink("https://developer.apple.com/documentation/webkit#this-hash-does-not-exist", true);
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
   });
 

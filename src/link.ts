@@ -104,12 +104,14 @@ export const checkLink = async (url: string, verbose = false): Promise<LinkCheck
 
 async function isHashPresent(page: Page, hash: string, url: string, timeout = 3000) {
   const selectors = [
-    '[id="${hash}"]',
+    `[id="${hash}"]`,
     `[href="#${hash}"]`,
     `[href="#${hash.toLowerCase()}"]`,
     // GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
     isGithubCodeLineLink(url) && `[data-line-number="${hash.split("-")[0].slice(1)}"]`,
   ];
+
+  console.log("selectors", selectors.join(", "));
 
   const locator = page.locator(selectors.join(", ")).first();
 
