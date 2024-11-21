@@ -109,6 +109,13 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
                 <a href={link.href} target="_blank">
                   🔗"{link.text}" ➡️ <HrefRenderer link={link} />
                 </a>
+                <button
+                  onClick={() => navigator.clipboard.writeText(link.href)}
+                  className="ml-2 hover:bg-gray-200 rounded p-1"
+                  title="Copy link to clipboard"
+                >
+                  📋
+                </button>
               </td>
 
               <td className="py-2 px-4 border-b">
