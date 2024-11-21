@@ -147,6 +147,10 @@ jobs:
           </head>
           <body>
             <h1>Link Checker Reports</h1>
+            <div>
+              <a href="https://github.com/fingerprintjs/docs-link-checker">Github repository</a>
+              <a href="https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml">Run workflow again</a>
+            </div>
             <div class="report-list">
               <div class="report-item">
                 <a href="${DEV_REPORT}/${DEV_REPORT}">dev.fingerprint.com Report</a>
