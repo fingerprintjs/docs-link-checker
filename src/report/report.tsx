@@ -109,13 +109,11 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
                 <a href={link.href} target="_blank">
                   🔗"{link.text}" ➡️ <HrefRenderer link={link} />
                 </a>
-                <button
-                  onClick={() => navigator.clipboard.writeText(link.href)}
-                  className="ml-2 hover:bg-gray-200 rounded p-1"
-                  title="Copy link to clipboard"
-                >
-                  📋
-                </button>
+                <span
+                  dangerouslySetInnerHTML={{
+                    __html: `<button onclick="navigator.clipboard.writeText('${link.href}')" class="ml-2 hover:bg-gray-200 rounded p-1" title="Copy link to clipboard">📋</button>`,
+                  }}
+                />
               </td>
 
               <td className="py-2 px-4 border-b">
@@ -147,7 +145,7 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
 };
 
 export function renderReportToHTMLFile(jsonReport: LinkCheckReport, filePath: string) {
-  const htmlString = ReactDOMServer.renderToString(<JSONReportRenderer report={jsonReport} />);
+  const htmlString = ReactDOMServer.renderToStaticMarkup(<JSONReportRenderer report={jsonReport} />);
   const html = `
     <!DOCTYPE html>
     <html>
