@@ -159,7 +159,6 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
         ok: false,
         error: "broken link",
         status: response?.status() ?? 0,
-        errorDetail: `${response?.statusText()} ${await response?.text()}`,
       };
     }
 

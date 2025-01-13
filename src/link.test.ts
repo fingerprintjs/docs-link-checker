@@ -27,12 +27,15 @@ describe("checkLink", () => {
    * Hashes
    */
   it("should return OK for hashes that exist (server-rendered", async () => {
-    const result = await checkLink("https://dev.fingerprint.com/docs/quick-start-guide#whats-next", true);
+    const result = await checkLink(
+      "https://fingerprint.com/blog/android-device-reputation-network-fraud-detection#api-responses",
+      true
+    );
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
   it("should return 'hash not found' for broken hash links (server-rendered)", { timeout: 10000 }, async () => {
-    const result = await checkLink("https://dev.fingerprint.com/#this-hash-does-not-exist", true);
+    const result = await checkLink("https://fingerprint.com#does-not-exist", true);
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
   });
 
