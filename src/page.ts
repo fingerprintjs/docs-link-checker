@@ -72,23 +72,32 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
     const page = await browser.newPage();
 
     // Navigate to the URL
-    await page.goto(pageUrl, {
-      waitUntil: "networkidle", // Wait until network is idle
+    const response = await page.goto(pageUrl, {
       timeout: 30000, // 30 second timeout
     });
 
-    // Extract all links using page.evaluate
-    const links = await page.evaluate(() => {
-      // Get all 'a' elements (but not anchor icons) inside article content
-      const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
+    if (!response?.ok()) {
+      console.error(`Could not fetch ${pageUrl} status: ${response?.status()}`);
+      return [];
+    }
 
-      // Convert NodeList to array and map to desired format
-      return Array.from(anchors).map((anchor) => ({
-        page: window.location.href,
-        href: anchor.href,
-        text: anchor.textContent?.trim() ?? "",
-      }));
-    });
+    await page.waitForSelector(".markdown-body");
+
+    // Extract all links using page.evaluate
+    const links = await page.evaluate(
+      ([pageUrl]) => {
+        // Get all 'a' elements (but not anchor icons) inside article content
+        const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
+
+        // Convert NodeList to array and map to desired format
+        return Array.from(anchors).map((anchor) => ({
+          page: pageUrl,
+          href: anchor.href,
+          text: anchor.textContent?.trim() ?? "",
+        }));
+      },
+      [pageUrl]
+    );
 
     return filterOutIrrelevantLinks(links);
   } catch (error) {
