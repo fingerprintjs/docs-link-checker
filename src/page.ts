@@ -128,7 +128,7 @@ export const getLinksFromPages = async ({
     async (page) => {
       return usePlaywright ? parseLinksFromPageWithPlaywright(page) : parseLinksFromPage(page);
     },
-    5
+    usePlaywright ? 5 : 10
   );
 
   // Flatten and filter results if a link filter is provided
