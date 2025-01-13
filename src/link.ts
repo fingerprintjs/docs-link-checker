@@ -111,8 +111,6 @@ async function isHashPresent(page: Page, hash: string, url: string, timeout = 30
     isGithubCodeLineLink(url) && `[data-line-number="${hash.split("-")[0].slice(1)}"]`,
   ];
 
-  console.log("selectors", selectors.join(", "));
-
   const locator = page.locator(selectors.join(", ")).first();
 
   try {
