@@ -32,7 +32,7 @@ export const parallelProcess = async <T, R>(
 };
 
 export const CONCURRENCY_LIMIT = 10;
-export const TASK_TIMEOUT = 30000;
+export const TASK_TIMEOUT = 45000;
 
 export const OKAY_STATUS_CODES = [200, 301, 302, 303, 307, 308];
 // Some websites have ReCaptcha or other anti-scraping measures that prevent us from checking their links, let's ignore/collect them separately
