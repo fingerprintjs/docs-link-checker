@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
 import { BROWSER_USER_AGENT, parallelProcess, progressBar } from "./utils";
+import { chromium } from "playwright";
 
 export function filterOutIrrelevantLinks(links: Link[]): Link[] {
   const patternsToFilterOut = [
@@ -60,21 +61,66 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   return filterOutIrrelevantLinks(result);
 }
 
+export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise<Link[]> => {
+  // Launch the browser
+  const browser = await chromium.launch({
+    headless: true,
+  });
+
+  try {
+    // Create a new page
+    const page = await browser.newPage();
+
+    // Navigate to the URL
+    await page.goto(pageUrl, {
+      waitUntil: "networkidle", // Wait until network is idle
+      timeout: 30000, // 30 second timeout
+    });
+
+    // Extract all links using page.evaluate
+    const links = await page.evaluate(() => {
+      // Get all 'a' elements (but not anchor icons) inside article content
+      const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
+
+      // Convert NodeList to array and map to desired format
+      return Array.from(anchors).map((anchor) => ({
+        page: window.location.href,
+        href: anchor.href,
+        text: anchor.textContent?.trim() ?? "",
+      }));
+    });
+
+    return filterOutIrrelevantLinks(links);
+  } catch (error) {
+    console.error("Error occurred while scraping:", error);
+    throw error;
+  } finally {
+    // Always close the browser
+    await browser.close();
+  }
+};
+
 export const getLinksFromPages = async ({
   pages,
   verbose = false,
   linkFilter,
+  usePlaywright = false,
 }: {
   pages: string[];
   verbose?: boolean;
   linkFilter?: (link: Link) => boolean;
+  usePlaywright?: boolean;
 }) => {
   console.log(`Retrieving links from ${pages.length} pages...`);
   // Parse links from pages
   progressBar.start(pages.length, 0);
-  const { results, errors } = await parallelProcess(pages, async (page) => {
-    return parseLinksFromPage(page);
-  });
+  const { results, errors } = await parallelProcess(
+    pages,
+    async (page) => {
+      return usePlaywright ? parseLinksFromPageWithPlaywright(page) : parseLinksFromPage(page);
+    },
+    5
+  );
 
   // Flatten and filter results if a link filter is provided
   const flatResults = results.flat();
