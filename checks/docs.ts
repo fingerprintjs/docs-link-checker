@@ -3,7 +3,7 @@ import { checkWebsite } from "./../src/website";
 (async () => {
   const report = await checkWebsite({
     websiteUrl: "https://dev.fingerprint.com",
-    usePlaywright: true,
+    usePlaywright: false,
   });
   console.log(JSON.stringify(report, null, 2));
   if (report.summary.totalLinksToFix > 0) {
