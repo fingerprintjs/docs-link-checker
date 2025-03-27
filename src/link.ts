@@ -126,6 +126,7 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
     if (element.length === 0) {
       return {
         ok: false,
+        status: response.status,
         error: "hash not found",
       };
     }
@@ -136,7 +137,7 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
     log(`Something went wrong: ${error}`, verbose);
     return {
       ok: false,
-      error: "unexpected error",
+      error: "broken link",
       errorDetail: String(error),
     };
   }
