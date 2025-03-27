@@ -1,11 +1,12 @@
 import * as cheerio from "cheerio";
 import { chromium, Page } from "playwright";
 import {
-  BROWSER_USER_AGENT,
   CONCURRENCY_LIMIT,
   FORBIDDEN_STATUS_CODES,
   OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
+  TASK_TIMEOUT,
+  getRandomUserAgent,
   log,
   parallelProcess,
 } from "./utils";
@@ -77,8 +78,12 @@ export const checkLinks = async ({ links, verbose, fetchConcurrencyLimit = CONCU
   return { results: finalResults, errors: finalErrors };
 };
 
-function getUserAgent(url: string) {
-  return BROWSER_USER_AGENT;
+function shouldSpoofUserAgent(url: string) {
+  // Android.com blocks you if you spoof the user agent
+  if (url.includes("android.com")) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -89,14 +94,39 @@ function getUserAgent(url: string) {
  */
 export const checkLinkWithFetch = async (url: string, verbose = false): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash;
+
+  const headers = new Headers();
+  if (shouldSpoofUserAgent(url)) {
+    headers.set("User-Agent", getRandomUserAgent());
+  }
+
   try {
     const response = await fetch(url, {
       method: hash ? "GET" : "HEAD",
       redirect: "follow",
-      headers: {
-        "User-Agent": getUserAgent(url),
-      },
+      headers,
     });
+
+    // GitHub web rate limit makes you wait 60 seconds after 500 requests
+    if (response.status === 429) {
+      const retryAfter = response.headers.get("Retry-After");
+      if (retryAfter) {
+        const retryAfterSeconds = parseInt(retryAfter);
+        const retryAfterMs = retryAfterSeconds * 1000;
+        if (retryAfterMs < TASK_TIMEOUT) {
+          console.log(`Rate limited, retrying after ${retryAfter} seconds...`);
+          await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+          return await checkLinkWithFetch(url, verbose);
+        } else {
+          return {
+            ok: false,
+            error: "unexpected error",
+            status: response.status,
+            errorDetail: `Rate limited and gave up, retry-after: ${retryAfter} seconds`,
+          };
+        }
+      }
+    }
 
     if (OKAY_STATUS_CODES.includes(response.status) === false) {
       return {
@@ -188,7 +218,7 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
     args: ["--disable-blink-features=AutomationControlled"],
   });
   const context = await browser.newContext({
-    userAgent: getUserAgent(url),
+    userAgent: shouldSpoofUserAgent(url) ? getRandomUserAgent() : undefined,
   });
   const page = await context.newPage();
 
