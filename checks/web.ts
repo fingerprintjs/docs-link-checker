@@ -6,6 +6,7 @@ import { checkWebsite } from "../src/website";
 (async () => {
   const report = await checkWebsite({
     websiteUrl: "https://fingerprint.com",
+    usePlaywright: false,
     linkFilter: (link) =>
       link.href.startsWith("https://dev.fingerprint.com") ||
       link.href.startsWith("https://fingerprint.com") ||

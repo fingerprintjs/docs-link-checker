@@ -73,9 +73,14 @@ async function getReadmesFromOrg(orgName: string): Promise<MdFile[] | undefined>
     const repos = await getOrgRepos(orgName);
     console.log(`\nFound ${repos.length} public repositories in ${orgName} organization.`);
 
-    const { results } = await parallelProcess(repos, (repo) => {
-      return findReadmeFilesInRepo(repo.owner.login, repo.name);
-    });
+    const { results } = await parallelProcess(
+      {
+        items: repos,
+        processFn: async (repo) => {
+          return findReadmeFilesInRepo(repo.owner.login, repo.name);
+        },
+      }
+    );
     const readmes = results.flat();
     console.log(
       `\nFound ${readmes.length} public Readmes files in ${repos.length} repositories of ${orgName} organization.`
@@ -88,11 +93,16 @@ async function getReadmesFromOrg(orgName: string): Promise<MdFile[] | undefined>
 
 async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
-  const { results, errors } = await parallelProcess(files, async (file) => {
-    const markdown = await fetch(file.downloadUrl).then((res) => res.text());
-    const links = extractLinksFromMarkdown(markdown, file.sourcePath);
-    return links;
-  });
+  const { results, errors } = await parallelProcess(
+    {
+      items: files,
+      processFn: async (file) => {
+        const markdown = await fetch(file.downloadUrl).then((res) => res.text());
+        const links = extractLinksFromMarkdown(markdown, file.sourcePath);
+        return links;
+      },
+    }
+  );
 
   if (errors.length > 0) {
     console.error(`Errors fetching files and extracting links: ${errors.length}`, errors.toString());
@@ -110,7 +120,7 @@ export async function checkReadmesInGithubOrg(org: string) {
   const links = await getReadmeLinks(fingerprintPublicReadmes!);
   const filteredLinks = filterOutIrrelevantLinks(links);
 
-  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true });
+  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true, fetchConcurrencyLimit: 10 });
 
   const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
 

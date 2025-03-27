@@ -8,13 +8,17 @@ import { Link } from "./types";
 type CheckWebsiteArgs = {
   websiteUrl: string;
   linkFilter?: (link: Link) => boolean;
+  usePlaywright?: boolean;
 };
 
-export const checkWebsite = async ({ websiteUrl, linkFilter }: CheckWebsiteArgs) => {
+export const checkWebsite = async ({ websiteUrl, linkFilter, usePlaywright }: CheckWebsiteArgs) => {
   const startTime = performance.now();
 
   const pages = await getWebsitePages(websiteUrl, true);
-  const { links } = await getLinksFromPages({ pages, linkFilter });
+
+  const { links } = await getLinksFromPages({ pages, linkFilter, usePlaywright });
+  console.log(`Fetched ${links.length} links.`);
+
   const { results, errors } = await checkLinks({ links });
 
   const report = getJSONReport({ links: results, errors, siteName: new URL(websiteUrl).hostname });

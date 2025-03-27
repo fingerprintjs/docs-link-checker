@@ -1,8 +1,10 @@
-import { checkReadmeDocs } from "../src/sources/readmeUtils";
+import { checkWebsite } from "./../src/website";
 
 (async () => {
-  const report = await checkReadmeDocs("dev.fingerprint.com");
-  console.log(JSON.stringify(report, null, 2));
+  const report = await checkWebsite({
+    websiteUrl: "https://dev.fingerprint.com",
+    usePlaywright: false,
+  });
   if (report.summary.totalLinksToFix > 0) {
     process.exit(1);
   }

@@ -1,5 +1,10 @@
-name: Run link checker on dev.fingerprint.com, fingerprint.com and public GitHub READMEs
+name: Check links
 on:
+  # Pull request to main
+  pull_request:
+    branches:
+      - main
+  # Push to main
   push:
     branches:
       - main
@@ -15,7 +20,7 @@ env:
 
 jobs:
   docs:
-    name: Check links on dev.fingerprint.com
+    name: dev.fingerprint.com
     timeout-minutes: 15
     runs-on: ubuntu-latest
     
@@ -35,7 +40,7 @@ jobs:
           retention-days: 30
 
   githubReadmes:
-    name: Check links on public GitHub READMEs in the `fingerprintjs` organization
+    name: public GitHub READMEs in `fingerprintjs` org
     timeout-minutes: 15
     runs-on: ubuntu-latest
     
@@ -55,7 +60,7 @@ jobs:
           retention-days: 30
 
   web:
-    name: Check links to our resources on fingerprint.com
+    name: fingerprint.com (just links to our resources)
     timeout-minutes: 20
     runs-on: ubuntu-latest
     

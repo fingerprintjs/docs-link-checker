@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
-import { BROWSER_USER_AGENT, parallelProcess, progressBar } from "./utils";
+import { BROWSER_USER_AGENT, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT, progressBar } from "./utils";
+import { chromium } from "playwright";
 
 export function filterOutIrrelevantLinks(links: Link[]): Link[] {
   const patternsToFilterOut = [
@@ -18,10 +19,22 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
     /cdn-cgi\/l\/email\-protection/,
     // dash.cloudflare.com (Requires login)
     /^https:\/\/dash\.cloudflare\.com/,
+    // Readme sends the internal link syntax from the server only updates it with JavaScript client-side 🤦
+    /^doc:/,
+    /^ref:/,
+    // And other readme bugs
+    /^https:\/\/dev\.fingerprint\.com\/recipes/,
+    /^https:\/\/dev\.fingerprint\.com\/discuss/,
   ];
   return links.filter((link) => !patternsToFilterOut.some((pattern) => pattern.test(link.href)));
 }
 
+/**
+ * Parses links from a single page
+ * @param pageUrl
+ * @param pageHTML
+ * @returns
+ */
 export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Promise<Link[]> {
   // Fetch page if HTML is not already provided
   let pageContent: string;
@@ -60,20 +73,34 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   return filterOutIrrelevantLinks(result);
 }
 
+/**
+ * Parses links from multiple pages
+ * @param pages
+ * @param verbose
+ * @param linkFilter Filter function to apply to links
+ * @param usePlaywright
+ * @returns
+ */
 export const getLinksFromPages = async ({
   pages,
   verbose = false,
   linkFilter,
+  usePlaywright = false,
 }: {
   pages: string[];
   verbose?: boolean;
   linkFilter?: (link: Link) => boolean;
+  usePlaywright?: boolean;
 }) => {
   console.log(`Retrieving links from ${pages.length} pages...`);
   // Parse links from pages
   progressBar.start(pages.length, 0);
-  const { results, errors } = await parallelProcess(pages, async (page) => {
-    return parseLinksFromPage(page);
+  const { results, errors } = await parallelProcess({
+    items: pages,
+    processFn: async (page: string) => {
+      return usePlaywright ? parseLinksFromPageWithPlaywright(page) : parseLinksFromPage(page);
+    },
+    concurrencyLimit: usePlaywright ? PLAYWRIGHT_CONCURRENCY_LIMIT : undefined,
   });
 
   // Flatten and filter results if a link filter is provided
@@ -88,7 +115,6 @@ export const getLinksFromPages = async ({
     );
   }
 
-  // Log errors
   if (errors.length > 0) {
     console.log(`Retrieving links failed for ${errors.length} pages.`);
   }
@@ -98,3 +124,58 @@ export const getLinksFromPages = async ({
 
   return { links, errors };
 };
+
+/**
+ * Not used right now, might be useful if you need to parse links from a client-rendered page
+ * @param pageUrl
+ * @returns
+ */
+export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise<Link[]> => {
+  // Launch the browser
+  const browser = await chromium.launch({
+    headless: true,
+  });
+
+  try {
+    // Create a new page
+    const page = await browser.newPage();
+
+    // Navigate to the URL
+    const response = await page.goto(pageUrl, {
+      timeout: 30000, // 30 second timeout
+    });
+
+    if (!response?.ok()) {
+      console.error(`Could not fetch ${pageUrl} status: ${response?.status()}`);
+      return [];
+    }
+
+    await page.waitForSelector(".markdown-body");
+
+    // Extract all links using page.evaluate
+    const links = await page.evaluate(
+      ([pageUrl]) => {
+        // Get all 'a' elements (but not anchor icons) inside article content
+        const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
+
+        // Convert NodeList to array and map to desired format
+        return Array.from(anchors).map((anchor) => ({
+          page: pageUrl,
+          href: anchor.href,
+          text: anchor.textContent?.trim() ?? "",
+        }));
+      },
+      [pageUrl]
+    );
+
+    return filterOutIrrelevantLinks(links);
+  } catch (error) {
+    console.error("Error occurred while scraping:", error);
+    throw error;
+  } finally {
+    // Always close the browser
+    await browser.close();
+  }
+};
+
+

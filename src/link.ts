@@ -1,40 +1,80 @@
 import * as cheerio from "cheerio";
 import { chromium, Page } from "playwright";
-import { BROWSER_USER_AGENT, FORBIDDEN_STATUS_CODES, OKAY_STATUS_CODES, log, parallelProcess } from "./utils";
+import {
+  BROWSER_USER_AGENT,
+  CONCURRENCY_LIMIT,
+  FORBIDDEN_STATUS_CODES,
+  OKAY_STATUS_CODES,
+  PLAYWRIGHT_CONCURRENCY_LIMIT,
+  log,
+  parallelProcess,
+} from "./utils";
 import { Link, LinkCheckResult, LinkWithResult } from "./types";
 
 type CheckLinksArgs = {
   links: Link[];
   verbose?: boolean;
-  concurrencyLimit?: number;
+  fetchConcurrencyLimit?: number;
 };
 
-export const checkLinks = async ({ links, verbose, concurrencyLimit }: CheckLinksArgs) => {
+export const checkLinks = async ({ links, verbose, fetchConcurrencyLimit = CONCURRENCY_LIMIT }: CheckLinksArgs) => {
   console.log(`\nChecking ${links.length} links...`);
+
+  const linksToCheckWithPlaywright: Link[] = [];
   const resultMap = new Map<string, LinkCheckResult>();
 
-  const { results, errors } = await parallelProcess(
-    links,
-    async (link) => {
+  const { results: fetchResults, errors: fetchErrors } = await parallelProcess({
+    items: links,
+    concurrencyLimit: fetchConcurrencyLimit,
+    processFn: async (link): Promise<LinkWithResult | null> => {
+      let result: LinkCheckResult | null = null;
       const existingResult = resultMap.get(link.href);
       if (existingResult) {
         // Already checked, just use the result
-        (link as LinkWithResult).result = existingResult;
+        result = existingResult;
       } else {
         // New link, check it
-        const newResult = await checkLink(link.href);
-        resultMap.set(link.href, newResult);
-        (link as LinkWithResult).result = newResult;
+        result = await checkLinkWithFetch(link.href);
+        resultMap.set(link.href, result);
       }
-      return link as LinkWithResult;
+      // Link not okay, add to Playwright queue
+      if (result.ok === false) {
+        linksToCheckWithPlaywright.push(link);
+        return null;
+      } else {
+        return { ...link, result };
+      }
     },
-    concurrencyLimit
-  );
+  });
 
-  console.log(`Checked ${results.length} links.`);
-  console.log(`Unexpected errors ocurred for ${errors.length} links`);
-  log(errors, verbose);
-  return { results, errors };
+  console.log(`Checking ${linksToCheckWithPlaywright.length} links with Playwright...`);
+
+  const resultMapPlaywright = new Map<string, LinkCheckResult>();
+  const { results: playwrightResults, errors: playwrightErrors } = await parallelProcess({
+    items: linksToCheckWithPlaywright,
+    concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
+    processFn: async (link) => {
+      let result: LinkCheckResult | null = null;
+      const existingResult = resultMapPlaywright.get(link.href);
+      if (existingResult) {
+        // Already checked, just use the result
+        result = existingResult;
+      } else {
+        // New link, check it
+        result = await checkLinkWithPlaywright(link.href);
+        resultMapPlaywright.set(link.href, result);
+      }
+      return { ...link, result };
+    },
+  });
+
+  const finalResults = [...fetchResults.filter((r) => r !== null), ...playwrightResults];
+  const finalErrors = [...fetchErrors, ...playwrightErrors];
+
+  console.log(`Checked ${finalResults.length} links.`);
+  console.log(`Unexpected errors occurred for ${finalErrors.length} links`);
+  log(finalErrors, verbose);
+  return { results: finalResults, errors: finalErrors };
 };
 
 function getUserAgent(url: string) {
@@ -42,12 +82,12 @@ function getUserAgent(url: string) {
 }
 
 /**
- *
+ * Check a link with fetch, assuming page is server-side rendered
  * @param url link URL
  * @returns LinkCheckResult
  * @throws {Error} - network can fail or something
  */
-export const checkLink = async (url: string, verbose = false): Promise<LinkCheckResult> => {
+export const checkLinkWithFetch = async (url: string, verbose = false): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash;
   try {
     const response = await fetch(url, {
@@ -59,13 +99,21 @@ export const checkLink = async (url: string, verbose = false): Promise<LinkCheck
     });
 
     if (OKAY_STATUS_CODES.includes(response.status) === false) {
-      log(`Responded with ${response.status}, ${response.statusText}, trying with Playwright`, verbose);
-      return await checkLinkWithPlaywright(url, verbose);
+      return {
+        ok: false,
+        error: "broken link",
+        status: response.status,
+        errorDetail: `${response.statusText} ${await response.text()}`,
+      };
     }
 
     if (!hash) {
       log(`OK`, verbose);
       return { ok: true, status: response.status };
+    }
+
+    if (hash === "#/") {
+      return { ok: true, status: response.status, note: "Accidental hash" };
     }
 
     if (hash.includes(":~:")) {
@@ -89,20 +137,26 @@ export const checkLink = async (url: string, verbose = false): Promise<LinkCheck
     ];
     var element = $(selectors.join(", ")).first();
     if (element.length === 0) {
-      log(`Hash ${hash} not found at first, trying with Playwright`, verbose);
-      return await checkLinkWithPlaywright(url, verbose);
+      return {
+        ok: false,
+        status: response.status,
+        error: "hash not found",
+      };
     }
 
     log(`OK`, verbose);
     return { ok: true, status: response.status };
   } catch (error) {
     log(`Something went wrong: ${error}`, verbose);
-    log("Checking with Playwright", verbose);
-    return await checkLinkWithPlaywright(url, verbose);
+    return {
+      ok: false,
+      error: "broken link",
+      errorDetail: String(error),
+    };
   }
 };
 
-async function isHashPresent(page: Page, hash: string, url: string, timeout = 3000) {
+async function isHashPresentPlaywright(page: Page, hash: string, url: string, timeout = 3000) {
   const selectors = [
     `[id="${hash}"]`,
     `[href="#${hash}"]`,
@@ -110,8 +164,6 @@ async function isHashPresent(page: Page, hash: string, url: string, timeout = 30
     // GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
     isGithubCodeLineLink(url) && `[data-line-number="${hash.split("-")[0].slice(1)}"]`,
   ];
-
-  console.log("selectors", selectors.join(", "));
 
   const locator = page.locator(selectors.join(", ")).first();
 
@@ -121,7 +173,7 @@ async function isHashPresent(page: Page, hash: string, url: string, timeout = 30
     return true;
   } catch (error) {
     // If the timeout is reached, return false instead of throwing an error
-    if (error.name === "TimeoutError") {
+    if (error instanceof Error && error.name === "TimeoutError") {
       return false;
     }
     // Re-throw any other errors
@@ -144,7 +196,6 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
     // Navigate to the URL
     const response = await page.goto(url);
 
-
     log(`Navigation response: ${response?.status()}`, verbose);
     if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
       return {
@@ -161,17 +212,20 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
         ok: false,
         error: "broken link",
         status: response?.status() ?? 0,
-        errorDetail: `${response?.statusText()} ${await response?.text()}`,
       };
     }
 
     const hash = new URL(url).hash.replace("#", "");
 
+    if (hash === "/") {
+      return { ok: true, status: response.status(), note: "Accidental hash" };
+    }
+
     if (hash.includes(":~:")) {
       return { ok: true, status: response.status(), note: "Text Fragment" };
     }
 
-    if (hash && !(await isHashPresent(page, hash, url))) {
+    if (hash && !(await isHashPresentPlaywright(page, hash, url))) {
       log(`Hash not found`, verbose);
       return {
         ok: false,
@@ -186,7 +240,7 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
     return {
       ok: false,
       error: "broken link",
-      errorDetail: error.toString(),
+      errorDetail: String(error),
     };
   } finally {
     if (headless) {
