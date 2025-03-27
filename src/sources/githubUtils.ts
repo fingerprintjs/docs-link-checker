@@ -120,7 +120,7 @@ export async function checkReadmesInGithubOrg(org: string) {
   const links = await getReadmeLinks(fingerprintPublicReadmes!);
   const filteredLinks = filterOutIrrelevantLinks(links);
 
-  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true });
+  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true, fetchConcurrencyLimit: 10 });
 
   const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
 

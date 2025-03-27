@@ -1,22 +1,31 @@
 import * as cheerio from "cheerio";
 import { chromium, Page } from "playwright";
-import { BROWSER_USER_AGENT, FORBIDDEN_STATUS_CODES, OKAY_STATUS_CODES, log, parallelProcess } from "./utils";
+import {
+  BROWSER_USER_AGENT,
+  CONCURRENCY_LIMIT,
+  FORBIDDEN_STATUS_CODES,
+  OKAY_STATUS_CODES,
+  PLAYWRIGHT_CONCURRENCY_LIMIT,
+  log,
+  parallelProcess,
+} from "./utils";
 import { Link, LinkCheckResult, LinkWithResult } from "./types";
 
 type CheckLinksArgs = {
   links: Link[];
   verbose?: boolean;
+  fetchConcurrencyLimit?: number;
 };
 
-export const checkLinks = async ({ links, verbose }: CheckLinksArgs) => {
+export const checkLinks = async ({ links, verbose, fetchConcurrencyLimit = CONCURRENCY_LIMIT }: CheckLinksArgs) => {
   console.log(`\nChecking ${links.length} links...`);
-  
+
   const linksToCheckWithPlaywright: Link[] = [];
   const resultMap = new Map<string, LinkCheckResult>();
 
   const { results: fetchResults, errors: fetchErrors } = await parallelProcess({
     items: links,
-    concurrencyLimit: 50,
+    concurrencyLimit: fetchConcurrencyLimit,
     processFn: async (link): Promise<LinkWithResult | null> => {
       let result: LinkCheckResult | null = null;
       const existingResult = resultMap.get(link.href);
@@ -35,7 +44,7 @@ export const checkLinks = async ({ links, verbose }: CheckLinksArgs) => {
       } else {
         return { ...link, result };
       }
-    }
+    },
   });
 
   console.log(`Checking ${linksToCheckWithPlaywright.length} links with Playwright...`);
@@ -43,7 +52,7 @@ export const checkLinks = async ({ links, verbose }: CheckLinksArgs) => {
   const resultMapPlaywright = new Map<string, LinkCheckResult>();
   const { results: playwrightResults, errors: playwrightErrors } = await parallelProcess({
     items: linksToCheckWithPlaywright,
-    concurrencyLimit: 5,
+    concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
     processFn: async (link) => {
       let result: LinkCheckResult | null = null;
       const existingResult = resultMapPlaywright.get(link.href);
@@ -55,8 +64,8 @@ export const checkLinks = async ({ links, verbose }: CheckLinksArgs) => {
         result = await checkLinkWithPlaywright(link.href);
         resultMapPlaywright.set(link.href, result);
       }
-      return { ...link, result };  
-    }
+      return { ...link, result };
+    },
   });
 
   const finalResults = [...fetchResults.filter((r) => r !== null), ...playwrightResults];
