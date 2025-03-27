@@ -37,6 +37,7 @@ export const parallelProcess = async <T, R>({
 };
 
 export const CONCURRENCY_LIMIT = 100;
+export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
 export const TASK_TIMEOUT = 45000;
 
 export const OKAY_STATUS_CODES = [200, 301, 302, 303, 307, 308];

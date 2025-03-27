@@ -103,6 +103,10 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
       return { ok: true, status: response.status };
     }
 
+    if (hash === "#/") {
+      return { ok: true, status: response.status, note: "Accidental hash" };
+    }
+
     if (hash.includes(":~:")) {
       /**
        * The link includes a [Text Fragment](https://developer.mozilla.org/en-US/docs/Web/Text_fragments)
@@ -203,6 +207,10 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
     }
 
     const hash = new URL(url).hash.replace("#", "");
+
+    if (hash === "/") {
+      return { ok: true, status: response.status(), note: "Accidental hash" };
+    }
 
     if (hash.includes(":~:")) {
       return { ok: true, status: response.status(), note: "Text Fragment" };

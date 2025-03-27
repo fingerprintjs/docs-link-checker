@@ -108,6 +108,11 @@ for (const { function: checkLink, name } of linkCheckMethods) {
       }
     );
 
+    it(`${name} should return OK and ignore accidental hashes that Readme creates 🤦`, async () => {
+      const result = await checkLink("https://dev.fingerprint.com/docs/quick-start-guide#/", true);
+      expect(result).toMatchObject({ ok: true, status: 200 });
+    });
+
     /**
      * Text fragments
      */
