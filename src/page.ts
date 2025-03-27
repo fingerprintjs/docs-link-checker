@@ -19,6 +19,11 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
     /cdn-cgi\/l\/email\-protection/,
     // dash.cloudflare.com (Requires login)
     /^https:\/\/dash\.cloudflare\.com/,
+    // Readme sends the internal link syntax from the server only updates it with JavaScript client-side 🤦
+    /^doc:/,
+    /^ref:/,
+    // And other readme bugs
+    /^https:\/\/dev\.fingerprint\.com\/recipes/,
   ];
   return links.filter((link) => !patternsToFilterOut.some((pattern) => pattern.test(link.href)));
 }
@@ -123,13 +128,13 @@ export const getLinksFromPages = async ({
   console.log(`Retrieving links from ${pages.length} pages...`);
   // Parse links from pages
   progressBar.start(pages.length, 0);
-  const { results, errors } = await parallelProcess(
-    pages,
-    async (page) => {
+  const { results, errors } = await parallelProcess({
+    items: pages,
+    processFn: async (page: string) => {
       return usePlaywright ? parseLinksFromPageWithPlaywright(page) : parseLinksFromPage(page);
     },
-    usePlaywright ? 5 : 10
-  );
+    concurrencyLimit: usePlaywright ? 5 : 10
+  });
 
   // Flatten and filter results if a link filter is provided
   const flatResults = results.flat();

@@ -9,20 +9,25 @@ export const log = (message: any, verbose = false) => {
   }
 };
 
-export const parallelProcess = async <T, R>(
-  items: T[],
-  processFn: (item: T) => Promise<R>,
+type ParallelProcessArgs<T, R> = {
+  items: T[];
+  processFn: (item: T) => Promise<R>;
+  concurrencyLimit?: number;
+};
+
+export const parallelProcess = async <T, R>({
+  items,
+  processFn,
   concurrencyLimit = CONCURRENCY_LIMIT
-) => {
+}: ParallelProcessArgs<T, R>) => {
   progressBar.start(items.length, 0);
   const { results, errors } = await PromisePool.withConcurrency(concurrencyLimit)
     .withTaskTimeout(TASK_TIMEOUT)
     .for(items)
-    .process(async (item) => {
-      const result = await processFn(item);
+    .onTaskFinished((_item, pool) => {
       progressBar.increment();
-      return await result;
-    });
+    })
+    .process(processFn);
   progressBar.stop;
 
   if (errors.length > 0) {
@@ -31,7 +36,7 @@ export const parallelProcess = async <T, R>(
   return { results, errors };
 };
 
-export const CONCURRENCY_LIMIT = 10;
+export const CONCURRENCY_LIMIT = 100;
 export const TASK_TIMEOUT = 45000;
 
 export const OKAY_STATUS_CODES = [200, 301, 302, 303, 307, 308];
