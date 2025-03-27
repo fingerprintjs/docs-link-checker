@@ -37,8 +37,7 @@ for (const { function: checkLink, name } of linkCheckMethods) {
      */
     it(`${name} should return OK for hashes that exist (server-rendered)`, async () => {
       const result = await checkLink(
-        "https://fingerprint.com/blog/android-device-reputation-network-fraud-detection#api-responses",
-        true
+        "https://fingerprint.com/blog/android-device-reputation-network-fraud-detection#api-responses"
       );
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
@@ -47,40 +46,32 @@ for (const { function: checkLink, name } of linkCheckMethods) {
       `${name} should return 'hash not found' for broken hash links (server-rendered)`,
       { timeout: 10000 },
       async () => {
-        const result = await checkLink("https://fingerprint.com#does-not-exist", true);
+        const result = await checkLink("https://fingerprint.com#does-not-exist");
         expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
       }
     );
 
     it(`${name} should return OK for hashes implemented using 'href', like on GitHub`, async () => {
       const result = await checkLink(
-        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#getting-started",
-        true
+        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#getting-started"
       );
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
     it(`${name} should return OK for hashes implemented using 'href', like on GitHub, even despite different casing`, async () => {
       const result = await checkLink(
-        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#GeTTing-StArteD",
-        true
+        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#GeTTing-StArteD"
       );
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
     it(`${name} should return OK for working L{number} hashes on GitHub `, async () => {
-      const result = await checkLink(
-        "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3",
-        true
-      );
+      const result = await checkLink("https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3");
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
     it(`${name} should return OK for working L{number}-L{number} hashes on GitHub `, async () => {
-      const result = await checkLink(
-        "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3-L5",
-        true
-      );
+      const result = await checkLink("https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3-L5");
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
@@ -89,8 +80,7 @@ for (const { function: checkLink, name } of linkCheckMethods) {
       { timeout: 10000 },
       async () => {
         const result = await checkLink(
-          "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999",
-          true
+          "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999"
         );
         expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
       }
@@ -101,15 +91,14 @@ for (const { function: checkLink, name } of linkCheckMethods) {
       { timeout: 10000 },
       async () => {
         const result = await checkLink(
-          "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999",
-          true
+          "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999"
         );
         expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
       }
     );
 
     it(`${name} should return OK and ignore accidental hashes that Readme creates 🤦`, async () => {
-      const result = await checkLink("https://dev.fingerprint.com/docs/quick-start-guide#/", true);
+      const result = await checkLink("https://dev.fingerprint.com/docs/quick-start-guide#/");
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
@@ -130,3 +119,17 @@ for (const { function: checkLink, name } of linkCheckMethods) {
     });
   });
 }
+
+describe("checkLinkWithPlaywright()", () => {
+  it("should return OK for hashes that exist (client-rendered)", async () => {
+    const result = await checkLinkWithPlaywright("https://developer.apple.com/documentation/webkit#overview");
+    expect(result).toEqual({ ok: true, status: 200 });
+  });
+
+  it("should return 'hash not found' for broken hash links (client-rendered)", { timeout: 10000 }, async () => {
+    const result = await checkLinkWithPlaywright(
+      "https://developer.apple.com/documentation/webkit#this-hash-does-not-exist"
+    );
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+});
