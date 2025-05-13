@@ -7,6 +7,7 @@ import { checkGitHubBranchLink } from "./checkGithubLink";
 import { checkIfRepositoryExists } from "./checkGithubLink";
 import { checkGitHubDiscussionLink } from "./checkGithubLink";
 import { checkGitHubReleaseLink } from "./checkGithubLink";
+import { checkGitHubPullRequestLink } from "./checkGithubLink";
 
 checkGitHubRateLimit();
 
@@ -191,7 +192,116 @@ describe("checkGitHubDiscussionLink", () => {
   });
 });
 
-describe("checkLinkWithGithubApi", () => {
+describe("checkGitHubReleaseLink", () => {
+  it("should return success for latest release when releases exist", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/latest");
+    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", ["releases", "latest"]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should return error for latest release when no releases exist", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/latest");
+    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "nonexistent-repo", ["releases", "latest"]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+      status: 500,
+    });
+  });
+
+  it("should return success for a valid release tag", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/tag/v3.0.0");
+    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", ["releases", "tag", "v3.0.0"]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should return error for an invalid release tag", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/tag/nonexistent-tag");
+    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", [
+      "releases",
+      "tag",
+      "nonexistent-tag",
+    ]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Release tag nonexistent-tag not found in repository fingerprintjs/fingerprintjs",
+    });
+  });
+
+  it("should return error for invalid release URL format", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/invalid");
+    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", ["releases", "invalid"]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Invalid release URL format",
+    });
+  });
+});
+
+describe("checkGitHubPullRequestLink", () => {
+  it("should return success for an existing pull request", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/pull/1094");
+    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "fingerprintjs", ["pull", "1094"]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should return error for a non-existent pull request", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/pull/999999");
+    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "fingerprintjs", ["pull", "999999"]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Pull request #999999 not found in repository fingerprintjs/fingerprintjs",
+    });
+  });
+
+  it("should return error for invalid pull request number", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/pull/invalid");
+    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "fingerprintjs", ["pull", "invalid"]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Invalid pull request number",
+    });
+  });
+
+  it("should return error for non-existent repository", async () => {
+    const url = new URL("https://github.com/fingerprintjs/nonexistent-repo/pull/1");
+    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "nonexistent-repo", ["pull", "1"]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Pull request #1 not found in repository fingerprintjs/nonexistent-repo",
+    });
+  });
+});
+
+describe.only("checkLinkWithGithubApi", () => {
   it("should throw error for non-GitHub URLs", async () => {
     await expect(checkLinkWithGithubApi("https://example.com")).rejects.toThrow("Not a GitHub URL");
   });
@@ -303,7 +413,7 @@ describe("checkLinkWithGithubApi", () => {
   });
 
   it("should handle GitHub pull request links", async () => {
-    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/pull/1");
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/pull/1094");
     expect(result).toMatchObject({
       ok: true,
       status: 200,
@@ -319,7 +429,7 @@ describe("checkLinkWithGithubApi", () => {
   });
 
   it("should handle GitHub release links", async () => {
-    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/releases/tag/v1.0.0");
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/releases/tag/v3.0.0");
     expect(result).toMatchObject({
       ok: true,
       status: 200,
@@ -353,65 +463,36 @@ describe("checkLinkWithGithubApi", () => {
       error: "broken link",
     });
   });
-});
 
-describe.only("checkGitHubReleaseLink", () => {
-  it("should return success for latest release when releases exist", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/latest");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", ["releases", "latest"]);
-
+  it("should handle links to discussions section", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/discussions");
     expect(result).toMatchObject({
       ok: true,
       status: 200,
     });
   });
 
-  it("should return error for latest release when no releases exist", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/latest");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "nonexistent-repo", ["releases", "latest"]);
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "unexpected error",
-      status: 500,
-    });
-  });
-
-  it("should return success for a valid release tag", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/tag/v3.0.0");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", ["releases", "tag", "v3.0.0"]);
-
+  it("should handle links to releases section", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/releases");
     expect(result).toMatchObject({
       ok: true,
       status: 200,
     });
   });
 
-  it("should return error for an invalid release tag", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/tag/nonexistent-tag");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", [
-      "releases",
-      "tag",
-      "nonexistent-tag",
-    ]);
-
+  it("should handle links to pull requests section", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/pulls");
     expect(result).toMatchObject({
-      ok: false,
-      error: "broken link",
-      status: 404,
-      errorDetail: "Release tag nonexistent-tag not found in repository fingerprintjs/fingerprintjs",
+      ok: true,
+      status: 200,
     });
   });
 
-  it("should return error for invalid release URL format", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/invalid");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", ["releases", "invalid"]);
-
+  it("should handle links to issues section", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/issues");
     expect(result).toMatchObject({
-      ok: false,
-      error: "broken link",
-      status: 404,
-      errorDetail: "Invalid release URL format",
+      ok: true,
+      status: 200,
     });
   });
 });

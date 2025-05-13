@@ -6,19 +6,9 @@ import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";
 import { filterOutIrrelevantLinks } from "../page";
-import { retry } from "@octokit/plugin-retry";
+import { myGithubClient } from "./githubClient";
 
-dotenv.config();
-
-const GH_TOKEN = process.env.GH_TOKEN;
-if (!GH_TOKEN) {
-  throw new Error("GH_TOKEN is not set");
-}
-
-const MyOctokit = Octokit.plugin(retry);
-
-// Initialize without token for public repos, but you can add a token for higher rate limits
-const octokit = new MyOctokit({ auth: GH_TOKEN, retry: { enabled: true } });
+const octokit = myGithubClient;
 
 interface MdFile {
   sourcePath: string;

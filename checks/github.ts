@@ -1,4 +1,4 @@
-import { checkReadmesInGithubOrg } from "../src/sources/getGithubLinks";
+import { checkReadmesInGithubOrg } from "../src/github/getGithubLinks";
 
 (async () => {
   const report = await checkReadmesInGithubOrg("fingerprintjs");
