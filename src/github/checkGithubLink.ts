@@ -1,6 +1,7 @@
 import { myGithubClient } from "./githubClient";
 import GithubSlugger from "github-slugger";
 import { LinkCheckResult } from "../types";
+import { checkLinkWithFetch } from "../link";
 
 const octokit = myGithubClient;
 
@@ -21,11 +22,13 @@ export const isGithubUrl = (url: string) => {
  * @param issueNumber - The issue number
  * @returns - A LinkCheckResult object
  */
-export const checkGitHubIssueLink = async (
-  owner: string,
-  repo: string,
-  issueNumber: number
-): Promise<LinkCheckResult> => {
+export const checkGitHubIssueLink = async (owner: string, repo: string, pathParts: string[]): Promise<LinkCheckResult> => {
+  const [, issueNumberPart] = pathParts;
+  if (issueNumberPart === "new") {
+    return { ok: true, status: 200 };
+  }
+
+  const issueNumber = parseInt(issueNumberPart, 10);
   try {
     await octokit.issues.get({
       owner,
@@ -81,7 +84,7 @@ export const checkGitHubBlobLink = async (
     });
 
     // If there's no hash, we're done - the file exists
-    const hash = fullUrl.hash.slice(1); // Remove the # character
+    const hash = fullUrl.hash.slice(1).toLowerCase(); // Remove the # character, and make it lowercase
     if (!hash) {
       return { ok: true, status: 200 };
     }
@@ -149,7 +152,7 @@ export const checkGitHubBlobLink = async (
  * @param pathParts - The path parts of the URL
  * @returns - A LinkCheckResult object
  */
-export const checkGitHubBranchLink = async (
+export const checkGitHubTreeLink = async (
   fullUrl: URL,
   owner: string,
   repo: string,
@@ -185,14 +188,6 @@ export const checkGitHubBranchLink = async (
 
     return { ok: true, status: 200 };
   } catch (error: any) {
-    if (error.status === 429) {
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 429,
-        errorDetail: "GitHub API rate limit exceeded",
-      };
-    }
     if (error.status === 404) {
       return {
         ok: false,
@@ -357,14 +352,6 @@ export const checkGitHubReleaseLink = async (
       errorDetail: "Invalid release URL format",
     };
   } catch (error: any) {
-    if (error.status === 429) {
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 429,
-        errorDetail: "GitHub API rate limit exceeded",
-      };
-    }
     return {
       ok: false,
       error: "unexpected error",
@@ -447,7 +434,7 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
 
   // Parse the GitHub URL
   const githubUrl = new URL(url);
-  const [, owner, repo, ...pathParts] = githubUrl.pathname.split("/");
+  const [owner, repo, ...pathParts] = githubUrl.pathname.split("/").filter(Boolean);
 
   // If pathParts is empty, it's a repository link, just check if it exists
   if (pathParts.length === 0) {
@@ -455,13 +442,13 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   }
 
   // If nothings follows the section path segment, just check that the repository exists
-  if (pathParts.length === 1 && ["issues", "discussions", "releases", "pulls", "wiki"].includes(pathParts[0])) {
+  if (pathParts.length === 1 && ["issues", "discussions", "releases", "pulls"].includes(pathParts[0])) {
     return checkIfRepositoryExists(owner, repo);
   }
 
   // If issue, check if it exists
   if (pathParts[0] === "issues") {
-    return checkGitHubIssueLink(owner, repo, parseInt(pathParts[1], 10));
+    return checkGitHubIssueLink(owner, repo, pathParts);
   }
 
   // If discussion, check if it exists
@@ -476,7 +463,7 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
 
   // If branch or folder, check if it exists
   if (pathParts[0] === "tree") {
-    return checkGitHubBranchLink(githubUrl, owner, repo, pathParts);
+    return checkGitHubTreeLink(githubUrl, owner, repo, pathParts);
   }
 
   // If release, check if it exists
@@ -487,6 +474,11 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   // If pull request, check if it exists
   if (pathParts[0] === "pull") {
     return checkGitHubPullRequestLink(githubUrl, owner, repo, pathParts);
+  }
+
+  // If wiki, check if it exists
+  if (pathParts[0] === "wiki") {
+    return checkLinkWithFetch(url);
   }
 
   return {

@@ -17,14 +17,14 @@ export const myGithubClient = new MyOctokit({
   auth: GH_TOKEN,
   throttle: {
     onRateLimit: (retryAfter, options, octokit, retryCount) => {
-      console.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
+      octokit.log.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
       if (retryCount < 1) {
-        console.info(`Retrying after ${retryAfter} seconds!`);
+        octokit.log.info(`Retrying after ${retryAfter} seconds!`);
         return true;
       }
     },
     onSecondaryRateLimit: (retryAfter, options, octokit) => {
-      console.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
+      octokit.log.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
     },
   },
 });

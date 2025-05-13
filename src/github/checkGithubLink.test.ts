@@ -3,7 +3,7 @@ import { checkGitHubIssueLink } from "./checkGithubLink";
 import { checkGitHubBlobLink } from "./checkGithubLink";
 import { checkGitHubRateLimit } from "./getGithubLinks";
 import { checkLinkWithGithubApi } from "./checkGithubLink";
-import { checkGitHubBranchLink } from "./checkGithubLink";
+import { checkGitHubTreeLink } from "./checkGithubLink";
 import { checkIfRepositoryExists } from "./checkGithubLink";
 import { checkGitHubDiscussionLink } from "./checkGithubLink";
 import { checkGitHubReleaseLink } from "./checkGithubLink";
@@ -88,7 +88,7 @@ describe("checkGitHubBlobLink", () => {
 describe("checkGitHubBranchLink", () => {
   it("should return success for an existing branch without path", async () => {
     const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master");
-    const result = await checkGitHubBranchLink(url, "fingerprintjs", "fingerprintjs", ["tree", "master"]);
+    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", ["tree", "master"]);
 
     expect(result).toMatchObject({
       ok: true,
@@ -98,7 +98,7 @@ describe("checkGitHubBranchLink", () => {
 
   it("should return success for an existing branch with valid path", async () => {
     const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master/src");
-    const result = await checkGitHubBranchLink(url, "fingerprintjs", "fingerprintjs", ["tree", "master", "src"]);
+    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", ["tree", "master", "src"]);
 
     expect(result).toMatchObject({
       ok: true,
@@ -108,7 +108,7 @@ describe("checkGitHubBranchLink", () => {
 
   it("should return error for an existing branch with invalid path", async () => {
     const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master/nonexistent/path");
-    const result = await checkGitHubBranchLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", [
       "tree",
       "master",
       "nonexistent",
@@ -125,7 +125,7 @@ describe("checkGitHubBranchLink", () => {
 
   it("should return error for a non-existent branch", async () => {
     const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/nonexistent-branch");
-    const result = await checkGitHubBranchLink(url, "fingerprintjs", "fingerprintjs", ["tree", "nonexistent-branch"]);
+    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", ["tree", "nonexistent-branch"]);
 
     expect(result).toMatchObject({
       ok: false,
@@ -490,6 +490,70 @@ describe.only("checkLinkWithGithubApi", () => {
 
   it("should handle links to issues section", async () => {
     const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/issues");
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle links to repository root", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs");
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle links to repository root with trailing slash", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprint-pro-server-api-dotnet-sdk/"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle blob folders", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprintjs-pro-react/blob/main/examples"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle link to wiki", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/home/wiki");
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle link to specific wiki article", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/home/wiki/FingerprintJS-Naming-Conventions"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle hash with incorrect case", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprint-pro-server-api-java-sdk/blob/main/docs/FingerprintApi.md#gEtEvEnT"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should link to create new issue", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/issues/new");
     expect(result).toMatchObject({
       ok: true,
       status: 200,
