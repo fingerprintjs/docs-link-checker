@@ -98,26 +98,6 @@ async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   return links;
 }
 
-export async function checkReadmesInGithubOrg(org: string) {
-  const startTime = performance.now();
-
-  const fingerprintPublicReadmes = await getReadmesFromOrg(org);
-
-  const links = await getReadmeLinks(fingerprintPublicReadmes!);
-  const filteredLinks = filterOutIrrelevantLinks(links);
-
-  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true, fetchConcurrencyLimit: 20 });
-
-  const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
-
-  saveReport(report);
-  console.log(report.summary);
-
-  console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
-
-  return report;
-}
-
 function readableMilliseconds(milliseconds: number) {
   const timeInSeconds = Math.floor(milliseconds / 1000);
   const seconds = timeInSeconds % 60;
@@ -138,3 +118,26 @@ export async function checkGitHubRateLimit() {
     "Resets on": resetTime.toLocaleString("fr-FR"),
   });
 }
+
+export async function checkReadmesInGithubOrg(org: string) {
+  const startTime = performance.now();
+  checkGitHubRateLimit();
+
+  const fingerprintPublicReadmes = await getReadmesFromOrg(org);
+
+  const links = await getReadmeLinks(fingerprintPublicReadmes!);
+  const filteredLinks = filterOutIrrelevantLinks(links);
+
+  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true, fetchConcurrencyLimit: 20 });
+
+  const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
+
+  saveReport(report);
+  console.log(report.summary);
+
+  console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
+
+  return report;
+}
+
+
