@@ -1,11 +1,12 @@
 import { Octokit } from "@octokit/rest";
 import dotenv from "dotenv";
 import { parallelProcess } from "../utils";
-import { Link } from "../types";
+import { Link, LinkCheckResult } from "../types";
 import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";
 import { filterOutIrrelevantLinks } from "../page";
+import { retry } from "@octokit/plugin-retry";
 
 dotenv.config();
 
@@ -14,8 +15,10 @@ if (!GH_TOKEN) {
   throw new Error("GH_TOKEN is not set");
 }
 
+const MyOctokit = Octokit.plugin(retry);
+
 // Initialize without token for public repos, but you can add a token for higher rate limits
-const octokit = new Octokit({ auth: GH_TOKEN });
+const octokit = new MyOctokit({ auth: GH_TOKEN, retry: { enabled: true } });
 
 interface MdFile {
   sourcePath: string;
@@ -123,4 +126,25 @@ export async function checkReadmesInGithubOrg(org: string) {
   console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
 
   return report;
+}
+
+function readableMilliseconds(milliseconds: number) {
+  const timeInSeconds = Math.floor(milliseconds / 1000);
+  const seconds = timeInSeconds % 60;
+  const minutes = Math.floor(timeInSeconds / 60) % 60;
+  const hours = Math.floor(timeInSeconds / 3600) % 24;
+  const days = Math.floor(timeInSeconds / 86400);
+  return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+}
+
+export async function checkGitHubRateLimit() {
+  const response = await octokit.request("GET /rate_limit");
+  const resetTime = new Date(response.data.rate.reset * 1000);
+  const millisecondsUntilReset = resetTime.getTime() - Date.now();
+
+  console.table({
+    "Remaining GitHub API requests": response.data.rate.remaining,
+    "Resets in": readableMilliseconds(millisecondsUntilReset),
+    "Resets on": resetTime.toLocaleString("fr-FR"),
+  });
 }
