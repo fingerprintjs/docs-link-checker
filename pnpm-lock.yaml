@@ -20,6 +20,9 @@ importers:
       '@octokit/rest':
         specifier: ^21.0.2
         version: 21.1.1
+      '@octokit/types':
+        specifier: ^14.0.0
+        version: 14.0.0
       '@supercharge/promise-pool':
         specifier: ^3.2.0
         version: 3.2.0
