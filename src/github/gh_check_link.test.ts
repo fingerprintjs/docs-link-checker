@@ -1,5 +1,40 @@
 import { describe, it, expect } from "vitest";
-import { checkLinkWithGithubApi } from "./gh_check_link";
+import { checkLinkWithGithubApi, isGithubUrl, isGithubCodeLineLink } from "./gh_check_link";
+
+describe("isGithubUrl", () => {
+  it("should return true for github.com URLs", () => {
+    expect(isGithubUrl("https://github.com/owner/repo")).toBe(true);
+  });
+
+  it("should return false for non-github.com URLs", () => {
+    expect(isGithubUrl("https://example.com")).toBe(false);
+    expect(isGithubUrl("https://gitlab.com/owner/repo")).toBe(false);
+    expect(isGithubUrl("https://docs.github.com/en/codespaces")).toBe(false);
+    expect(isGithubUrl("https://gist.github.com/t3dotgg/a486c4ae66d32bf17c09c73609dacc5b")).toBe(
+      false
+    );
+  });
+});
+
+describe("isGithubCodeLineLink", () => {
+  it("should return true for valid code line links", () => {
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5")).toBe(true);
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-L10")).toBe(
+      true
+    );
+  });
+
+  it("should return false for invalid code line links", () => {
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L")).toBe(false);
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-")).toBe(false);
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L-L10")).toBe(
+      false
+    );
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-L10-L15")).toBe(
+      false
+    );
+  });
+});
 
 describe("checkLinkWithGithubApi", () => {
   it("should throw error for non-GitHub URLs", async () => {
@@ -339,6 +374,47 @@ describe("checkLinkWithGithubApi", () => {
     expect(result).toMatchObject({
       ok: true,
       status: 200,
+    });
+  });
+
+  it("should handle repository root with query parameters", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle repository root with branch query parameter", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprintjs/tree/master?ref=main"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle repository root with trailing query parameters", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprintjs/?tab=readme-ov-file"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle non-existent repository root", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/nonexistent-repo"
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
     });
   });
 });
