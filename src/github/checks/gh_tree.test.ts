@@ -82,7 +82,7 @@ describe("checkGitHubTreeLink", () => {
     });
   });
 
-  it("should for for just commit, no path", async () => {
+  it("should work for just commit, no path", async () => {
     const result = await checkGitHubTreeLink("chromium", "chromium", [
       "tree",
       "3e914531a360b766bfd8468f59259b3ab29118d7",
