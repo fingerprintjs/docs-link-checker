@@ -1,5 +1,7 @@
 import { LinkCheckResult } from "../../types";
 import { getMyOctokit } from "../github_client";
+import { tryCatch } from "../../utils/tryCatch";
+import { RequestError } from "@octokit/types";
 
 const octokit = getMyOctokit();
 
@@ -22,17 +24,17 @@ export const checkGitHubIssueLink = async (
   }
 
   const issueNumber = parseInt(issueNumberPart, 10);
-  try {
-    await octokit.issues.get({
+  const { error } = await tryCatch(
+    octokit.issues.get({
       owner,
       repo,
       issue_number: issueNumber,
-    });
+    })
+  );
 
-    // If we get here, the issue exists
-    return { ok: true, status: 200 };
-  } catch (error: any) {
-    if (error.status === 404) {
+  if (error) {
+    const requestError = error as unknown as RequestError;
+    if (requestError.status === 404) {
       return {
         ok: false,
         error: "broken link",
@@ -44,8 +46,10 @@ export const checkGitHubIssueLink = async (
     return {
       ok: false,
       error: "unexpected error",
-      status: error.status,
-      errorDetail: error.message,
+      status: requestError.status,
+      errorDetail: String(error),
     };
   }
+
+  return { ok: true, status: 200 };
 };

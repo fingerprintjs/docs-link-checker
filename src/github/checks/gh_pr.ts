@@ -1,5 +1,7 @@
 import { LinkCheckResult } from "../../types";
 import { getMyOctokit } from "../github_client";
+import { tryCatch } from "../../utils/tryCatch";
+import { RequestError } from "@octokit/types";
 
 const octokit = getMyOctokit();
 
@@ -16,26 +18,27 @@ export const checkGitHubPullRequestLink = async (
   repo: string,
   pathParts: string[]
 ): Promise<LinkCheckResult> => {
-  try {
-    const prNumber = parseInt(pathParts[1], 10);
-    if (isNaN(prNumber)) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: "Invalid pull request number",
-      };
-    }
+  const prNumber = parseInt(pathParts[1], 10);
+  if (isNaN(prNumber)) {
+    return {
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Invalid pull request number",
+    };
+  }
 
-    await octokit.pulls.get({
+  const { error } = await tryCatch(
+    octokit.pulls.get({
       owner,
       repo,
       pull_number: prNumber,
-    });
+    })
+  );
 
-    return { ok: true, status: 200 };
-  } catch (error: any) {
-    if (error.status === 404) {
+  if (error) {
+    const requestError = error as unknown as RequestError;
+    if (requestError.status === 404) {
       return {
         ok: false,
         error: "broken link",
@@ -43,7 +46,7 @@ export const checkGitHubPullRequestLink = async (
         errorDetail: `Pull request #${pathParts[1]} not found in repository ${owner}/${repo}`,
       };
     }
-    if (error.status === 429) {
+    if (requestError.status === 429) {
       return {
         ok: false,
         error: "unexpected error",
@@ -58,4 +61,6 @@ export const checkGitHubPullRequestLink = async (
       errorDetail: String(error),
     };
   }
+
+  return { ok: true, status: 200 };
 };
