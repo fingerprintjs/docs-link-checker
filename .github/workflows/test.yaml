@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+env:
+  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
 jobs:
   unit-tests:
     name: Unit tests

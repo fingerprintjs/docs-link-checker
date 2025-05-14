@@ -6,7 +6,7 @@ import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";
 import { filterOutIrrelevantLinks } from "../page";
-import { getMyOctokit } from "./github_client";
+import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
 
 const octokit = getMyOctokit();
 
@@ -103,30 +103,9 @@ async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   return links;
 }
 
-function readableMilliseconds(milliseconds: number) {
-  const timeInSeconds = Math.floor(milliseconds / 1000);
-  const seconds = timeInSeconds % 60;
-  const minutes = Math.floor(timeInSeconds / 60) % 60;
-  const hours = Math.floor(timeInSeconds / 3600) % 24;
-  const days = Math.floor(timeInSeconds / 86400);
-  return `${days}d ${hours}h ${minutes}m ${seconds}s`;
-}
-
-export async function checkGitHubRateLimit() {
-  const response = await octokit.request("GET /rate_limit");
-  const resetTime = new Date(response.data.rate.reset * 1000);
-  const millisecondsUntilReset = resetTime.getTime() - Date.now();
-
-  console.table({
-    "Remaining GitHub API requests": response.data.rate.remaining,
-    "Resets in": readableMilliseconds(millisecondsUntilReset),
-    "Resets on": resetTime.toLocaleString("fr-FR"),
-  });
-}
-
 export async function checkReadmesInGithubOrg(org: string) {
   const startTime = performance.now();
-  checkGitHubRateLimit();
+  checkGitHubRateLimit(octokit);
 
   const fingerprintPublicReadmes = await getReadmesFromOrg(org);
 

@@ -1,4 +1,4 @@
-import { myGithubClient } from "./github_client";
+import { getMyOctokit } from "./github_client";
 
 import { LinkCheckResult } from "../types";
 import { checkLinkWithFetch, checkLinkWithPlaywright } from "../link";
@@ -11,7 +11,7 @@ import { checkGitHubReleaseLink } from "./checks/gh_release";
 import { checkIfRepositoryExists } from "./checks/gh_repo";
 import { checkGitHubTreeLink } from "./checks/gh_tree";
 
-const octokit = myGithubClient;
+const octokit = getMyOctokit();
 
 /**
  * Check if a URL is a GitHub URL

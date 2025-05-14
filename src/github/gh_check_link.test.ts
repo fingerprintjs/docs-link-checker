@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { checkGitHubRateLimit } from "./gh_get_links";
-import { checkLinkWithGithubApi } from "./checkGithubLink";
+import { checkLinkWithGithubApi } from "./gh_check_link";
 
 checkGitHubRateLimit();
 

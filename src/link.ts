@@ -11,7 +11,7 @@ import {
   parallelProcess,
 } from "./utils";
 import { Link, LinkCheckResult, LinkWithResult } from "./types";
-import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./github/checkGithubLink";
+import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./github/gh_check_link";
 
 type CheckLinksArgs = {
   links: Link[];
