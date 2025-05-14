@@ -45,8 +45,7 @@ describe("checkGitHubIssueLink", () => {
     expect(result).toMatchObject({
       ok: false,
       error: "broken link",
-      status: 404,
-      errorDetail: "Issue #NaN not found in repository fingerprintjs/fingerprintjs",
+      errorDetail: "Invalid issue number format: invalid",
     });
   });
 

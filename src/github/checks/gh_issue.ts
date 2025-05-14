@@ -24,6 +24,14 @@ export const checkGitHubIssueLink = async (
   }
 
   const issueNumber = parseInt(issueNumberPart, 10);
+  if (isNaN(issueNumber)) {
+    return {
+      ok: false,
+      error: "broken link",
+      errorDetail: `Invalid issue number format: ${issueNumberPart}`,
+    };
+  }
+
   const { error } = await tryCatch(
     octokit.issues.get({
       owner,
