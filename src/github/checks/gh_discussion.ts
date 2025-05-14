@@ -1,5 +1,7 @@
 import { LinkCheckResult } from "../../types";
 import { getMyOctokit } from "../github_client";
+import { tryCatch } from "../../utils/tryCatch";
+import { RequestError } from "@octokit/types";
 
 const octokit = getMyOctokit();
 
@@ -15,35 +17,38 @@ export const checkGitHubDiscussionLink = async (
   repo: string,
   discussionNumber: number
 ): Promise<LinkCheckResult> => {
-  try {
-    // Using the GraphQL API to check if a discussion exists
-    await octokit.graphql(`
-        query {
-          repository(owner: "${owner}", name: "${repo}") {
-            discussion(number: ${discussionNumber}) {
-              id
-            }
+  const { data, error } = await tryCatch(
+    octokit.graphql(`
+      query {
+        repository(owner: "${owner}", name: "${repo}") {
+          discussion(number: ${discussionNumber}) {
+            id
           }
         }
-      `);
+      }
+    `)
+  );
 
-    // If we get here, the discussion exists
+  if (data) {
     return { ok: true, status: 200 };
-  } catch (error: any) {
-    if (error.status === 404 || error.message?.includes("Could not resolve to a Discussion")) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: `Discussion #${discussionNumber} not found in repository ${owner}/${repo}`,
-      };
-    }
+  }
 
+  if (
+    (error as unknown as RequestError).status === 404 ||
+    error?.message?.includes("Could not resolve to a Discussion")
+  ) {
     return {
       ok: false,
-      error: "unexpected error",
-      status: 500,
-      errorDetail: String(error),
+      error: "broken link",
+      status: 404,
+      errorDetail: `Discussion #${discussionNumber} not found in repository ${owner}/${repo}`,
     };
   }
+
+  return {
+    ok: false,
+    error: "unexpected error",
+    status: 500,
+    errorDetail: String(error),
+  };
 };
