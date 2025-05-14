@@ -17,6 +17,10 @@ runs:
       with:
         version: 9
 
+    - name: Check GitHub rate limit
+      shell: bash
+      run: pnpm run gh-limit
+
     - name: Install node modules
       shell: bash
       run: pnpm install --prefer-offline --frozen-lockfile
@@ -37,6 +41,3 @@ runs:
       shell: bash
       run: npx playwright install --with-deps chromium
       if: steps.playwright-cache.outputs.cache-hit != 'true'
-
-    - name: Check GitHub rate limit
-      run: pnpm run gh-limit
