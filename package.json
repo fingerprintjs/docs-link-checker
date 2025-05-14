@@ -8,7 +8,8 @@
     "checkLinks:docs": "npx tsx ./checks/docs.ts",
     "checkLinks:github": "npx tsx ./checks/github.ts",
     "checkLinks:web": "npx tsx ./checks/web.ts",
-    "tsc": "tsc --noEmit"
+    "tsc": "tsc --noEmit",
+    "gh-limit": "npx tsx ./checks/gh_rate_limit.ts"
   },
   "keywords": [],
   "author": "Juraj Uhlar, Fingerprint",

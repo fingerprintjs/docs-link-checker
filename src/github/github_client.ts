@@ -32,8 +32,6 @@ export const getMyOctokit = () =>
     },
   });
 
-
-
   function readableMilliseconds(milliseconds: number) {
     const timeInSeconds = Math.floor(milliseconds / 1000);
     const seconds = timeInSeconds % 60;
@@ -48,9 +46,12 @@ export const getMyOctokit = () =>
     const resetTime = new Date(response.data.rate.reset * 1000);
     const millisecondsUntilReset = resetTime.getTime() - Date.now();
 
-    console.table({
-      "Remaining GitHub API requests": response.data.rate.remaining,
-      "Resets in": readableMilliseconds(millisecondsUntilReset),
-      "Resets on": resetTime.toLocaleString("fr-FR"),
-    });
+    const result = {
+      remaining: response.data.rate.remaining,
+      resetsIn: readableMilliseconds(millisecondsUntilReset),
+      resetsOn: resetTime.toLocaleString("fr-FR"),
+    };
+
+    console.table(result);
+    return result;
   }

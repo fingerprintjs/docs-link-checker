@@ -37,3 +37,6 @@ runs:
       shell: bash
       run: npx playwright install --with-deps chromium
       if: steps.playwright-cache.outputs.cache-hit != 'true'
+
+    - name: Check GitHub rate limit
+      run: pnpm run gh-limit
