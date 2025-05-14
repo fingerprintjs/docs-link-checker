@@ -14,7 +14,7 @@ checkGitHubRateLimit();
 describe("checkGitHubIssueLink", () => {
   it("should return success for an existing issue", async () => {
     // Using a known existing issue from a public repository
-    const result = await checkGitHubIssueLink("fingerprintjs", "fingerprintjs", 1);
+    const result = await checkGitHubIssueLink("fingerprintjs", "fingerprintjs", ["issues", "1"]);
 
     expect(result).toMatchObject({
       ok: true,
@@ -24,7 +24,7 @@ describe("checkGitHubIssueLink", () => {
 
   it("should return error for a non-existent issue", async () => {
     // Using a very high issue number that likely doesn't exist
-    const result = await checkGitHubIssueLink("fingerprintjs", "fingerprintjs", 999999);
+    const result = await checkGitHubIssueLink("fingerprintjs", "fingerprintjs", ["issues", "999999"]);
 
     expect(result).toMatchObject({
       ok: false,
@@ -85,7 +85,7 @@ describe("checkGitHubBlobLink", () => {
   });
 });
 
-describe("checkGitHubBranchLink", () => {
+describe("checkGitHubTreeLink", () => {
   it("should return success for an existing branch without path", async () => {
     const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master");
     const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", ["tree", "master"]);
@@ -119,7 +119,7 @@ describe("checkGitHubBranchLink", () => {
       ok: false,
       error: "broken link",
       status: 404,
-      errorDetail: "Path nonexistent/path not found in branch master",
+      errorDetail: "Path nonexistent/path not found in branch/commit master",
     });
   });
 
@@ -131,7 +131,51 @@ describe("checkGitHubBranchLink", () => {
       ok: false,
       error: "broken link",
       status: 404,
-      errorDetail: "Branch nonexistent-branch not found in repository fingerprintjs/fingerprintjs",
+      errorDetail: "Neither branch nor commit nonexistent-branch found in repository fingerprintjs/fingerprintjs",
+    });
+  });
+
+  it("should work for repositories with many many files", async () => {
+    const url = new URL(
+      "https://github.com/chromium/chromium/tree/3e914531a360b766bfd8468f59259b3ab29118d7/third_party/blink/renderer/platform/audio/cpu"
+    );
+    const result = await checkGitHubTreeLink(url, "chromium", "chromium", [
+      "tree",
+      "3e914531a360b766bfd8468f59259b3ab29118d7",
+      "third_party",
+      "blink",
+      "renderer",
+      "platform",
+      "audio",
+      "cpu",
+    ]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should work for just branch, no path", async () => {
+    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master");
+    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", ["tree", "master"]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should for for just commit, no path", async () => {
+    const url = new URL("https://github.com/chromium/chromium/tree/3e914531a360b766bfd8468f59259b3ab29118d7/");
+    const result = await checkGitHubTreeLink(url, "chromium", "chromium", [
+      "tree",
+      "3e914531a360b766bfd8468f59259b3ab29118d7",
+    ]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
     });
   });
 });
@@ -301,7 +345,7 @@ describe("checkGitHubPullRequestLink", () => {
   });
 });
 
-describe.only("checkLinkWithGithubApi", () => {
+describe("checkLinkWithGithubApi", () => {
   it("should throw error for non-GitHub URLs", async () => {
     await expect(checkLinkWithGithubApi("https://example.com")).rejects.toThrow("Not a GitHub URL");
   });
@@ -554,6 +598,44 @@ describe.only("checkLinkWithGithubApi", () => {
 
   it("should link to create new issue", async () => {
     const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/fingerprintjs/issues/new");
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should return error for non-existent wiki", async () => {
+    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/nonexistent-repo/wiki");
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+    });
+  });
+
+  it("should handle link to release artifact", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprintjs-android/releases/download/2.2.0/Playground-release-2.2.0.apk"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle code line hashes like #L5", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L5"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("should handle code line span hashes like #L5-L10", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L5-L10"
+    );
     expect(result).toMatchObject({
       ok: true,
       status: 200,

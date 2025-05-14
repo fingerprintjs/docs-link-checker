@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { BROWSER_USER_AGENT, log } from "./utils";
+import { getRandomUserAgent, log } from "./utils";
 
 /**
  * Retrieves all the pages from a website by fetching the sitemap and parsing it.
@@ -10,10 +10,8 @@ import { BROWSER_USER_AGENT, log } from "./utils";
  */
 export const getWebsitePages = async (url: string, verbose = false) => {
   const sitemaps = await getWebsiteSitemaps(url, verbose);
-  const pages = await (
-    await Promise.all(
-      sitemaps.map(async (sitemap) => await getPagesFromSitemap(sitemap))
-    )
+  const pages = await(
+    await Promise.all(sitemaps.map(async (sitemap) => await getPagesFromSitemap(sitemap)))
   ).flat();
 
   return pages;
@@ -26,13 +24,10 @@ export const getWebsitePages = async (url: string, verbose = false) => {
  * @param {boolean} [verbose=false] - Whether to log the progress.
  * @return {Promise<string[]>} - A promise that resolves to an array of sitemap URLs.
  */
-export const getWebsiteSitemaps = async (
-  url: string,
-  verbose = false
-): Promise<string[]> => {
-  const sitemapExists = await(
+export const getWebsiteSitemaps = async (url: string, verbose = false): Promise<string[]> => {
+  const sitemapExists = await (
     await fetch(`${url}/sitemap.xml`, {
-      headers: { "User-Agent": BROWSER_USER_AGENT },
+      headers: { "User-Agent": getRandomUserAgent() },
     })
   ).ok;
   if (sitemapExists) {
@@ -40,9 +35,9 @@ export const getWebsiteSitemaps = async (
     return [`${url}/sitemap.xml`];
   }
 
-  const sitemapIndex = await(
+  const sitemapIndex = await (
     await fetch(`${url}/sitemap-index.xml`, {
-      headers: { "User-Agent": BROWSER_USER_AGENT },
+      headers: { "User-Agent": getRandomUserAgent() },
     })
   ).text();
   if (!sitemapIndex) {
@@ -78,12 +73,9 @@ function getSitemapsFromSitemapIndex(sitemapIndexUrl: string) {
  * @param {boolean} [verbose=false] - Whether to log the progress.
  * @return {string[]} An array of page URLs retrieved from the sitemap.
  */
-export const getPagesFromSitemap = async (
-  sitemapUrl: string,
-  verbose = false
-) => {
-  const response = await(
-    await fetch(sitemapUrl, { headers: { "User-Agent": BROWSER_USER_AGENT } })
+export const getPagesFromSitemap = async (sitemapUrl: string, verbose = false) => {
+  const response = await (
+    await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } })
   ).text();
   const $ = cheerio.load(response, { xmlMode: true });
   const pages: string[] = [];

@@ -1,7 +1,8 @@
 import { myGithubClient } from "./githubClient";
 import GithubSlugger from "github-slugger";
 import { LinkCheckResult } from "../types";
-import { checkLinkWithFetch } from "../link";
+import { checkLinkWithFetch, checkLinkWithPlaywright } from "../link";
+import { tryCatch } from "../utils/tryCatch";
 
 const octokit = myGithubClient;
 
@@ -16,13 +17,27 @@ export const isGithubUrl = (url: string) => {
 };
 
 /**
+ * Check if a URL is a GitHub code line link like #L5 or #L5-L10
+ * @param href - The URL to check
+ * @returns - True if the URL is a GitHub code line link, false otherwise
+ */
+export const isGithubCodeLineLink = (href: string) => {
+  const url = new URL(href);
+  return url.host === "github.com" && url.pathname.includes("/blob/") && /^#L\d+(-L\d+)?$/.test(url.hash);
+};
+
+/**
  * Check if a GitHub issue exists
  * @param owner - The owner of the repository
  * @param repo - The repository name
  * @param issueNumber - The issue number
  * @returns - A LinkCheckResult object
  */
-export const checkGitHubIssueLink = async (owner: string, repo: string, pathParts: string[]): Promise<LinkCheckResult> => {
+export const checkGitHubIssueLink = async (
+  owner: string,
+  repo: string,
+  pathParts: string[]
+): Promise<LinkCheckResult> => {
   const [, issueNumberPart] = pathParts;
   if (issueNumberPart === "new") {
     return { ok: true, status: 200 };
@@ -51,8 +66,8 @@ export const checkGitHubIssueLink = async (owner: string, repo: string, pathPart
     return {
       ok: false,
       error: "unexpected error",
-      status: 429,
-      errorDetail: "GitHub API rate limit exceeded",
+      status: error.status,
+      errorDetail: error.message,
     };
   }
 };
@@ -120,14 +135,6 @@ export const checkGitHubBlobLink = async (
       };
     }
   } catch (error: any) {
-    if (error.status === 429) {
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 429,
-        errorDetail: "GitHub API rate limit exceeded",
-      };
-    }
     if (error.status === 404) {
       return {
         ok: false,
@@ -161,47 +168,77 @@ export const checkGitHubTreeLink = async (
   const [, branch, ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
 
-  try {
-    // Check if the branch and path exist
-    const { data: treeData } = await octokit.git.getTree({
-      owner,
-      repo,
-      tree_sha: branch,
-      recursive: "1",
-    });
+  // If there's no path specified, we just check if the branch/commit exists
+  if (!path) {
+    console.log("no path specified, checking branch/commit existence");
+    // Try as a branch name first
+    const branchResult = await tryCatch(
+      octokit.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+      })
+    );
 
-    // If there's no path specified, we just check if the branch exists
-    if (!path) {
+    if (branchResult.data) {
+      console.log("no path specified, branch exists");
       return { ok: true, status: 200 };
     }
 
-    // Check if the path exists in the tree
-    const pathExists = treeData.tree.some((item) => item.path === path);
-    if (!pathExists) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: `Path ${path} not found in branch ${branch}`,
-      };
+    // If branch check fails, try as a commit hash
+    const commitResult = await tryCatch(
+      octokit.git.getCommit({
+        owner,
+        repo,
+        commit_sha: branch,
+      })
+    );
+
+    if (commitResult.data) {
+      console.log("no path specified, commit exists");
+      return { ok: true, status: 200 };
     }
 
-    return { ok: true, status: 200 };
-  } catch (error: any) {
-    if (error.status === 404) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: `Branch ${branch} not found in repository ${owner}/${repo}`,
-      };
-    }
     return {
       ok: false,
-      error: "unexpected error",
-      errorDetail: String(error),
+      error: "broken link",
+      status: 404,
+      errorDetail: `Neither branch nor commit ${branch} found in repository ${owner}/${repo}`,
     };
   }
+
+  // For paths, we need to check if the specific path exists
+  // Get the content directly - this is more efficient than getting the whole tree
+  const contentResult = await tryCatch(
+    octokit.repos.getContent({
+      owner,
+      repo,
+      ref: branch,
+      path,
+    })
+  );
+
+  if (contentResult.data) {
+    console.log("get content, path exists");
+    return { ok: true, status: 200 };
+  }
+
+  // Check if it was a 404 error
+  const error = contentResult.error as any;
+  if (error?.status === 404) {
+    return {
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: `Path ${path} not found in branch/commit ${branch}`,
+    };
+  }
+
+  return {
+    ok: false,
+    error: "unexpected error",
+    errorDetail: String(error),
+  };
 };
 
 /**
@@ -279,6 +316,44 @@ export const checkGitHubReleaseLink = async (
   pathParts: string[]
 ): Promise<LinkCheckResult> => {
   try {
+    // If pathParts[1] is "download", check if the release asset exists
+    if (pathParts[1] === "download") {
+      const tag = pathParts[2];
+      const assetName = pathParts[3];
+
+      try {
+        // First check if the release exists
+        const { data: release } = await octokit.repos.getReleaseByTag({
+          owner,
+          repo,
+          tag,
+        });
+
+        // Then check if the asset exists
+        const asset = release.assets.find((a) => a.name === assetName);
+        if (!asset) {
+          return {
+            ok: false,
+            error: "broken link",
+            status: 404,
+            errorDetail: `Asset ${assetName} not found in release ${tag} of repository ${owner}/${repo}`,
+          };
+        }
+
+        return { ok: true, status: 200 };
+      } catch (error: any) {
+        if (error.status === 404) {
+          return {
+            ok: false,
+            error: "broken link",
+            status: 404,
+            errorDetail: `Release tag ${tag} not found in repository ${owner}/${repo}`,
+          };
+        }
+        throw error;
+      }
+    }
+
     // If pathParts[1] is "latest", check if any release exists
     if (pathParts[1] === "latest") {
       const { data: releases } = await octokit.repos.listReleases({
@@ -435,6 +510,11 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   // Parse the GitHub URL
   const githubUrl = new URL(url);
   const [owner, repo, ...pathParts] = githubUrl.pathname.split("/").filter(Boolean);
+
+  // If it's a code line link, fall back to fetch for now
+  if (isGithubCodeLineLink(url)) {
+    return checkLinkWithPlaywright(url);
+  }
 
   // If pathParts is empty, it's a repository link, just check if it exists
   if (pathParts.length === 0) {
