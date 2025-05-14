@@ -69,4 +69,35 @@ describe("checkGitHubReleaseLink", () => {
       errorDetail: "Invalid release URL format",
     });
   });
+
+  it("should return error for non-existent release asset", async () => {
+    const result = await checkGitHubReleaseLink("fingerprintjs", "fingerprintjs", [
+      "releases",
+      "download",
+      "v3.0.0",
+      "nonexistent-asset.js",
+    ]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail:
+        "Asset nonexistent-asset.js not found in release v3.0.0 of repository fingerprintjs/fingerprintjs",
+    });
+  });
+
+  it("should return error for invalid release ID format", async () => {
+    const result = await checkGitHubReleaseLink("fingerprintjs", "fingerprintjs", [
+      "releases",
+      "invalid-id",
+    ]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Invalid release URL format",
+    });
+  });
 });
