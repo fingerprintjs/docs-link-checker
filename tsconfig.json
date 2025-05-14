@@ -18,7 +18,9 @@
     "rootDir": "./src",
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "jsx": "react"
+    "jsx": "react",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

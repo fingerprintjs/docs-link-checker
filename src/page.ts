@@ -58,7 +58,7 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   const $ = cheerio.load(pageContent, { baseURI: pageUrl });
   const links = $("a");
   const result: Link[] = [];
-  links.each((index, value) => {
+  links.each((_index, value) => {
     const href = value.attribs.href;
     if (href) {
       if (href.startsWith("http")) {

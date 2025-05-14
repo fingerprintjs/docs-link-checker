@@ -1,8 +1,5 @@
-import { getMyOctokit } from "./github_client";
-
 import { LinkCheckResult } from "../types";
 import { checkLinkWithFetch, checkLinkWithPlaywright } from "../link";
-import { tryCatch } from "../utils/tryCatch";
 import { checkGitHubBlobLink } from "./checks/gh_blob";
 import { checkGitHubDiscussionLink } from "./checks/gh_discussion";
 import { checkGitHubIssueLink } from "./checks/gh_issue";
@@ -10,8 +7,6 @@ import { checkGitHubPullRequestLink } from "./checks/gh_pr";
 import { checkGitHubReleaseLink } from "./checks/gh_release";
 import { checkIfRepositoryExists } from "./checks/gh_repo";
 import { checkGitHubTreeLink } from "./checks/gh_tree";
-
-const octokit = getMyOctokit();
 
 /**
  * Check if a URL is a GitHub URL
@@ -87,17 +82,17 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
 
   // If branch or folder, check if it exists
   if (pathParts[0] === "tree") {
-    return checkGitHubTreeLink(githubUrl, owner, repo, pathParts);
+    return checkGitHubTreeLink(owner, repo, pathParts);
   }
 
   // If release, check if it exists
   if (pathParts[0] === "releases") {
-    return checkGitHubReleaseLink(githubUrl, owner, repo, pathParts);
+    return checkGitHubReleaseLink(owner, repo, pathParts);
   }
 
   // If pull request, check if it exists
   if (pathParts[0] === "pull") {
-    return checkGitHubPullRequestLink(githubUrl, owner, repo, pathParts);
+    return checkGitHubPullRequestLink(owner, repo, pathParts);
   }
 
   // If wiki, check if it exists

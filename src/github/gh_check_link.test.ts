@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkGitHubRateLimit } from "./gh_get_links";
 import { checkLinkWithGithubApi } from "./gh_check_link";
-
-checkGitHubRateLimit();
 
 describe("checkLinkWithGithubApi", () => {
   it("should throw error for non-GitHub URLs", async () => {

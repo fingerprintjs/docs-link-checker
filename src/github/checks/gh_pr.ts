@@ -12,7 +12,6 @@ const octokit = getMyOctokit();
  * @returns - A LinkCheckResult object
  */
 export const checkGitHubPullRequestLink = async (
-  fullUrl: URL,
   owner: string,
   repo: string,
   pathParts: string[]

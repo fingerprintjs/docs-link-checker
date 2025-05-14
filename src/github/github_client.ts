@@ -24,7 +24,7 @@ export const getMyOctokit = () =>
           return true;
         }
       },
-      onSecondaryRateLimit: (retryAfter, options, octokit) => {
+      onSecondaryRateLimit: (_retryAfter, options, octokit) => {
         octokit.log.warn(
           `SecondaryRateLimit detected for request ${options.method} ${options.url}`
         );

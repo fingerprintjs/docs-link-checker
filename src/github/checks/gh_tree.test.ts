@@ -3,11 +3,7 @@ import { checkGitHubTreeLink } from "./gh_tree";
 
 describe("checkGitHubTreeLink", () => {
   it("should return success for an existing branch without path", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master");
-    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", [
-      "tree",
-      "master",
-    ]);
+    const result = await checkGitHubTreeLink("fingerprintjs", "fingerprintjs", ["tree", "master"]);
 
     expect(result).toMatchObject({
       ok: true,
@@ -16,8 +12,7 @@ describe("checkGitHubTreeLink", () => {
   });
 
   it("should return success for an existing branch with valid path", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master/src");
-    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubTreeLink("fingerprintjs", "fingerprintjs", [
       "tree",
       "master",
       "src",
@@ -30,10 +25,7 @@ describe("checkGitHubTreeLink", () => {
   });
 
   it("should return error for an existing branch with invalid path", async () => {
-    const url = new URL(
-      "https://github.com/fingerprintjs/fingerprintjs/tree/master/nonexistent/path"
-    );
-    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubTreeLink("fingerprintjs", "fingerprintjs", [
       "tree",
       "master",
       "nonexistent",
@@ -49,8 +41,7 @@ describe("checkGitHubTreeLink", () => {
   });
 
   it("should return error for a non-existent branch", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/nonexistent-branch");
-    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubTreeLink("fingerprintjs", "fingerprintjs", [
       "tree",
       "nonexistent-branch",
     ]);
@@ -65,10 +56,7 @@ describe("checkGitHubTreeLink", () => {
   });
 
   it("should work for repositories with many many files", async () => {
-    const url = new URL(
-      "https://github.com/chromium/chromium/tree/3e914531a360b766bfd8468f59259b3ab29118d7/third_party/blink/renderer/platform/audio/cpu"
-    );
-    const result = await checkGitHubTreeLink(url, "chromium", "chromium", [
+    const result = await checkGitHubTreeLink("chromium", "chromium", [
       "tree",
       "3e914531a360b766bfd8468f59259b3ab29118d7",
       "third_party",
@@ -86,11 +74,7 @@ describe("checkGitHubTreeLink", () => {
   });
 
   it("should work for just branch, no path", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/tree/master");
-    const result = await checkGitHubTreeLink(url, "fingerprintjs", "fingerprintjs", [
-      "tree",
-      "master",
-    ]);
+    const result = await checkGitHubTreeLink("fingerprintjs", "fingerprintjs", ["tree", "master"]);
 
     expect(result).toMatchObject({
       ok: true,
@@ -99,10 +83,7 @@ describe("checkGitHubTreeLink", () => {
   });
 
   it("should for for just commit, no path", async () => {
-    const url = new URL(
-      "https://github.com/chromium/chromium/tree/3e914531a360b766bfd8468f59259b3ab29118d7/"
-    );
-    const result = await checkGitHubTreeLink(url, "chromium", "chromium", [
+    const result = await checkGitHubTreeLink("chromium", "chromium", [
       "tree",
       "3e914531a360b766bfd8468f59259b3ab29118d7",
     ]);

@@ -1,7 +1,5 @@
-import { Octokit } from "@octokit/rest";
-import dotenv from "dotenv";
 import { parallelProcess } from "../utils";
-import { Link, LinkCheckResult } from "../types";
+import { Link } from "../types";
 import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";

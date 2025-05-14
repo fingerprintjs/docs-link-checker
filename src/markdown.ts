@@ -23,7 +23,7 @@ const extractGitHubRepoUrl = (url: string) => {
 function resolveUrl(base: string, relative: string): string {
   // If it's already an absolute URL, return as-is
   try {
-    const url = new URL(relative);
+    new URL(relative);
     return relative;
   } catch {
     // Not an absolute URL, so resolve it

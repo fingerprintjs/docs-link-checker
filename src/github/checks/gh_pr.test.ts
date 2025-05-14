@@ -3,8 +3,7 @@ import { expect, describe, it } from "vitest";
 
 describe("checkGitHubPullRequestLink", () => {
   it("should return success for an existing pull request", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/pull/1094");
-    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubPullRequestLink("fingerprintjs", "fingerprintjs", [
       "pull",
       "1094",
     ]);
@@ -16,8 +15,7 @@ describe("checkGitHubPullRequestLink", () => {
   });
 
   it("should return error for a non-existent pull request", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/pull/999999");
-    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubPullRequestLink("fingerprintjs", "fingerprintjs", [
       "pull",
       "999999",
     ]);
@@ -31,8 +29,7 @@ describe("checkGitHubPullRequestLink", () => {
   });
 
   it("should return error for invalid pull request number", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/pull/invalid");
-    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubPullRequestLink("fingerprintjs", "fingerprintjs", [
       "pull",
       "invalid",
     ]);
@@ -46,8 +43,7 @@ describe("checkGitHubPullRequestLink", () => {
   });
 
   it("should return error for non-existent repository", async () => {
-    const url = new URL("https://github.com/fingerprintjs/nonexistent-repo/pull/1");
-    const result = await checkGitHubPullRequestLink(url, "fingerprintjs", "nonexistent-repo", [
+    const result = await checkGitHubPullRequestLink("fingerprintjs", "nonexistent-repo", [
       "pull",
       "1",
     ]);

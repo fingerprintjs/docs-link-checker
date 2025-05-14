@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, assert, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
 
 const linkCheckMethods = [
@@ -29,7 +29,11 @@ for (const { function: checkLink, name } of linkCheckMethods) {
 
     it(`${name} should return broken link for malformed URLS`, async () => {
       const result = await checkLink("ttps://www.google.com");
-      expect(result).toMatchObject({ ok: false, error: "broken link", errorDetail: expect.any(String) });
+      expect(result).toMatchObject({
+        ok: false,
+        error: "broken link",
+        errorDetail: expect.any(String),
+      });
     });
 
     /**
@@ -96,7 +100,9 @@ for (const { function: checkLink, name } of linkCheckMethods) {
      * Text fragments
      */
     it(`${name} should return OK for links with text fragment`, async () => {
-      const result = await checkLink("https://developer.mozilla.org/en-US/docs/Web/HTML/Element/a#:~:text=human");
+      const result = await checkLink(
+        "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/a#:~:text=human"
+      );
       expect(result).toMatchObject({ ok: true, status: 200, note: "Text Fragment" });
     });
 
@@ -112,16 +118,22 @@ for (const { function: checkLink, name } of linkCheckMethods) {
 
 describe("checkLinkWithPlaywright()", () => {
   it("should return OK for hashes that exist (client-rendered)", async () => {
-    const result = await checkLinkWithPlaywright("https://developer.apple.com/documentation/webkit#overview");
+    const result = await checkLinkWithPlaywright(
+      "https://developer.apple.com/documentation/webkit#overview"
+    );
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
-  it("should return 'hash not found' for broken hash links (client-rendered)", { timeout: 10000 }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://developer.apple.com/documentation/webkit#this-hash-does-not-exist"
-    );
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-  });
+  it(
+    "should return 'hash not found' for broken hash links (client-rendered)",
+    { timeout: 10000 },
+    async () => {
+      const result = await checkLinkWithPlaywright(
+        "https://developer.apple.com/documentation/webkit#this-hash-does-not-exist"
+      );
+      expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    }
+  );
 
   it(`should return OK for working L{number} hashes on GitHub `, async () => {
     const result = await checkLinkWithPlaywright(

@@ -7,7 +7,8 @@
     "test": "vitest",
     "checkLinks:docs": "npx tsx ./checks/docs.ts",
     "checkLinks:github": "npx tsx ./checks/github.ts",
-    "checkLinks:web": "npx tsx ./checks/web.ts"
+    "checkLinks:web": "npx tsx ./checks/web.ts",
+    "tsc": "tsc --noEmit"
   },
   "keywords": [],
   "author": "Juraj Uhlar, Fingerprint",

@@ -1,6 +1,5 @@
 import { expect, describe, it } from "vitest";
 import { checkIfRepositoryExists } from "./gh_repo";
-import { checkGitHubDiscussionLink } from "./gh_discussion";
 
 describe("checkIfRepositoryExists", () => {
   it("should return success for an existing repository", async () => {

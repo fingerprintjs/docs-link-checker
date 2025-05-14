@@ -3,8 +3,7 @@ import { checkGitHubReleaseLink } from "./gh_release";
 
 describe("checkGitHubReleaseLink", () => {
   it("should return success for latest release when releases exist", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/latest");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubReleaseLink("fingerprintjs", "fingerprintjs", [
       "releases",
       "latest",
     ]);
@@ -16,8 +15,7 @@ describe("checkGitHubReleaseLink", () => {
   });
 
   it("should return error for latest release when no releases exist", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/latest");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "nonexistent-repo", [
+    const result = await checkGitHubReleaseLink("fingerprintjs", "nonexistent-repo", [
       "releases",
       "latest",
     ]);
@@ -30,8 +28,7 @@ describe("checkGitHubReleaseLink", () => {
   });
 
   it("should return success for a valid release tag", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/tag/v3.0.0");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubReleaseLink("fingerprintjs", "fingerprintjs", [
       "releases",
       "tag",
       "v3.0.0",
@@ -44,10 +41,7 @@ describe("checkGitHubReleaseLink", () => {
   });
 
   it("should return error for an invalid release tag", async () => {
-    const url = new URL(
-      "https://github.com/fingerprintjs/fingerprintjs/releases/tag/nonexistent-tag"
-    );
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubReleaseLink("fingerprintjs", "fingerprintjs", [
       "releases",
       "tag",
       "nonexistent-tag",
@@ -63,8 +57,7 @@ describe("checkGitHubReleaseLink", () => {
   });
 
   it("should return error for invalid release URL format", async () => {
-    const url = new URL("https://github.com/fingerprintjs/fingerprintjs/releases/invalid");
-    const result = await checkGitHubReleaseLink(url, "fingerprintjs", "fingerprintjs", [
+    const result = await checkGitHubReleaseLink("fingerprintjs", "fingerprintjs", [
       "releases",
       "invalid",
     ]);

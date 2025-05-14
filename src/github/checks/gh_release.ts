@@ -5,14 +5,12 @@ const octokit = getMyOctokit();
 
 /**
  * Check if a GitHub release exists
- * @param fullUrl - The full URL of the release
  * @param owner - The owner of the repository
  * @param repo - The repository name
  * @param pathParts - The path parts of the URL
  * @returns - A LinkCheckResult object
  */
 export const checkGitHubReleaseLink = async (
-  fullUrl: URL,
   owner: string,
   repo: string,
   pathParts: string[]

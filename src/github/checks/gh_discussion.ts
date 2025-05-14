@@ -17,7 +17,7 @@ export const checkGitHubDiscussionLink = async (
 ): Promise<LinkCheckResult> => {
   try {
     // Using the GraphQL API to check if a discussion exists
-    const response = await octokit.graphql(`
+    await octokit.graphql(`
         query {
           repository(owner: "${owner}", name: "${repo}") {
             discussion(number: ${discussionNumber}) {

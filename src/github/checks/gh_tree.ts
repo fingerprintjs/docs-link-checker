@@ -6,14 +6,12 @@ const octokit = getMyOctokit();
 
 /**
  * Check if a GitHub branch/tree exists
- * @param fullUrl - The full URL of the branch/tree
  * @param owner - The owner of the repository
  * @param repo - The repository name
  * @param pathParts - The path parts of the URL
  * @returns - A LinkCheckResult object
  */
 export const checkGitHubTreeLink = async (
-  fullUrl: URL,
   owner: string,
   repo: string,
   pathParts: string[]
@@ -23,7 +21,6 @@ export const checkGitHubTreeLink = async (
 
   // If there's no path specified, we just check if the branch/commit exists
   if (!path) {
-    console.log("no path specified, checking branch/commit existence");
     // Try as a branch name first
     const branchResult = await tryCatch(
       octokit.git.getRef({
@@ -34,7 +31,6 @@ export const checkGitHubTreeLink = async (
     );
 
     if (branchResult.data) {
-      console.log("no path specified, branch exists");
       return { ok: true, status: 200 };
     }
 
@@ -72,7 +68,6 @@ export const checkGitHubTreeLink = async (
   );
 
   if (contentResult.data) {
-    console.log("get content, path exists");
     return { ok: true, status: 200 };
   }
 
