@@ -6,9 +6,9 @@ import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";
 import { filterOutIrrelevantLinks } from "../page";
-import { myGithubClient } from "./githubClient";
+import { getMyOctokit } from "./github_client";
 
-const octokit = myGithubClient;
+const octokit = getMyOctokit();
 
 interface MdFile {
   sourcePath: string;
@@ -75,7 +75,9 @@ async function getReadmesFromOrg(orgName: string): Promise<MdFile[] | undefined>
     );
     return readmes;
   } catch (error) {
-    console.error(`Error getting Readmes from organization ${orgName}: ${(error as Error).message}`);
+    console.error(
+      `Error getting Readmes from organization ${orgName}: ${(error as Error).message}`
+    );
   }
 }
 
@@ -91,7 +93,10 @@ async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   });
 
   if (errors.length > 0) {
-    console.error(`Errors fetching files and extracting links: ${errors.length}`, errors.toString());
+    console.error(
+      `Errors fetching files and extracting links: ${errors.length}`,
+      errors.toString()
+    );
   }
   const links = results.flat();
   console.log(`Extracted ${links.length} links from ${files.length} files.`);
@@ -128,7 +133,11 @@ export async function checkReadmesInGithubOrg(org: string) {
   const links = await getReadmeLinks(fingerprintPublicReadmes!);
   const filteredLinks = filterOutIrrelevantLinks(links);
 
-  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true, fetchConcurrencyLimit: 20 });
+  const { results, errors } = await checkLinks({
+    links: filteredLinks,
+    verbose: true,
+    fetchConcurrencyLimit: 20,
+  });
 
   const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
 
@@ -139,5 +148,3 @@ export async function checkReadmesInGithubOrg(org: string) {
 
   return report;
 }
-
-

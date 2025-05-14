@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
-import { BROWSER_USER_AGENT, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT, progressBar } from "./utils";
+import { parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT, progressBar } from "./utils";
 import { chromium } from "playwright";
 
 export function filterOutIrrelevantLinks(links: Link[]): Link[] {
