@@ -331,4 +331,15 @@ describe("checkLinkWithGithubApi", () => {
       status: 200,
     });
   });
+
+  it("should handle commit links", async () => {
+    const result = await checkLinkWithGithubApi(
+      "https://github.com/WebKit/WebKit/commit/6f2b47e87bc414001affb258048749130bc91083"
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+  });
 });
+

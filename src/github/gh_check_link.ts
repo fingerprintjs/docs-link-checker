@@ -7,6 +7,7 @@ import { checkGitHubPullRequestLink } from "./checks/gh_pr";
 import { checkGitHubReleaseLink } from "./checks/gh_release";
 import { checkIfRepositoryExists } from "./checks/gh_repo";
 import { checkGitHubTreeLink } from "./checks/gh_tree";
+import { checkGitHubCommitLink } from "./checks/gh_commit";
 
 /**
  * Check if a URL is a GitHub URL
@@ -98,6 +99,11 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   // If wiki, check if it exists
   if (pathParts[0] === "wiki") {
     return checkLinkWithFetch(url);
+  }
+
+  // If commit, check if it exists
+  if (pathParts[0] === "commit") {
+    return checkGitHubCommitLink(owner, repo, pathParts);
   }
 
   return {
