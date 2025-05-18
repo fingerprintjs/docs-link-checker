@@ -12,7 +12,6 @@ on:
     - cron: '0 0 * * *' # Every day at midnight
   workflow_dispatch:
 env:
-  GH_TOKEN: ${{ secrets.GH_TOKEN }}
   DEV_REPORT: dev-fingerprint-com.html
   GITHUB_REPORT: fingerprintjs-github-readmes.html
   WEB_REPORT: fingerprint-com.html
@@ -26,9 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-environment
+        id: setup
       
       - name: Run link checker
         run: pnpm run checkLinks:docs
+        env:
+          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
         uses: actions/upload-artifact@v4
@@ -46,9 +48,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-environment
+        id: setup
       
       - name: Run link checker
         run: pnpm run checkLinks:github
+        env:
+          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
         uses: actions/upload-artifact@v4
@@ -66,9 +71,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-environment
+        id: setup
       
       - name: Run link checker
         run: pnpm run checkLinks:web
+        env:
+          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
         uses: actions/upload-artifact@v4

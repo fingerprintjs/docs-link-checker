@@ -2,6 +2,11 @@ name: 'Setup Environment'
 description: 'Sets up Node.js environment with pnpm and Playwright'
 # https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action
 
+outputs:
+  gh_token:
+    description: "GitHub token for authentication"
+    value: ${{ vars.APP_ID != '' && steps.app-token.outputs.token || secrets.GH_TOKEN }}
+
 runs:
   using: "composite"
   steps:
@@ -17,9 +22,19 @@ runs:
       with:
         version: 9
 
+    - name: 'Get token for the GitHub App'
+      if: ${{ inputs.appId != '' }}
+      uses: actions/create-github-app-token@f2acddfb5195534d487896a656232b016a682f3c
+      id: app-token
+      with:
+        app-id: ${{ vars.APP_ID }}
+        private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
     - name: Check GitHub rate limit
       shell: bash
       run: pnpm run gh-limit
+      env:
+        GH_TOKEN: ${{ vars.APP_ID != '' && steps.app-token.outputs.token || secrets.GH_TOKEN }}
 
     - name: Install node modules
       shell: bash
