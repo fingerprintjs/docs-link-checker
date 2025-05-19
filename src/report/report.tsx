@@ -45,7 +45,7 @@ export const getJSONReport = ({ links, errors, siteName }: GetReportArgs) => {
 };
 
 const HrefRenderer = ({ link }: { link: LinkWithResult }) => {
-  const { href, text, page, result } = link;
+  const { href, result } = link;
 
   if (result.ok) {
     return href;

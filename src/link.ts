@@ -11,6 +11,7 @@ import {
   parallelProcess,
 } from "./utils";
 import { Link, LinkCheckResult, LinkWithResult } from "./types";
+import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./github/gh_check_link";
 
 type CheckLinksArgs = {
   links: Link[];
@@ -35,7 +36,11 @@ export const checkLinks = async ({ links, verbose, fetchConcurrencyLimit = CONCU
         result = existingResult;
       } else {
         // New link, check it
-        result = await checkLinkWithFetch(link.href);
+        if (isGithubUrl(link.href)) {
+          result = await checkLinkWithGithubApi(link.href);
+        } else {
+          result = await checkLinkWithFetch(link.href);
+        }
         resultMap.set(link.href, result);
       }
       // Link not okay, add to Playwright queue
@@ -108,23 +113,21 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
     });
 
     // GitHub web rate limit makes you wait 60 seconds after 500 requests
-    if (response.status === 429) {
-      const retryAfter = response.headers.get("Retry-After");
-      if (retryAfter) {
-        const retryAfterSeconds = parseInt(retryAfter);
-        const retryAfterMs = retryAfterSeconds * 1000;
-        if (retryAfterMs < TASK_TIMEOUT) {
-          console.log(`Rate limited, retrying after ${retryAfter} seconds...`);
-          await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
-          return await checkLinkWithFetch(url, verbose);
-        } else {
-          return {
-            ok: false,
-            error: "unexpected error",
-            status: response.status,
-            errorDetail: `Rate limited and gave up, retry-after: ${retryAfter} seconds`,
-          };
-        }
+    const retryAfter = response.headers.get("Retry-After");
+    if (response.status === 429 && retryAfter) {
+      const retryAfterSeconds = parseInt(retryAfter);
+      const retryAfterMs = retryAfterSeconds * 1000;
+      if (retryAfterMs < TASK_TIMEOUT) {
+        console.log(`Rate limited, retrying after ${retryAfter} seconds...`);
+        await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+        return await checkLinkWithFetch(url, verbose);
+      } else {
+        return {
+          ok: false,
+          error: "unexpected error",
+          status: response.status,
+          errorDetail: `\n Rate limited and gave up, retry-after: ${retryAfterSeconds} seconds for link ${url}`,
+        };
       }
     }
 
@@ -163,6 +166,8 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
       `[href=${hash}]`,
       `[href=${hash.toLowerCase()}]`,
       // GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
+      // Note: This no longer works since GitHub seems to have switched to client-side rendering 🤦 Playwright fallback still works
+      // Keeping it here just in case GitHub comes to their senses and switches back to server-side rendering
       isGithubCodeLineLink(url) && `[data-line-number=${hash.split("-")[0].slice(2)}]`,
     ];
     var element = $(selectors.join(", ")).first();
@@ -278,8 +283,3 @@ export async function checkLinkWithPlaywright(url: string, verbose = false, head
     }
   }
 }
-
-export const isGithubCodeLineLink = (href: string) => {
-  const url = new URL(href);
-  return url.host === "github.com" && url.pathname.includes("/blob/") && /^#L\d+(-L\d+)?$/.test(url.hash);
-};

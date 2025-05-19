@@ -1,21 +1,12 @@
-import { Octokit } from "@octokit/rest";
-import dotenv from "dotenv";
 import { parallelProcess } from "../utils";
 import { Link } from "../types";
 import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";
 import { filterOutIrrelevantLinks } from "../page";
+import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
 
-dotenv.config();
-
-const GH_TOKEN = process.env.GH_TOKEN;
-if (!GH_TOKEN) {
-  throw new Error("GH_TOKEN is not set");
-}
-
-// Initialize without token for public repos, but you can add a token for higher rate limits
-const octokit = new Octokit({ auth: GH_TOKEN });
+const octokit = getMyOctokit();
 
 interface MdFile {
   sourcePath: string;
@@ -82,7 +73,9 @@ async function getReadmesFromOrg(orgName: string): Promise<MdFile[] | undefined>
     );
     return readmes;
   } catch (error) {
-    console.error(`Error getting Readmes from organization ${orgName}: ${(error as Error).message}`);
+    console.error(
+      `Error getting Readmes from organization ${orgName}: ${(error as Error).message}`
+    );
   }
 }
 
@@ -98,7 +91,10 @@ async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   });
 
   if (errors.length > 0) {
-    console.error(`Errors fetching files and extracting links: ${errors.length}`, errors.toString());
+    console.error(
+      `Errors fetching files and extracting links: ${errors.length}`,
+      errors.toString()
+    );
   }
   const links = results.flat();
   console.log(`Extracted ${links.length} links from ${files.length} files.`);
@@ -107,13 +103,18 @@ async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
 
 export async function checkReadmesInGithubOrg(org: string) {
   const startTime = performance.now();
+  checkGitHubRateLimit(octokit);
 
   const fingerprintPublicReadmes = await getReadmesFromOrg(org);
 
   const links = await getReadmeLinks(fingerprintPublicReadmes!);
   const filteredLinks = filterOutIrrelevantLinks(links);
 
-  const { results, errors } = await checkLinks({ links: filteredLinks, verbose: true, fetchConcurrencyLimit: 20 });
+  const { results, errors } = await checkLinks({
+    links: filteredLinks,
+    verbose: true,
+    fetchConcurrencyLimit: 20,
+  });
 
   const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
 

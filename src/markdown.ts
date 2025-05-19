@@ -13,7 +13,7 @@ function extractLinkPlainText(input: string): string {
     .replace(/~~|`/g, ""); // Remove strikethrough and code markers
 }
 
-const extractGitHubRepoUrl = (url) => {
+const extractGitHubRepoUrl = (url: string) => {
   // Matches GitHub URL with optional branch after /blob/
   const match = url.match(/(https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+)/);
   return match ? match[1] : null;
@@ -23,7 +23,7 @@ const extractGitHubRepoUrl = (url) => {
 function resolveUrl(base: string, relative: string): string {
   // If it's already an absolute URL, return as-is
   try {
-    const url = new URL(relative);
+    new URL(relative);
     return relative;
   } catch {
     // Not an absolute URL, so resolve it

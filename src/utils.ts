@@ -25,7 +25,7 @@ export const parallelProcess = async <T, R>({
   const { results, errors } = await PromisePool.withConcurrency(concurrencyLimit)
     .withTaskTimeout(TASK_TIMEOUT)
     .for(items)
-    .onTaskFinished((_item, pool) => {
+    .onTaskFinished((_item, _pool) => {
       progressBar.increment();
     })
     .process(processFn);

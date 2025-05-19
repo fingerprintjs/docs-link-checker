@@ -1,6 +1,11 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
-import { BROWSER_USER_AGENT, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT, progressBar } from "./utils";
+import {
+  getRandomUserAgent,
+  parallelProcess,
+  PLAYWRIGHT_CONCURRENCY_LIMIT,
+  progressBar,
+} from "./utils";
 import { chromium } from "playwright";
 
 export function filterOutIrrelevantLinks(links: Link[]): Link[] {
@@ -41,7 +46,7 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   if (pageHTML) {
     pageContent = pageHTML;
   } else {
-    const response = await fetch(pageUrl, { headers: { "User-Agent": BROWSER_USER_AGENT } });
+    const response = await fetch(pageUrl, { headers: { "User-Agent": getRandomUserAgent() } });
     if (!response.ok) {
       console.error(`Could not fetch ${pageUrl}! status: ${response.status}`);
       return [];
@@ -53,7 +58,7 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   const $ = cheerio.load(pageContent, { baseURI: pageUrl });
   const links = $("a");
   const result: Link[] = [];
-  links.each((index, value) => {
+  links.each((_index, value) => {
     const href = value.attribs.href;
     if (href) {
       if (href.startsWith("http")) {
