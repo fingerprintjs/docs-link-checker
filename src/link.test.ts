@@ -69,28 +69,6 @@ for (const { function: checkLink, name } of linkCheckMethods) {
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
-    it(
-      `${name} should return 'hash not found' for broken L{number} hashes on GitHub `,
-      { timeout: 10000 },
-      async () => {
-        const result = await checkLink(
-          "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999"
-        );
-        expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
-      }
-    );
-
-    it(
-      `${name} should return 'hash not found' for broken L{number}-L{number} hashes on GitHub `,
-      { timeout: 10000 },
-      async () => {
-        const result = await checkLink(
-          "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999"
-        );
-        expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
-      }
-    );
-
     it(`${name} should return OK and ignore accidental hashes that Readme creates 🤦`, async () => {
       const result = await checkLink("https://dev.fingerprint.com/docs/quick-start-guide#/");
       expect(result).toMatchObject({ ok: true, status: 200 });
@@ -148,4 +126,26 @@ describe("checkLinkWithPlaywright()", () => {
     );
     expect(result).toMatchObject({ ok: true, status: 200 });
   });
+
+  it(
+    `should return 'hash not found' for broken L{number} hashes on GitHub `,
+    { timeout: 10000 },
+    async () => {
+      const result = await checkLinkWithPlaywright(
+        "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999"
+      );
+      expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
+    }
+  );
+
+  it(
+    `should return 'hash not found' for broken L{number}-L{number} hashes on GitHub `,
+    { timeout: 10000 },
+    async () => {
+      const result = await checkLinkWithPlaywright(
+        "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999"
+      );
+      expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
+    }
+  );
 });
