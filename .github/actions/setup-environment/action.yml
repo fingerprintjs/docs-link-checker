@@ -36,6 +36,7 @@ runs:
       with:
         app-id: ${{ inputs.app_id }}
         private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
 
     - name: Check GitHub rate limit
       shell: bash
