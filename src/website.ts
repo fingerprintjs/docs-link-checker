@@ -15,8 +15,14 @@ export const checkWebsite = async ({ websiteUrl, linkFilter, usePlaywright }: Ch
   const startTime = performance.now();
 
   const pages = await getWebsitePages(websiteUrl, true);
+  if (pages.length === 0) {
+    throw new Error(`No pages discovered for ${websiteUrl}. Sitemap discovery likely failed.`);
+  }
 
   const { links } = await getLinksFromPages({ pages, linkFilter, usePlaywright });
+  if (links.length === 0) {
+    throw new Error(`No links discovered for ${websiteUrl}. Link extraction likely failed.`);
+  }
   console.log(`Fetched ${links.length} links.`);
 
   const { results, errors } = await checkLinks({ links });
