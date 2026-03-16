@@ -1,5 +1,9 @@
 name: Check links
 on:
+  # Pull request to main
+  pull_request:
+    branches:
+      - main
   # Push to main
   push:
     branches:
@@ -95,7 +99,7 @@ jobs:
     name: Combine all reports
     needs: [docs, githubReadmes, web]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && github.event_name != 'pull_request'
     
     steps:
       - name: Create reports directory
@@ -131,7 +135,7 @@ jobs:
     name: Deploy reports to GitHub Pages
     needs: [docs, githubReadmes, web]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && github.event_name != 'pull_request'
     permissions:
       pages: write
       id-token: write
@@ -198,7 +202,7 @@ jobs:
   report-status:
     name: Report status to Slack
     needs: [docs, githubReadmes, web]
-    if: failure()
+    if: failure() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Prepare message
