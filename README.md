@@ -21,7 +21,7 @@ A GitHub workflow that checks for broken links in our documentation, public GitH
 
 There are obviously many libraries and services (we also use a weekly check by [TripleChecker.com](https://www.triplechecker.com/)) to check for broken links but I haven't found one that works well for documentation. They all just check the link's response status code and call it a day.
 
-But documentation often contains **hash/anchor** links like [https://dev.fingerprint.com/docs/quick-start-guide#1-create-an-account](https://dev.fingerprint.com/docs/quick-start-guide#1-create-an-account) that point to specific sections of a page.
+But documentation often contains **hash/anchor** links like [https://docs.fingerprint.com/docs/quick-start-guide#1-create-an-account](https://docs.fingerprint.com/docs/quick-start-guide#1-create-an-account) that point to specific sections of a page.
 
 These link can be broken despite returning `200 OK`. Hash links break far more easily that normal links: sub-headlines can change over time and there is usually no warning or redirect mechanism applied.
 
@@ -48,5 +48,4 @@ So a proper documentation link checker must:
 - [ ] Provide a reusable GitHub action for checking `.md` files from inside a repository.
 - [ ] Make progress bar actually display progress inside GitHub actions UI
 - [ ] Improve API and documentation to make this potentially releasable on NPM as a utility package
-
 

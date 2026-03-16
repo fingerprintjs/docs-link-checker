@@ -2,7 +2,7 @@ import { checkWebsite } from "./../src/website";
 
 (async () => {
   const report = await checkWebsite({
-    websiteUrl: "https://dev.fingerprint.com",
+    websiteUrl: "https://docs.fingerprint.com",
     usePlaywright: false,
   });
   if (report.summary.totalLinksToFix > 0) {

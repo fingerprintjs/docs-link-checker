@@ -18,17 +18,20 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Cache node modules
-      uses: actions/cache@v4
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
       with:
-        path: node_modules
-        key: nodemodules-${{ hashFiles('pnpm-lock.yaml') }}
-        restore-keys: nodemodules-
+        node-version: 22
+        cache: pnpm
 
     - name: 'Install pnpm'
       uses: pnpm/action-setup@129abb77bf5884e578fcaf1f37628e41622cc371
       with:
-        version: 9
+        version: 10
+
+    - name: Install node modules
+      shell: bash
+      run: pnpm install --prefer-offline --frozen-lockfile
 
     - name: 'Get token for the GitHub App'
       uses: actions/create-github-app-token@f2acddfb5195534d487896a656232b016a682f3c
@@ -43,10 +46,6 @@ runs:
       run: pnpm run gh-limit
       env:
         GH_TOKEN: ${{ steps.app-token.outputs.token }}
-
-    - name: Install node modules
-      shell: bash
-      run: pnpm install --prefer-offline --frozen-lockfile
 
     - name: Get installed Playwright version (used in cache key)
       shell: bash

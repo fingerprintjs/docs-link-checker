@@ -66,6 +66,29 @@ export const checkGitHubBlobLink = async (
   }
 
   const content = Buffer.from(fileData.content as string, "base64").toString();
+  const lineHashMatch = hash.match(/^l(\d+)(?:-l(\d+))?$/);
+
+  if (lineHashMatch) {
+    const startLine = Number.parseInt(lineHashMatch[1], 10);
+    const endLine = Number.parseInt(lineHashMatch[2] ?? lineHashMatch[1], 10);
+    const normalizedContent = content.replace(/\r\n/g, "\n");
+    const contentWithoutTrailingNewline = normalizedContent.endsWith("\n")
+      ? normalizedContent.slice(0, -1)
+      : normalizedContent;
+    const lineCount =
+      contentWithoutTrailingNewline === "" ? 0 : contentWithoutTrailingNewline.split("\n").length;
+
+    if (startLine >= 1 && endLine >= startLine && endLine <= lineCount) {
+      return { ok: true, status: 200 };
+    }
+
+    return {
+      ok: false,
+      error: "hash not found",
+      status: 200,
+      errorDetail: `Line range ${startLine}-${endLine} is outside the file`,
+    };
+  }
 
   // Get all headings from the content
   const headingRegex = /^(#{1,6}\s+.*)$/gm;

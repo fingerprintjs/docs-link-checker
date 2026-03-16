@@ -1,5 +1,5 @@
 import { LinkCheckResult } from "../types";
-import { checkLinkWithFetch, checkLinkWithPlaywright } from "../link";
+import { checkLinkWithFetch } from "../link";
 import { checkGitHubBlobLink } from "./checks/gh_blob";
 import { checkGitHubDiscussionLink } from "./checks/gh_discussion";
 import { checkGitHubIssueLink } from "./checks/gh_issue";
@@ -47,11 +47,6 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   // Parse the GitHub URL
   const githubUrl = new URL(url);
   const [owner, repo, ...pathParts] = githubUrl.pathname.split("/").filter(Boolean);
-
-  // If it's a code line link, fall back to fetch for now
-  if (isGithubCodeLineLink(url)) {
-    return checkLinkWithPlaywright(url);
-  }
 
   // If pathParts is empty, it's a repository link, just check if it exists
   if (pathParts.length === 0) {

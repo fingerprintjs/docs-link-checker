@@ -12,13 +12,13 @@ on:
     - cron: '0 0 * * *' # Every day at midnight
   workflow_dispatch:
 env:
-  DEV_REPORT: dev-fingerprint-com.html
+  DOCS_REPORT: docs-fingerprint-com.html
   GITHUB_REPORT: fingerprintjs-github-readmes.html
   WEB_REPORT: fingerprint-com.html
 
 jobs:
   docs:
-    name: dev.fingerprint.com
+    name: docs.fingerprint.com
     timeout-minutes: 15
     runs-on: ubuntu-latest
     
@@ -39,8 +39,8 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ env.DEV_REPORT }}
-          path: results/${{ env.DEV_REPORT }}
+          name: ${{ env.DOCS_REPORT }}
+          path: results/${{ env.DOCS_REPORT }}
           retention-days: 30
 
   githubReadmes:
@@ -104,10 +104,10 @@ jobs:
     steps:
       - name: Create reports directory
         run: mkdir reports
-      - name: Download dev.fingerprint.com report
+      - name: Download docs.fingerprint.com report
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.DEV_REPORT }}
+          name: ${{ env.DOCS_REPORT }}
           path: reports
       - name: Download GitHub READMEs report
         uses: actions/download-artifact@v4
@@ -174,7 +174,7 @@ jobs:
             </div>
             <div class="report-list">
               <div class="report-item">
-                <a href="${DEV_REPORT}/${DEV_REPORT}">dev.fingerprint.com Report</a>
+                <a href="${DOCS_REPORT}/${DOCS_REPORT}">docs.fingerprint.com Report</a>
               </div>
               <div class="report-item">
                 <a href="${GITHUB_REPORT}/${GITHUB_REPORT}">GitHub READMEs Report</a>
@@ -209,7 +209,7 @@ jobs:
         id: message
         run: |
           MESSAGE="*Link Checker Results*
-          • dev.fingerprint.com check: ${{ needs.docs.result }}
+          • docs.fingerprint.com check: ${{ needs.docs.result }}
           • GitHub READMEs check: ${{ needs.githubReadmes.result }}
           • fingerprint.com check: ${{ needs.web.result }}
 

@@ -28,6 +28,8 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
     /^doc:/,
     /^ref:/,
     // And other readme bugs
+    /^https:\/\/docs\.fingerprint\.com\/recipes/,
+    /^https:\/\/docs\.fingerprint\.com\/discuss/,
     /^https:\/\/dev\.fingerprint\.com\/recipes/,
     /^https:\/\/dev\.fingerprint\.com\/discuss/,
   ];
@@ -182,5 +184,4 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
     await browser.close();
   }
 };
-
 

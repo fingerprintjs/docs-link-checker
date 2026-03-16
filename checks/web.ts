@@ -8,7 +8,7 @@ import { checkWebsite } from "../src/website";
     websiteUrl: "https://fingerprint.com",
     usePlaywright: false,
     linkFilter: (link) =>
-      link.href.startsWith("https://dev.fingerprint.com") ||
+      link.href.startsWith("https://docs.fingerprint.com") ||
       link.href.startsWith("https://fingerprint.com") ||
       link.href.startsWith("https://github.com"),
   });

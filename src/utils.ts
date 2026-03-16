@@ -29,7 +29,7 @@ export const parallelProcess = async <T, R>({
       progressBar.increment();
     })
     .process(processFn);
-  progressBar.stop;
+  progressBar.stop();
 
   if (errors.length > 0) {
     console.error(`Errors processing items: ${errors.length}`, errors.toString());
