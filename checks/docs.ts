@@ -1,11 +1,10 @@
 import { checkWebsite } from "./../src/website";
+import { getLinkCheckExitCode } from "../src/check_run";
 
 (async () => {
   const report = await checkWebsite({
     websiteUrl: "https://docs.fingerprint.com",
     usePlaywright: false,
   });
-  if (report.summary.totalLinksToFix > 0) {
-    process.exit(1);
-  }
+  process.exit(getLinkCheckExitCode(report));
 })();

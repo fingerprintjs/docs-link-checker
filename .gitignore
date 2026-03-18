@@ -6,6 +6,8 @@ results/*
 
 downloaded_md_files
 
+.DS_Store
+
 # Logs
 logs
 *.log

@@ -1,4 +1,5 @@
 import { checkWebsite } from "../src/website";
+import { getLinkCheckExitCode } from "../src/check_run";
 
 // The website (blogs mostly) contains a lot of links to news sites and other places
 // that make it difficult to check the link programmatically, resulting in a lot of false positives.
@@ -13,7 +14,5 @@ import { checkWebsite } from "../src/website";
       link.href.startsWith("https://github.com"),
   });
 
-  if (report.summary.totalLinksToFix > 0) {
-    process.exit(1);
-  }
+  process.exit(getLinkCheckExitCode(report));
 })();

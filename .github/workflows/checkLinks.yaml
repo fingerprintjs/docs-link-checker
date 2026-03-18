@@ -33,6 +33,7 @@ jobs:
       - name: Run link checker
         run: pnpm run checkLinks:docs
         env:
+          FAIL_ON_LINK_ISSUES: ${{ github.event_name != 'pull_request' }}
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
@@ -59,6 +60,7 @@ jobs:
       - name: Run link checker
         run: pnpm run checkLinks:github
         env:
+          FAIL_ON_LINK_ISSUES: ${{ github.event_name != 'pull_request' }}
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
@@ -85,6 +87,7 @@ jobs:
       - name: Run link checker
         run: pnpm run checkLinks:web
         env:
+          FAIL_ON_LINK_ISSUES: ${{ github.event_name != 'pull_request' }}
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
