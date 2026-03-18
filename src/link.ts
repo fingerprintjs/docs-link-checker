@@ -19,62 +19,75 @@ type CheckLinksArgs = {
   fetchConcurrencyLimit?: number;
 };
 
+type CheckedUniqueLink = {
+  link: Link;
+  result: LinkCheckResult;
+};
+
+function groupLinksByHref(links: Link[]) {
+  return links.reduce((groups, link) => {
+    const matchingLinks = groups.get(link.href);
+    if (matchingLinks) {
+      matchingLinks.push(link);
+      return groups;
+    }
+
+    groups.set(link.href, [link]);
+    return groups;
+  }, new Map<string, Link[]>());
+}
+
+function expandCheckedLink(linkGroups: Map<string, Link[]>, checkedLink: CheckedUniqueLink): LinkWithResult[] {
+  const matchingLinks = linkGroups.get(checkedLink.link.href) ?? [checkedLink.link];
+  return matchingLinks.map((link) => ({
+    ...link,
+    result: checkedLink.result,
+  }));
+}
+
 export const checkLinks = async ({ links, verbose, fetchConcurrencyLimit = CONCURRENCY_LIMIT }: CheckLinksArgs) => {
   console.log(`\nChecking ${links.length} links...`);
 
+  const groupedLinks = groupLinksByHref(links);
+  const uniqueLinks = [...groupedLinks.values()].map(([link]) => link);
+  console.log(`Collapsed ${links.length - uniqueLinks.length} duplicate link occurrences.`);
+  console.log(`Checking ${uniqueLinks.length} unique URLs.`);
+
   const linksToCheckWithPlaywright: Link[] = [];
-  const resultMap = new Map<string, LinkCheckResult>();
 
   const { results: fetchResults, errors: fetchErrors } = await parallelProcess({
-    items: links,
+    items: uniqueLinks,
     concurrencyLimit: fetchConcurrencyLimit,
-    processFn: async (link): Promise<LinkWithResult | null> => {
-      let result: LinkCheckResult | null = null;
-      const existingResult = resultMap.get(link.href);
-      if (existingResult) {
-        // Already checked, just use the result
-        result = existingResult;
-      } else {
-        // New link, check it
-        if (isGithubUrl(link.href)) {
-          result = await checkLinkWithGithubApi(link.href);
-        } else {
-          result = await checkLinkWithFetch(link.href);
-        }
-        resultMap.set(link.href, result);
-      }
+    processFn: async (link): Promise<CheckedUniqueLink | null> => {
+      const result = isGithubUrl(link.href)
+        ? await checkLinkWithGithubApi(link.href)
+        : await checkLinkWithFetch(link.href);
+
       // Link not okay, add to Playwright queue
       if (result.ok === false) {
         linksToCheckWithPlaywright.push(link);
         return null;
       } else {
-        return { ...link, result };
+        return { link, result };
       }
     },
   });
 
   console.log(`Checking ${linksToCheckWithPlaywright.length} links with Playwright...`);
 
-  const resultMapPlaywright = new Map<string, LinkCheckResult>();
   const { results: playwrightResults, errors: playwrightErrors } = await parallelProcess({
     items: linksToCheckWithPlaywright,
     concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
-    processFn: async (link) => {
-      let result: LinkCheckResult | null = null;
-      const existingResult = resultMapPlaywright.get(link.href);
-      if (existingResult) {
-        // Already checked, just use the result
-        result = existingResult;
-      } else {
-        // New link, check it
-        result = await checkLinkWithPlaywright(link.href);
-        resultMapPlaywright.set(link.href, result);
-      }
-      return { ...link, result };
+    processFn: async (link): Promise<CheckedUniqueLink> => {
+      const result = await checkLinkWithPlaywright(link.href);
+      return { link, result };
     },
   });
 
-  const finalResults = [...fetchResults.filter((r) => r !== null), ...playwrightResults];
+  const finalResults = [
+    ...fetchResults.filter((r) => r !== null).flatMap((link) => expandCheckedLink(groupedLinks, link)),
+    ...playwrightResults.flatMap((link) => expandCheckedLink(groupedLinks, link)),
+  ];
   const finalErrors = [...fetchErrors, ...playwrightErrors];
 
   console.log(`Checked ${finalResults.length} links.`);
