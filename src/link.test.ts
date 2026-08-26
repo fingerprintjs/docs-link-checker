@@ -1,10 +1,11 @@
 import { createServer, Server } from "node:http";
 import { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { checkLinkWithFetch, checkLinkWithPlaywright, checkLinks } from "./link";
 
 let server: Server;
 let baseUrl: string;
+let slowOkRequestCount = 0;
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -18,6 +19,12 @@ beforeAll(async () => {
     switch (requestUrl.pathname) {
       case "/ok":
         sendHtml(200, "<html><body><h1>OK</h1></body></html>");
+        return;
+      case "/slow-ok":
+        slowOkRequestCount += 1;
+        setTimeout(() => {
+          sendHtml(200, "<html><body><h1>Slow OK</h1></body></html>");
+        }, 150);
         return;
       case "/hashes":
         sendHtml(
@@ -68,6 +75,10 @@ beforeAll(async () => {
 
   const address = server.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${address.port}`;
+});
+
+beforeEach(() => {
+  slowOkRequestCount = 0;
 });
 
 afterAll(async () => {
@@ -179,4 +190,35 @@ describe("checkLinkWithPlaywright()", () => {
       expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
     }
   );
+});
+
+describe("checkLinks()", () => {
+  it("checks duplicate hrefs once and fans the result back out to every occurrence", async () => {
+    const duplicatedHref = `${baseUrl}/slow-ok`;
+    const { results, errors } = await checkLinks({
+      links: [
+        { href: duplicatedHref, page: `${baseUrl}/page-a`, text: "First occurrence" },
+        { href: duplicatedHref, page: `${baseUrl}/page-b`, text: "Second occurrence" },
+      ],
+      fetchConcurrencyLimit: 2,
+    });
+
+    expect(errors).toHaveLength(0);
+    expect(results).toHaveLength(2);
+    expect(results).toEqual([
+      {
+        href: duplicatedHref,
+        page: `${baseUrl}/page-a`,
+        text: "First occurrence",
+        result: { ok: true, status: 200 },
+      },
+      {
+        href: duplicatedHref,
+        page: `${baseUrl}/page-b`,
+        text: "Second occurrence",
+        result: { ok: true, status: 200 },
+      },
+    ]);
+    expect(slowOkRequestCount).toBe(1);
+  });
 });
