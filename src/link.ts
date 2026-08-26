@@ -2,7 +2,9 @@ import * as cheerio from "cheerio";
 import { chromium, Page } from "playwright";
 import {
   CONCURRENCY_LIMIT,
+  DEFAULT_RATE_LIMIT_RETRY_SECONDS,
   FORBIDDEN_STATUS_CODES,
+  MAX_RATE_LIMIT_RETRIES,
   OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
   TASK_TIMEOUT,
@@ -110,7 +112,7 @@ function shouldSpoofUserAgent(url: string) {
  * @returns LinkCheckResult
  * @throws {Error} - network can fail or something
  */
-export const checkLinkWithFetch = async (url: string, verbose = false): Promise<LinkCheckResult> => {
+export const checkLinkWithFetch = async (url: string, verbose = false, retryCount = 0): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash;
 
   const headers = new Headers();
@@ -125,15 +127,17 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
       headers,
     });
 
-    // GitHub web rate limit makes you wait 60 seconds after 500 requests
-    const retryAfter = response.headers.get("Retry-After");
-    if (response.status === 429 && retryAfter) {
-      const retryAfterSeconds = parseInt(retryAfter);
+    // GitHub web rate limit makes you wait 60 seconds after 500 requests.
+    // Some other rate-limited sites (e.g. cursor.directory) don't send a Retry-After header at all,
+    // so fall back to a default backoff instead of treating them as permanently broken.
+    if (response.status === 429) {
+      const retryAfter = response.headers.get("Retry-After");
+      const retryAfterSeconds = retryAfter ? parseInt(retryAfter) : DEFAULT_RATE_LIMIT_RETRY_SECONDS;
       const retryAfterMs = retryAfterSeconds * 1000;
-      if (retryAfterMs < TASK_TIMEOUT) {
-        console.log(`Rate limited, retrying after ${retryAfter} seconds...`);
+      if (retryCount < MAX_RATE_LIMIT_RETRIES && retryAfterMs < TASK_TIMEOUT) {
+        console.log(`Rate limited, retrying after ${retryAfterSeconds} seconds...`);
         await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
-        return await checkLinkWithFetch(url, verbose);
+        return await checkLinkWithFetch(url, verbose, retryCount + 1);
       } else {
         return {
           ok: false,

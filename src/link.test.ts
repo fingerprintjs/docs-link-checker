@@ -6,13 +6,15 @@ import { checkLinkWithFetch, checkLinkWithPlaywright, checkLinks } from "./link"
 let server: Server;
 let baseUrl: string;
 let slowOkRequestCount = 0;
+let rateLimitedNoHeaderRequestCount = 0;
+let rateLimitedWithHeaderRequestCount = 0;
 
 beforeAll(async () => {
   server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
 
-    const sendHtml = (status: number, body: string) => {
-      response.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+    const sendHtml = (status: number, body: string, headers: Record<string, string> = {}) => {
+      response.writeHead(status, { "Content-Type": "text/html; charset=utf-8", ...headers });
       response.end(request.method === "HEAD" ? undefined : body);
     };
 
@@ -25,6 +27,23 @@ beforeAll(async () => {
         setTimeout(() => {
           sendHtml(200, "<html><body><h1>Slow OK</h1></body></html>");
         }, 150);
+        return;
+      case "/rate-limited-no-header":
+        rateLimitedNoHeaderRequestCount += 1;
+        if (rateLimitedNoHeaderRequestCount === 1) {
+          // No Retry-After header, like cursor.directory
+          sendHtml(429, "<html><body><h1>Too Many Requests</h1></body></html>");
+          return;
+        }
+        sendHtml(200, "<html><body><h1>OK after rate limit</h1></body></html>");
+        return;
+      case "/rate-limited-with-header":
+        rateLimitedWithHeaderRequestCount += 1;
+        if (rateLimitedWithHeaderRequestCount === 1) {
+          sendHtml(429, "<html><body><h1>Too Many Requests</h1></body></html>", { "Retry-After": "1" });
+          return;
+        }
+        sendHtml(200, "<html><body><h1>OK after rate limit</h1></body></html>");
         return;
       case "/hashes":
         sendHtml(
@@ -79,6 +98,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   slowOkRequestCount = 0;
+  rateLimitedNoHeaderRequestCount = 0;
+  rateLimitedWithHeaderRequestCount = 0;
 });
 
 afterAll(async () => {
@@ -175,6 +196,24 @@ for (const { function: checkLink, name } of linkCheckMethods) {
     });
   });
 }
+
+describe("checkLinkWithFetch() rate limiting", () => {
+  it(
+    "retries and returns OK for a 429 with no Retry-After header, like cursor.directory",
+    { timeout: 10000 },
+    async () => {
+      const result = await checkLinkWithFetch(`${baseUrl}/rate-limited-no-header`);
+      expect(result).toMatchObject({ ok: true, status: 200 });
+      expect(rateLimitedNoHeaderRequestCount).toBeGreaterThan(1);
+    }
+  );
+
+  it("still respects a Retry-After header when one is present", async () => {
+    const result = await checkLinkWithFetch(`${baseUrl}/rate-limited-with-header`);
+    expect(result).toMatchObject({ ok: true, status: 200 });
+    expect(rateLimitedWithHeaderRequestCount).toBeGreaterThan(1);
+  });
+});
 
 describe("checkLinkWithPlaywright()", () => {
   it("should return OK for hashes that exist (client-rendered)", async () => {

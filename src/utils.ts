@@ -44,6 +44,10 @@ export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
 // GitHub web rate limit makes you wait 60 seconds after 500 requests
 export const TASK_TIMEOUT = 80000;
 
+// Fallback backoff for sites that respond 429 without a Retry-After header (e.g. cursor.directory)
+export const DEFAULT_RATE_LIMIT_RETRY_SECONDS = 5;
+export const MAX_RATE_LIMIT_RETRIES = 2;
+
 export const OKAY_STATUS_CODES = [200, 301, 302, 303, 307, 308];
 // Some websites have ReCaptcha or other anti-scraping measures that prevent us from checking their links, let's ignore/collect them separately
 export const FORBIDDEN_STATUS_CODES = [403, 401];
