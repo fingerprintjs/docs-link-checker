@@ -8,8 +8,8 @@ on:
   push:
     branches:
       - main
-  schedule:
-    - cron: '0 0 * * *' # Every day at midnight
+  # schedule:
+  #   - cron: '0 0 * * *' # Every day at midnight
   workflow_dispatch:
 env:
   DEV_REPORT: dev-fingerprint-com.html
@@ -199,32 +199,32 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-  report-status:
-    name: Report status to Slack
-    needs: [docs, githubReadmes, web]
-    if: failure()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Prepare message
-        id: message
-        run: |
-          MESSAGE="*Link Checker Results*
-          • dev.fingerprint.com check: ${{ needs.docs.result }}
-          • GitHub READMEs check: ${{ needs.githubReadmes.result }}
-          • fingerprint.com check: ${{ needs.web.result }}
+  # report-status:
+  #   name: Report status to Slack
+  #   needs: [docs, githubReadmes, web]
+  #   if: failure()
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Prepare message
+  #       id: message
+  #       run: |
+  #         MESSAGE="*Link Checker Results*
+  #         • dev.fingerprint.com check: ${{ needs.docs.result }}
+  #         • GitHub READMEs check: ${{ needs.githubReadmes.result }}
+  #         • fingerprint.com check: ${{ needs.web.result }}
 
-          View reports: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
-          
-          # Escape newlines for JSON
-          MESSAGE="${MESSAGE//$'\n'/\\n}"
-          echo "text=$MESSAGE" >> $GITHUB_OUTPUT
+  #         View reports: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
 
-      - uses: slackapi/slack-github-action@v1.25.0
-        with:
-          payload: |
-            {
-              "text": "${{ steps.message.outputs.text }}"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        if: always()
+  #         # Escape newlines for JSON
+  #         MESSAGE="${MESSAGE//$'\n'/\\n}"
+  #         echo "text=$MESSAGE" >> $GITHUB_OUTPUT
+
+  #     - uses: slackapi/slack-github-action@v1.25.0
+  #       with:
+  #         payload: |
+  #           {
+  #             "text": "${{ steps.message.outputs.text }}"
+  #           }
+  #       env:
+  #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+  #       if: always()
