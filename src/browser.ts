@@ -86,7 +86,7 @@ export const shouldBlockRequest = ({ resourceType, url, isMainFrameNavigation, p
   }
   const pageHostname = getHostname(pageUrl);
   return BLOCKED_HOSTS.some(
-    (host) => matchesHost(hostname, host) && !(pageHostname !== undefined && matchesHost(pageHostname, host))
+    (host) => matchesHost(hostname, host) && !(pageHostname !== undefined && matchesHost(pageHostname, host)),
   );
 };
 
@@ -171,7 +171,7 @@ export const getBrowser = (): Promise<Browser> => {
           browserPromise = undefined;
         }
         throw error;
-      }
+      },
     );
     browserPromise = promise;
   }
@@ -209,8 +209,16 @@ const closeSharedBrowser = async (): Promise<void> => {
   }
 };
 
-// Outer runs currently active (see `withRun`). The shared browser is closed only when the last one ends.
+// Outer runs currently active (see `withRun`) and shared-browser page leases (`withPage` calls, also outside of runs,
+// counted while waiting for a page slot too). The shared browser is closed only when both reach zero.
 let activeRuns = 0;
+let activeLeases = 0;
+
+const closeSharedBrowserIfIdle = async () => {
+  if (activeRuns === 0 && activeLeases === 0) {
+    await closeSharedBrowser();
+  }
+};
 
 /** Marks the start of an outer run that may use the shared browser, pair it with `endBrowserRun` */
 export const beginBrowserRun = () => {
@@ -218,14 +226,13 @@ export const beginBrowserRun = () => {
 };
 
 /**
- * Ends an outer run: closes the shared browser if no other run is still active (concurrent runs share it).
+ * Ends an outer run: closes the shared browser if no other run is still active (concurrent runs share it)
+ * and no page is still in use (e.g. a standalone check outside of any run).
  * Visible debug browsers are kept open for inspection (see `closeBrowser`).
  */
 export const endBrowserRun = async () => {
   activeRuns = Math.max(0, activeRuns - 1);
-  if (activeRuns === 0) {
-    await closeSharedBrowser();
-  }
+  await closeSharedBrowserIfIdle();
 };
 
 type WithPageOptions = {
@@ -241,7 +248,7 @@ const runWithNewPage = async <T>(
   browser: Browser,
   fn: (page: Page) => Promise<T>,
   userAgent?: string,
-  keepOpen = false
+  keepOpen = false,
 ) => {
   const context = await browser.newContext({ userAgent });
   try {
@@ -265,29 +272,45 @@ const runWithNewPage = async <T>(
  * At most `PLAYWRIGHT_CONCURRENCY_LIMIT` pages are open at the same time.
  * Heavy resources (images, media, fonts, analytics) are blocked.
  * If the browser crashed, it is relaunched and `fn` is retried once.
+ * Every call holds a lease on the shared browser (from before it waits for a page slot until it is done), so no run
+ * ending in the meantime closes it. A call outside of any run closes the shared browser when it is the last user.
  */
-export const withPage = <T>(fn: (page: Page) => Promise<T>, { userAgent, headless = true }: WithPageOptions = {}) =>
-  pageSlots.run(async () => {
-    if (!headless) {
+export const withPage = async <T>(
+  fn: (page: Page) => Promise<T>,
+  { userAgent, headless = true }: WithPageOptions = {},
+): Promise<T> => {
+  if (!headless) {
+    return pageSlots.run(async () => {
       const browser = await chromium.launch({ headless: false, ...LAUNCH_OPTIONS });
       // Tracked so `closeBrowser()` closes it, the page stays open for inspection until then
       debugBrowsers.add(browser);
       browser.on("disconnected", () => debugBrowsers.delete(browser));
       return runWithNewPage(browser, fn, userAgent, true);
-    }
+    });
+  }
 
-    for (let attempt = 0; ; attempt++) {
-      const browser = await getBrowser();
-      try {
-        return await runWithNewPage(browser, fn, userAgent);
-      } catch (error) {
-        if (attempt === 0 && !browser.isConnected()) {
-          console.warn(`Browser disconnected (${String(error)}), relaunching and retrying once...`);
-          forgetBrowser(browser);
-          await browser.close().catch(() => {});
-          continue;
-        }
-        throw error;
+  activeLeases++;
+  try {
+    return await pageSlots.run(() => withSharedBrowserPage(fn, userAgent));
+  } finally {
+    activeLeases--;
+    await closeSharedBrowserIfIdle();
+  }
+};
+
+const withSharedBrowserPage = async <T>(fn: (page: Page) => Promise<T>, userAgent?: string): Promise<T> => {
+  for (let attempt = 0; ; attempt++) {
+    const browser = await getBrowser();
+    try {
+      return await runWithNewPage(browser, fn, userAgent);
+    } catch (error) {
+      if (attempt === 0 && !browser.isConnected()) {
+        console.warn(`Browser disconnected (${String(error)}), relaunching and retrying once...`);
+        forgetBrowser(browser);
+        await browser.close().catch(() => {});
+        continue;
       }
+      throw error;
     }
-  });
+  }
+};

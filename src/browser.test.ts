@@ -260,6 +260,55 @@ describe("shared browser across concurrent runs", () => {
   });
 });
 
+describe("shared browser leases (checks outside of runs)", () => {
+  it("a standalone check still navigating when a fetch-only run ends keeps working, the browser closes after both", async () => {
+    state.gotoDelayMs = 50;
+    const standalone = checkLinkWithPlaywright("https://example.com/standalone");
+    // Let the standalone check launch the browser and start navigating
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.launches).toBe(1);
+
+    // An unrelated fetch-only run ends while the standalone check uses the browser
+    await withRun(async () => {});
+    expect(state.closes).toBe(0);
+    expect(state.openPages).toBe(1);
+
+    expect(await standalone).toEqual({ ok: true, status: 200 });
+    // No leak: the last user closed the shared browser
+    expect(state.closes).toBe(1);
+    expect(state.launches).toBe(1);
+    expect(state.openPages).toBe(0);
+  });
+
+  it("a run ending while standalone checks wait for a page slot does not close the browser", async () => {
+    state.gotoDelayMs = 20;
+    // More checks than page slots: some wait for a slot (they hold a lease already)
+    const checks = Promise.all(
+      Array.from({ length: PLAYWRIGHT_CONCURRENCY_LIMIT * 2 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`))
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await withRun(async () => {});
+
+    const results = await checks;
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(state.launches).toBe(1);
+    expect(state.closes).toBe(1);
+  });
+
+  it("a standalone check inside the lifetime of a run leaves closing to the run", async () => {
+    let finishRun!: () => void;
+    const run = withRun(() => new Promise<void>((resolve) => (finishRun = resolve)));
+
+    await checkLinkWithPlaywright("https://example.com/during-run");
+    // The run is still active, it closes the browser when it ends
+    expect(state.closes).toBe(0);
+
+    finishRun();
+    await run;
+    expect(state.closes).toBe(1);
+  });
+});
+
 describe("headed debug mode (headless: false)", () => {
   it("keeps the page open after the check, closeBrowser() closes the debug browser", async () => {
     const result = await checkLinkWithPlaywright("https://example.com/debug", false, false);
