@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
 import * as cheerio from "cheerio";
+import { describe, expect, it } from "vitest";
+import type { LinkWithResult } from "../types";
 import { getJSONReport, renderReportToHTML } from "./report";
-import { LinkWithResult } from "../types";
 
 const EVIL_HREF = `https://example.com/it's"quoted"?q=<script>alert(1)</script>`;
 
@@ -10,7 +10,12 @@ const links: LinkWithResult[] = [
     href: EVIL_HREF,
     page: "https://example.com/page",
     text: `</a><script>alert("text")</script>`,
-    result: { ok: false, error: "broken link", status: 404, errorDetail: "<img src=x onerror=alert(1)>" },
+    result: {
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "<img src=x onerror=alert(1)>",
+    },
   },
   {
     href: "javascript:alert(1)",

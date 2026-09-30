@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { filterOutIrrelevantLinks } from "./page";
 
 const link = (href: string) => ({ href, text: "text", page: "https://example.com/page" });
@@ -10,7 +10,13 @@ describe("filterOutIrrelevantLinks()", () => {
   });
 
   it("skips links with non-http(s) schemes", () => {
-    const links = ["tel:+123", "javascript:void(0)", "data:text/plain,hi", "mailto:a@b.com", "ftp://example.com/f"];
+    const links = [
+      "tel:+123",
+      "javascript:void(0)",
+      "data:text/plain,hi",
+      "mailto:a@b.com",
+      "ftp://example.com/f",
+    ];
     expect(filterOutIrrelevantLinks(links.map(link))).toEqual([]);
   });
 });

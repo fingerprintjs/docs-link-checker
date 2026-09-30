@@ -1,8 +1,7 @@
-import { PromisePoolError } from "@supercharge/promise-pool";
-import { Link, LinkWithResult } from "../types";
-import ReactDOMServer from "react-dom/server";
-import React from "react";
-import { writeFileSync } from "fs";
+import { writeFileSync } from "node:fs";
+import type { PromisePoolError } from "@supercharge/promise-pool";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { Link, LinkWithResult } from "../types";
 
 type LinkCheckReport = ReturnType<typeof getJSONReport>;
 
@@ -13,9 +12,15 @@ type GetReportArgs = {
 };
 
 export const getJSONReport = ({ links, errors, siteName }: GetReportArgs) => {
-  const brokenLinks = links.filter((link) => link.result.ok === false && link.result.error === "broken link");
-  const hashNotFound = links.filter((link) => link.result.ok === false && link.result.error === "hash not found");
-  const couldNotCheck = links.filter((link) => link.result.ok === false && link.result.error === "could not check");
+  const brokenLinks = links.filter(
+    (link) => link.result.ok === false && link.result.error === "broken link",
+  );
+  const hashNotFound = links.filter(
+    (link) => link.result.ok === false && link.result.error === "hash not found",
+  );
+  const couldNotCheck = links.filter(
+    (link) => link.result.ok === false && link.result.error === "could not check",
+  );
   const unexpectedErrors = [
     ...links.filter((link) => link.result.ok === false && link.result.error === "unexpected error"),
     ...errors.map(
@@ -23,7 +28,7 @@ export const getJSONReport = ({ links, errors, siteName }: GetReportArgs) => {
         ({
           ...error.item,
           result: { ok: false, error: "unexpected error", errorDetail: error.message, status: 0 },
-        } satisfies LinkWithResult)
+        }) satisfies LinkWithResult,
     ),
   ];
 
@@ -109,16 +114,20 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
         </thead>
         <tbody>
           {allBrokenLinks.map((link, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: rendered once to static HTML, rows are never reordered, and the same link can appear twice
             <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
               <td className="py-2 px-4 border-b break-all sm:break-words">
-                {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}
-                📄{" "}
-                <a href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)} target="_blank">
+                {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}📄{" "}
+                <a
+                  href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)}
+                  target="_blank"
+                  rel="noopener"
+                >
                   {link.page}
                 </a>
               </td>
               <td className="py-2 px-4 border-b break-all sm:break-words">
-                <a href={safeHref(link.href)} target="_blank">
+                <a href={safeHref(link.href)} target="_blank" rel="noopener">
                   🔗"{link.text}" ➡️ <HrefRenderer link={link} />
                 </a>
                 {/* Copied by the script in `renderReportToHTML`, no inline JS so any URL is safe */}
@@ -174,7 +183,7 @@ document.addEventListener("click", function (event) {
  * Renders the report as a full HTML page. All dynamic values are escaped by React.
  */
 export function renderReportToHTML(jsonReport: LinkCheckReport): string {
-  const htmlString = ReactDOMServer.renderToStaticMarkup(<JSONReportRenderer report={jsonReport} />);
+  const htmlString = renderToStaticMarkup(<JSONReportRenderer report={jsonReport} />);
   return `
     <!DOCTYPE html>
     <html>

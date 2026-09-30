@@ -5,7 +5,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     testTimeout: 15000,
-    exclude: [...configDefaults.exclude, "**/*.integration.test.ts"],
+    exclude: [...configDefaults.exclude, "**/*.integration.test.ts", ".claude/**"],
     // Make sure unit tests never use a real token by accident
     env: { GH_TOKEN: "" },
     unstubGlobals: true,

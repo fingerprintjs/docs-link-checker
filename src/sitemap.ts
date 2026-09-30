@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
-import { getRandomUserAgent, log } from "./utils";
 import { fetchWithHostLimit } from "./http";
+import { getRandomUserAgent, log } from "./utils";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;
@@ -51,8 +51,8 @@ const fetchSitemap = (sitemapUrl: string, readBody = true) =>
       sitemapUrl,
       { headers: { "User-Agent": getRandomUserAgent() }, timeoutMs: SITEMAP_FETCH_TIMEOUT },
       // Failed responses are not read, fetchWithHostLimit cancels their body
-      async (response) => (readBody && response.ok ? response.text() : "")
-    )
+      async (response) => (readBody && response.ok ? response.text() : ""),
+    ),
   );
 
 /**
@@ -69,7 +69,7 @@ export const getWebsitePages = async (url: string, verbose = false) => {
   const pages = (
     await Promise.all(
       // Not verbose, that would log every page
-      sitemaps.map((sitemap) => getPagesFromSitemap(sitemap, false, 0, visitedSitemaps))
+      sitemaps.map((sitemap) => getPagesFromSitemap(sitemap, false, 0, visitedSitemaps)),
     )
   ).flat();
 
@@ -133,7 +133,7 @@ export const getPagesFromSitemap = async (
   verbose = false,
   depth = 0,
   // Sitemap URL -> shallowest depth it was processed at
-  visitedSitemaps = new Map<string, number>()
+  visitedSitemaps = new Map<string, number>(),
 ): Promise<string[]> => {
   const visitedDepth = visitedSitemaps.get(sitemapUrl);
   // Only skip if it was already processed at the same or a shallower depth. A shallower visit can follow
@@ -155,14 +155,18 @@ export const getPagesFromSitemap = async (
 
   if ($("sitemapindex").length > 0) {
     if (depth >= MAX_SITEMAP_DEPTH) {
-      console.warn(`Sitemap index ${sitemapUrl} is nested too deep (max depth ${MAX_SITEMAP_DEPTH}), skipping it.`);
+      console.warn(
+        `Sitemap index ${sitemapUrl} is nested too deep (max depth ${MAX_SITEMAP_DEPTH}), skipping it.`,
+      );
       return [];
     }
     const nestedSitemaps = getSitemapsFromSitemapIndex(response);
     log(`${sitemapUrl} is a sitemap index with ${nestedSitemaps.length} sitemaps`, verbose);
     const nestedPages = (
       await Promise.all(
-        nestedSitemaps.map((nested) => getPagesFromSitemap(nested, verbose, depth + 1, visitedSitemaps))
+        nestedSitemaps.map((nested) =>
+          getPagesFromSitemap(nested, verbose, depth + 1, visitedSitemaps),
+        ),
       )
     ).flat();
     return [...new Set(nestedPages)];

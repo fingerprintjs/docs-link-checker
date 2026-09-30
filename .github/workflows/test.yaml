@@ -22,6 +22,10 @@ jobs:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
+      # Lint, formatting and import order (fails on any difference, never writes)
+      - name: Run Biome
+        run: pnpm exec biome ci
+
       - name: Run type check
         run: pnpm run tsc
 

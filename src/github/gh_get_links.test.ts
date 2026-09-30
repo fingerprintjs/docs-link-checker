@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { octokit, checkGitHubRateLimit } = vi.hoisted(() => ({
   octokit: {
@@ -14,9 +14,9 @@ vi.mock("./github_client", () => ({
   checkGitHubRateLimit,
 }));
 
-import { checkReadmesInGithubOrg, getReadmeLinks, getReadmesFromOrg } from "./gh_get_links";
 import { HostLimiter } from "../limiter";
 import { setHostLimiter } from "../utils";
+import { checkReadmesInGithubOrg, getReadmeLinks, getReadmesFromOrg } from "./gh_get_links";
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
   full_name: `org/${name}`,
@@ -60,7 +60,7 @@ describe("getReadmesFromOrg()", () => {
   it("throws a clear error when the repositories cannot be listed", async () => {
     octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
     await expect(getReadmesFromOrg("org")).rejects.toThrow(
-      "Failed to list repositories of GitHub organization org: Bad credentials"
+      "Failed to list repositories of GitHub organization org: Bad credentials",
     );
   });
 
@@ -88,7 +88,7 @@ describe("checkReadmesInGithubOrg()", () => {
   it("fails with a clear error (instead of crashing on undefined) when listing READMEs fails", async () => {
     octokit.paginate.mockRejectedValue(new Error("Not Found"));
     await expect(checkReadmesInGithubOrg("org")).rejects.toThrow(
-      "Failed to list repositories of GitHub organization org: Not Found"
+      "Failed to list repositories of GitHub organization org: Not Found",
     );
   });
 });
@@ -117,7 +117,7 @@ describe("getReadmeLinks()", () => {
           return new Response(null, { status: 429, headers: { "Retry-After": "0" } });
         }
         return new Response("[link](https://example.com/)", { status: 200 });
-      })
+      }),
     );
     const files = Array.from({ length: 20 }, (_, i) => ({
       sourcePath: `https://github.com/org/repo/blob/main/${i}/README.md`,

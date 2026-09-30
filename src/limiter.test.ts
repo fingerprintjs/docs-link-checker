@@ -1,11 +1,14 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { HostLimiter, Semaphore, parseRetryAfter, withTimeout } from "./limiter";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostLimiter, parseRetryAfter, Semaphore, withTimeout } from "./limiter";
 import { getHostConcurrencyLimit, setHostLimiter } from "./utils";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Runs `count` tasks through `run` and returns the maximum number of tasks running at the same time */
-const measureConcurrency = async (count: number, run: (task: () => Promise<void>, i: number) => Promise<void>) => {
+const measureConcurrency = async (
+  count: number,
+  run: (task: () => Promise<void>, i: number) => Promise<void>,
+) => {
   let active = 0;
   let max = 0;
   await Promise.all(
@@ -15,8 +18,8 @@ const measureConcurrency = async (count: number, run: (task: () => Promise<void>
         max = Math.max(max, active);
         await sleep(5);
         active--;
-      }, i)
-    )
+      }, i),
+    ),
   );
   return max;
 };
@@ -31,7 +34,9 @@ describe("Semaphore", () => {
 
   it("releases the slot when a task throws", async () => {
     const semaphore = new Semaphore(1);
-    await expect(semaphore.run(async () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
+    await expect(semaphore.run(async () => Promise.reject(new Error("boom")))).rejects.toThrow(
+      "boom",
+    );
     await expect(semaphore.run(async () => "next")).resolves.toBe("next");
   });
 
@@ -47,7 +52,10 @@ describe("HostLimiter", () => {
     let totalMax = 0;
     let totalActive = 0;
 
-    const urls = Array.from({ length: 30 }, (_, i) => `https://host-${i % 3}.example.com/page-${i}`);
+    const urls = Array.from(
+      { length: 30 },
+      (_, i) => `https://host-${i % 3}.example.com/page-${i}`,
+    );
     await Promise.all(
       urls.map((url) =>
         limiter.run(url, async () => {
@@ -60,8 +68,8 @@ describe("HostLimiter", () => {
           await sleep(5);
           perHost[host].active--;
           totalActive--;
-        })
-      )
+        }),
+      ),
     );
 
     expect(Object.values(perHost).map((host) => host.max)).toEqual([2, 2, 2]);
@@ -145,7 +153,7 @@ describe("checkLinks() per-host limit", () => {
         await sleep(5);
         active[host]--;
         return new Response(null, { status: 200 });
-      })
+      }),
     );
     const { checkLinks } = await import("./link");
     const links = [
@@ -172,12 +180,17 @@ describe("checkLinks() per-host limit", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { checkLinkWithFetch } = await import("./link");
 
-    expect(await checkLinkWithFetch("https://rate-limited.example.com/")).toEqual({ ok: true, status: 200 });
+    expect(await checkLinkWithFetch("https://rate-limited.example.com/")).toEqual({
+      ok: true,
+      status: 200,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("gives up after a few 429 retries", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 429, headers: { "Retry-After": "0" } }));
+    const fetchMock = vi.fn(
+      async () => new Response(null, { status: 429, headers: { "Retry-After": "0" } }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { checkLinkWithFetch } = await import("./link");
 

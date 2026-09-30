@@ -1,4 +1,4 @@
-import { LinkCheckResult } from "../../types";
+import type { LinkCheckResult } from "../../types";
 import { getRepoCached } from "../gh_cache";
 
 /**
@@ -9,12 +9,12 @@ import { getRepoCached } from "../gh_cache";
  */
 export const checkIfRepositoryExists = async (
   owner: string,
-  repo: string
+  repo: string,
 ): Promise<LinkCheckResult> => {
   try {
     await getRepoCached(owner, repo);
     return { ok: true, status: 200 };
-  } catch (error: any) {
+  } catch {
     return {
       ok: false,
       error: "broken link",

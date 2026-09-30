@@ -1,11 +1,16 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchWithHostLimit, getRedirectMethod, MAX_RATE_LIMIT_RETRIES, MAX_REDIRECTS } from "./http";
-import { HostLimiter } from "./limiter";
-import { setHostLimiter } from "./utils";
-import { getLinksFromPages, parseLinksFromPage } from "./page";
-import { checkLinks, checkLinkWithFetch } from "./link";
-import { checkWebsite } from "./website";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReadmeLinks } from "./github/gh_get_links";
+import {
+  fetchWithHostLimit,
+  getRedirectMethod,
+  MAX_RATE_LIMIT_RETRIES,
+  MAX_REDIRECTS,
+} from "./http";
+import { HostLimiter } from "./limiter";
+import { checkLinks, checkLinkWithFetch } from "./link";
+import { getLinksFromPages, parseLinksFromPage } from "./page";
+import { setHostLimiter } from "./utils";
+import { checkWebsite } from "./website";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -23,12 +28,15 @@ type Handler = (url: string, init: RequestInit) => Response | Promise<Response>;
 
 /** Stubs `fetch`, handlers get the URL (without the hash) and the request init */
 const stubFetch = (handler: Handler) => {
-  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => handler(String(input), init ?? {}));
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) =>
+    handler(String(input), init ?? {}),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 };
 
-const redirect = (location: string, status = 301) => new Response("moved", { status, headers: { Location: location } });
+const redirect = (location: string, status = 301) =>
+  new Response("moved", { status, headers: { Location: location } });
 
 describe("fetchWithHostLimit()", () => {
   it("pauses the host before releasing the slot, so a queued request does not start during Retry-After", async () => {
@@ -60,7 +68,9 @@ describe("fetchWithHostLimit()", () => {
 
   it("returns the last 429 after the retries", async () => {
     setHostLimiter(new HostLimiter(2));
-    const fetchMock = stubFetch(() => new Response("slow down", { status: 429, headers: { "Retry-After": "0" } }));
+    const fetchMock = stubFetch(
+      () => new Response("slow down", { status: 429, headers: { "Retry-After": "0" } }),
+    );
 
     const result = await fetchWithHostLimit("https://limited.example.com/", {}, text);
 
@@ -81,15 +91,26 @@ describe("fetchWithHostLimit() redirects", () => {
   it("follows redirects manually and returns the final status, URL and body", async () => {
     setHostLimiter(new HostLimiter(2));
     const fetchMock = stubFetch((url) => {
-      if (url === "https://old.example.com/page") return redirect("https://new.example.com/start", 301);
+      if (url === "https://old.example.com/page")
+        return redirect("https://new.example.com/start", 301);
       if (url === "https://new.example.com/start") return redirect("/final?x=1", 307);
       return new Response("final", { status: 200 });
     });
 
-    const result = await fetchWithHostLimit("https://old.example.com/page", { method: "HEAD" }, text);
+    const result = await fetchWithHostLimit(
+      "https://old.example.com/page",
+      { method: "HEAD" },
+      text,
+    );
 
-    expect(result).toMatchObject({ status: 200, url: "https://new.example.com/final?x=1", data: "final" });
-    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.redirect])).toEqual([
+    expect(result).toMatchObject({
+      status: 200,
+      url: "https://new.example.com/final?x=1",
+      data: "final",
+    });
+    expect(
+      fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.redirect]),
+    ).toEqual([
       ["https://old.example.com/page", "HEAD", "manual"],
       // HEAD stays HEAD on 301 and 307, relative Location is resolved against the current URL
       ["https://new.example.com/start", "HEAD", "manual"],
@@ -114,7 +135,9 @@ describe("fetchWithHostLimit() redirects", () => {
     });
 
     const results = await Promise.all(
-      Array.from({ length: 12 }, (_, i) => fetchWithHostLimit(`https://source-${i}.example.com/`, {}, text))
+      Array.from({ length: 12 }, (_, i) =>
+        fetchWithHostLimit(`https://source-${i}.example.com/`, {}, text),
+      ),
     );
 
     expect(results.every((result) => result.status === 200)).toBe(true);
@@ -125,7 +148,9 @@ describe("fetchWithHostLimit() redirects", () => {
     setHostLimiter(new HostLimiter(2));
     const fetchMock = stubFetch((url) => redirect(`${url}x`, 302));
 
-    await expect(fetchWithHostLimit("https://loop.example.com/", {}, text)).rejects.toThrow("Too many redirects");
+    await expect(fetchWithHostLimit("https://loop.example.com/", {}, text)).rejects.toThrow(
+      "Too many redirects",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(MAX_REDIRECTS + 1);
   });
 
@@ -142,7 +167,9 @@ describe("fetchWithHostLimit() redirects", () => {
   it("switches to GET on 303 (fetch spec)", async () => {
     setHostLimiter(new HostLimiter(2));
     const fetchMock = stubFetch((url) =>
-      url.endsWith("/form") ? redirect("https://example.com/result", 303) : new Response("done", { status: 200 })
+      url.endsWith("/form")
+        ? redirect("https://example.com/result", 303)
+        : new Response("done", { status: 200 }),
     );
 
     await fetchWithHostLimit("https://example.com/form", { method: "POST" }, text);
@@ -167,8 +194,12 @@ describe("fetchWithHostLimit() redirects", () => {
   it("cancels the body of every redirect response while holding the slot of its host", async () => {
     const limiter = new HostLimiter(1);
     setHostLimiter(limiter);
-    const hop = trackedResponse(302, limiter, "https://a.example.com/", { Location: "https://b.example.com/" });
-    stubFetch((url) => (url === "https://a.example.com/" ? hop.response : new Response("ok", { status: 200 })));
+    const hop = trackedResponse(302, limiter, "https://a.example.com/", {
+      Location: "https://b.example.com/",
+    });
+    stubFetch((url) =>
+      url === "https://a.example.com/" ? hop.response : new Response("ok", { status: 200 }),
+    );
 
     const result = await fetchWithHostLimit("https://a.example.com/", {}, text);
 
@@ -187,7 +218,9 @@ describe("fetchWithHostLimit() redirects", () => {
     setHostLimiter(new HostLimiter(2));
     const fetchMock = stubFetch(() => redirect("", 302));
 
-    await expect(fetchWithHostLimit("https://self.example.com/", {}, text)).rejects.toThrow("Too many redirects");
+    await expect(fetchWithHostLimit("https://self.example.com/", {}, text)).rejects.toThrow(
+      "Too many redirects",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(MAX_REDIRECTS + 1);
   });
 });
@@ -195,7 +228,12 @@ describe("fetchWithHostLimit() redirects", () => {
 /**
  * A response whose body stream records if it was cancelled, and whether the request still held its host slot then.
  */
-const trackedResponse = (status: number, limiter: HostLimiter, url: string, headers?: HeadersInit) => {
+const trackedResponse = (
+  status: number,
+  limiter: HostLimiter,
+  url: string,
+  headers?: HeadersInit,
+) => {
   const tracking = { cancelled: false, slotHeldOnCancel: false };
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -215,7 +253,10 @@ describe("unread response bodies are cancelled before the host slot is released"
     setHostLimiter(limiter);
     const url = "https://example.com/big-file";
     const { response, tracking } = trackedResponse(200, limiter, url);
-    vi.stubGlobal("fetch", vi.fn(async () => response));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
 
     await fetchWithHostLimit(url, {}, async () => "not read");
 
@@ -227,7 +268,10 @@ describe("unread response bodies are cancelled before the host slot is released"
     setHostLimiter(limiter);
     const url = "https://docs.example.com/missing";
     const { response, tracking } = trackedResponse(404, limiter, url);
-    vi.stubGlobal("fetch", vi.fn(async () => response));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
 
     await expect(parseLinksFromPage(url)).rejects.toThrow("status: 404");
     expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
@@ -238,9 +282,14 @@ describe("unread response bodies are cancelled before the host slot is released"
     setHostLimiter(limiter);
     const url = "https://raw.githubusercontent.com/org/repo/main/README.md";
     const { response, tracking } = trackedResponse(500, limiter, url);
-    vi.stubGlobal("fetch", vi.fn(async () => response));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
 
-    const links = await getReadmeLinks([{ sourcePath: "https://github.com/org/repo/blob/main/README.md", downloadUrl: url }]);
+    const links = await getReadmeLinks([
+      { sourcePath: "https://github.com/org/repo/blob/main/README.md", downloadUrl: url },
+    ]);
 
     expect(links).toEqual([]);
     expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
@@ -254,7 +303,9 @@ describe("unread response bodies are cancelled before the host slot is released"
     const get = trackedResponse(200, limiter, url);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_input: string | URL, init?: RequestInit) => (init?.method === "HEAD" ? head.response : get.response))
+      vi.fn(async (_input: string | URL, init?: RequestInit) =>
+        init?.method === "HEAD" ? head.response : get.response,
+      ),
     );
 
     expect(await checkLinkWithFetch(url)).toEqual({ ok: true, status: 200 });
@@ -265,7 +316,13 @@ describe("unread response bodies are cancelled before the host slot is released"
 
 describe("invalid LINK_CHECK_HOST_CONCURRENCY", () => {
   it.each([
-    ["checkLinks", () => checkLinks({ links: [{ href: "https://example.com/", page: "https://example.com", text: "" }] })],
+    [
+      "checkLinks",
+      () =>
+        checkLinks({
+          links: [{ href: "https://example.com/", page: "https://example.com", text: "" }],
+        }),
+    ],
     ["checkWebsite", () => checkWebsite({ websiteUrl: "https://example.com" })],
   ])("%s fails before doing any work", async (_name, run) => {
     setHostLimiter(undefined);
@@ -289,8 +346,8 @@ describe("page link extraction and rate limiting", () => {
       vi.fn(async () =>
         ++calls === 1
           ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
-          : new Response(html, { status: 200 })
-      )
+          : new Response(html, { status: 200 }),
+      ),
     );
 
     const links = await parseLinksFromPage("https://docs.example.com/page");
@@ -306,8 +363,8 @@ describe("page link extraction and rate limiting", () => {
       vi.fn(async (input: string | URL) =>
         String(input).endsWith("/limited")
           ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
-          : new Response(html, { status: 200 })
-      )
+          : new Response(html, { status: 200 }),
+      ),
     );
 
     const { links, errors } = await getLinksFromPages({

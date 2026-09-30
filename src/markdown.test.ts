@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { extractLinksFromMarkdown } from "./markdown";
 
 describe("extractLinksFromMarkdown", () => {
@@ -20,7 +20,8 @@ describe("extractLinksFromMarkdown", () => {
 
   // Test multiple links in a single markdown string
   it("should extract multiple markdown links", async () => {
-    const markdown = "[Google](https://www.google.com) and [GitHub](https://github.com) are websites.";
+    const markdown =
+      "[Google](https://www.google.com) and [GitHub](https://github.com) are websites.";
     const page = "multi-link-page";
 
     const links = await extractLinksFromMarkdown(markdown, page);

@@ -48,7 +48,8 @@ runs:
 
     - name: Get installed Playwright version (used in cache key)
       shell: bash
-      run: echo "PLAYWRIGHT_VERSION=$(node -e "process.stdout.write(require('playwright/package.json').version)")" >> $GITHUB_ENV
+      # `createRequire` resolves the package like `require` does, and works regardless of the package's module type
+      run: echo "PLAYWRIGHT_VERSION=$(node -p "require('node:module').createRequire(process.cwd() + '/package.json')('playwright/package.json').version")" >> "$GITHUB_ENV"
 
     - name: Cache Chromium browser binary
       uses: actions/cache@v6

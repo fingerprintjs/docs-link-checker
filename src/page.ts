@@ -1,9 +1,9 @@
 import * as cheerio from "cheerio";
-import { Link } from "./types";
-import { getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 import { PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
 import { fetchWithHostLimit } from "./http";
 import { incrementMetric } from "./run_context";
+import type { Link } from "./types";
+import { getRandomUserAgent, PLAYWRIGHT_CONCURRENCY_LIMIT, parallelProcess } from "./utils";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
 const isHttpUrl = (href: string) => {
@@ -28,7 +28,7 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
     // https://portal.azure.com (Requires login)
     /^https:\/\/portal\.azure\.com/,
     // Included Cloudflare email link protection pattern like cdn-cgi/l/email-protection#1e6d6b6e6e716c6a5e787770797b6c6e6c77706a307d7173216d6b7c747b7d6a23573b2c2e697f706a3b2c2e6a713b2c2e757b7b6e3b2c2e544d3b2c2e5f797b706a3b2c2e7d717a7b3b2c2e71703b2c2e73673b2c2e6d7b6c687b6c
-    /cdn-cgi\/l\/email\-protection/,
+    /cdn-cgi\/l\/email-protection/,
     // dash.cloudflare.com (Requires login)
     /^https:\/\/dash\.cloudflare\.com/,
     // Readme sends the internal link syntax from the server only updates it with JavaScript client-side 🤦
@@ -39,7 +39,8 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
     /^https:\/\/dev\.fingerprint\.com\/discuss/,
   ];
   return links.filter(
-    (link) => isHttpUrl(link.href) && !patternsToFilterOut.some((pattern) => pattern.test(link.href))
+    (link) =>
+      isHttpUrl(link.href) && !patternsToFilterOut.some((pattern) => pattern.test(link.href)),
   );
 }
 
@@ -57,8 +58,10 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   } else {
     // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
     // Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL, as before
-    const response = await fetchWithHostLimit(pageUrl, { headers: { "User-Agent": getRandomUserAgent() } }, async (response) =>
-      response.ok ? response.text() : ""
+    const response = await fetchWithHostLimit(
+      pageUrl,
+      { headers: { "User-Agent": getRandomUserAgent() } },
+      async (response) => (response.ok ? response.text() : ""),
     );
     if (response.status < 200 || response.status >= 300) {
       // Thrown (not an empty list), so the page shows up in the extraction errors instead of silently having no links
@@ -130,7 +133,7 @@ export const getLinksFromPages = async ({
     console.log(
       `Filtered away ${flatResults.length - links.length} links using the provided links filter. Continuing with ${
         links.length
-      } links...`
+      } links...`,
     );
   }
 
@@ -171,7 +174,9 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
       const links = await page.evaluate(
         ([pageUrl]) => {
           // Get all 'a' elements (but not anchor icons) inside article content
-          const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
+          const anchors = document.querySelectorAll<HTMLAnchorElement>(
+            ".markdown-body a:not(.fa-anchor)",
+          );
 
           // Convert NodeList to array and map to desired format
           return Array.from(anchors).map((anchor) => ({
@@ -180,7 +185,7 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
             text: anchor.textContent?.trim() ?? "",
           }));
         },
-        [pageUrl]
+        [pageUrl],
       );
 
       return filterOutIrrelevantLinks(links);

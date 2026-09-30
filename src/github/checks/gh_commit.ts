@@ -1,12 +1,12 @@
-import { RequestError } from "@octokit/types";
+import type { RequestError } from "@octokit/types";
+import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
 import { getMyOctokit } from "../github_client";
-import { LinkCheckResult } from "../../types";
 
 export const checkGitHubCommitLink = async (
   owner: string,
   repo: string,
-  pathParts: string[]
+  pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
   const [, commit] = pathParts;

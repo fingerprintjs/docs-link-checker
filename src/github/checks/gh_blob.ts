@@ -1,11 +1,11 @@
-import { LinkCheckResult } from "../../types";
-import { getContentCached } from "../gh_cache";
-import GithubSlugger from "github-slugger";
+import type { RequestError } from "@octokit/types";
 import * as cheerio from "cheerio";
-import { marked, Parser, Token } from "marked";
-import { tryCatch } from "../../utils/tryCatch";
-import { RequestError } from "@octokit/types";
+import GithubSlugger from "github-slugger";
+import { marked, Parser, type Token } from "marked";
 import { decodeHash } from "../../hash";
+import type { LinkCheckResult } from "../../types";
+import { tryCatch } from "../../utils/tryCatch";
+import { getContentCached } from "../gh_cache";
 
 // GitHub prefixes ids in rendered markdown with `user-content-`, links work both with and without it
 const USER_CONTENT_PREFIX = "user-content-";
@@ -17,10 +17,12 @@ const getHtmlAnchors = (html: string): string[] => {
   const $ = cheerio.load(html, null, false);
   const anchors: string[] = [];
   $("[id]").each((_, element) => {
-    anchors.push($(element).attr("id")!);
+    const id = $(element).attr("id");
+    if (id) anchors.push(id);
   });
   $("a[name]").each((_, element) => {
-    anchors.push($(element).attr("name")!);
+    const name = $(element).attr("name");
+    if (name) anchors.push(name);
   });
   return anchors;
 };
@@ -43,7 +45,9 @@ export const getMarkdownAnchors = (markdown: string): Set<string> => {
       anchors.add(slugger.slug(headingText));
     }
     if (token.type === "html") {
-      getHtmlAnchors(token.raw).forEach((anchor) => anchors.add(anchor.toLowerCase()));
+      for (const anchor of getHtmlAnchors(token.raw)) {
+        anchors.add(anchor.toLowerCase());
+      }
     }
   });
 
@@ -74,7 +78,7 @@ export const checkGitHubBlobLink = async (
   fullUrl: URL,
   owner: string,
   repo: string,
-  pathParts: string[]
+  pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const [, branch, ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
@@ -87,7 +91,7 @@ export const checkGitHubBlobLink = async (
       repo,
       ref: branch,
       path,
-    })
+    }),
   );
 
   if (error) {

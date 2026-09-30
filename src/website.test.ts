@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getWebsitePages: vi.fn(),
@@ -17,7 +17,10 @@ vi.mock("./report/report", async (importOriginal) => ({
 
 import { checkWebsite } from "./website";
 
-const pages = Array.from({ length: 20 }, (_, i) => `https://example.com/page-${String(i).padStart(2, "0")}`);
+const pages = Array.from(
+  { length: 20 },
+  (_, i) => `https://example.com/page-${String(i).padStart(2, "0")}`,
+);
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});

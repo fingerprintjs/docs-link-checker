@@ -2,19 +2,23 @@
 
 A GitHub workflow that checks for broken links in our documentation, public GitHub readmes, and our website.
 
-* Run periodically every day.
+* Runs every day at 03:17 UTC, on pushes to `main` and on pull requests.
 * You can start the workflow manually from inside [**Actions**](https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml).
-* Failed runs send a notification to the `#integrations-notifications` Slack channel. Once we fix all links and stabilize the workflow, we can send the notification to the `#documentation` channel.
+* Slack notifications for failed runs are disabled for now (the `report-status` job in `checkLinks.yaml` is commented out). Once we fix all links and stabilize the workflow, we can re-enable them and send them to the `#documentation` channel.
 * The latest results are deployed to [GitHub pages](https://fingerprintjs.github.io/docs-link-checker/) of this repository (only from `main` and manual runs, never from pull requests).
 * On pull requests, the link checks still run end to end (on a 10% sample of pages, see `LINK_CHECK_SAMPLE_RATE` below), but broken links do not fail the check (`FAIL_ON_BROKEN_LINKS=false`). They only fail if the checker itself crashes. On `main` and manual runs, broken links fail the run.
 
 ## Development
 
-* Node.js version is defined in `.nvmrc`, pnpm version in the `packageManager` field of `package.json` (use `corepack enable` or install the matching pnpm).
+* Node.js version is defined in `.nvmrc` (and `engines.node`), pnpm version in the `packageManager` field of `package.json` (use `corepack enable` or install the matching pnpm).
+* The project is ESM (`"type": "module"`). TypeScript runs directly with `tsx` (link checks) and vitest (tests), `tsc` only type-checks.
 * `pnpm install`, `pnpm run tsc`, `pnpm test` (single run) or `pnpm run test:watch`.
-  * `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch`, the GitHub API and Playwright, and need no network or `GH_TOKEN`.
-  * `pnpm run test:integration` runs integration tests (`*.integration.test.ts`) against real websites and the GitHub API. They need network access, Playwright's Chromium and a `GH_TOKEN` environment variable.
-* Link checks (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) need a `GH_TOKEN` environment variable. They exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them.
+* Lint and format with [Biome](https://biomejs.dev/) (config in `biome.json`):
+  * `pnpm run check` runs the linter, the formatter check and import sorting. CI runs the same checks with `biome ci`.
+  * `pnpm run check:fix` applies safe fixes and formats, `pnpm run lint` only lints, `pnpm run format` only formats.
+* `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch`, the GitHub API and Playwright, and need no network or `GH_TOKEN`.
+* `pnpm run test:integration` runs integration tests (`*.integration.test.ts`) against real websites and the GitHub API. They need network access, Playwright's Chromium and a `GH_TOKEN` environment variable.
+* Link checks (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) need a `GH_TOKEN` environment variable (can also be set in a `.env` file). They exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them.
 * Set `LINK_CHECK_SAMPLE_RATE` (a number between `0` and `1`, default `1`) to check only a part of the pages (website sitemap pages, GitHub README files). The sample is deterministic (pages are sorted, then every Nth page is picked) and has at least one page. On pull requests, the workflow uses `LINK_CHECK_SAMPLE_RATE=0.1` to keep CI fast. On `main` and manual runs, it checks everything.
 * Set `LINK_CHECK_HOST_CONCURRENCY` (a positive integer, default `8`) to change the maximum number of concurrent `fetch` requests to a single host. It applies to every `fetch` request of a run (sitemaps, source pages, README downloads, link checks), and to every redirect hop (limited by the host it goes to). A `429` response with `Retry-After` pauses requests to that host, and the request is retried. Sitemaps are also limited to 5 concurrent fetches overall. GitHub API requests are limited by Octokit instead, and Playwright navigations by the browser's page limit.
 * Each run launches one shared Chromium (only if needed) that blocks images, media, fonts and analytics scripts. Links to the same page with different hashes share one fetch or browser navigation, and GitHub API responses are cached for the run. The run metrics (links, unique URLs and pages, requests, navigations, duration per phase) are logged at the end.
@@ -47,16 +51,17 @@ So a proper documentation link checker must:
 
 - [x] Combine artifact outputs
 - [x] Deploy to GitHub pages
-- [x] Enable Slack notifications
+- [ ] Re-enable Slack notifications (disabled until the links are fixed and the workflow is stable)
 - [x] Nicer Readme
 - [x] Clean up promise pool
 - [x] Run tests in CI
 - [ ] Fix Github `#L{number}` links occasional false positives 
 - [ ] Add more tests for everything
 - [ ] Nicer report styling
-- [ ] Add `eslint`/`biome`
+- [x] Add `eslint`/`biome`
 - [ ] Copy link to clipboard in the report 
-- [ ] Improve performance
+- [x] Improve performance
+- [x] Upgrade dependencies (0 `pnpm audit` vulnerabilities)
 - [ ] Provide a reusable GitHub action for checking `.md` files from inside a repository.
 - [ ] Make progress bar actually display progress inside GitHub actions UI
 - [ ] Improve API and documentation to make this potentially releasable on NPM as a utility package

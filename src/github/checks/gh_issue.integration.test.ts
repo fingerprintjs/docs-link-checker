@@ -1,5 +1,5 @@
+import { describe, expect, it } from "vitest";
 import { checkGitHubIssueLink } from "./gh_issue";
-import { describe, it, expect } from "vitest";
 
 describe("checkGitHubIssueLink", () => {
   it("should return success for an existing issue", async () => {

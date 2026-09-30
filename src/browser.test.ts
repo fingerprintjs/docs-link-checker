@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Offline tests for the shared browser (`browser.ts`) with a fake Playwright.
@@ -35,7 +35,7 @@ vi.mock("playwright", () => {
       close: async () => {
         state.closes++;
         connected = false;
-        disconnectedHandlers.forEach((handler) => handler());
+        for (const handler of disconnectedHandlers) handler();
       },
       newContext: async () => {
         if (state.crashNextContext) {
@@ -71,7 +71,12 @@ vi.mock("playwright", () => {
                 }
                 state.visited.push(url);
                 await new Promise((resolve) => setTimeout(resolve, state.gotoDelayMs));
-                return { status: () => 200, statusText: () => "", text: async () => "", ok: () => true };
+                return {
+                  status: () => 200,
+                  statusText: () => "",
+                  text: async () => "",
+                  ok: () => true,
+                };
               },
               locator: () => ({ first: () => ({ waitFor: async () => {} }) }),
             };
@@ -86,8 +91,8 @@ vi.mock("playwright", () => {
 
 import { closeBrowser, getBrowser, withPage } from "./browser";
 import { checkLinks, checkLinkWithPlaywright } from "./link";
-import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 import { withRun } from "./run";
+import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
@@ -118,8 +123,13 @@ afterEach(async () => {
 describe("shared browser", () => {
   it("launches one browser for many Playwright checks and closes it at the end of checkLinks", async () => {
     // 403 from fetch -> every link is re-checked with Playwright
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 403 })));
-    const links = Array.from({ length: 20 }, (_, i) => link(`https://blocked-${i}.example.com/page`));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
+    const links = Array.from({ length: 20 }, (_, i) =>
+      link(`https://blocked-${i}.example.com/page`),
+    );
 
     const { results, errors } = await checkLinks({ links });
 
@@ -139,7 +149,7 @@ describe("shared browser", () => {
       withRun(async () => {
         await checkLinkWithPlaywright("https://example.com/a");
         throw new Error("run failed");
-      })
+      }),
     ).rejects.toThrow("run failed");
 
     expect(state.launches).toBe(1);
@@ -149,7 +159,10 @@ describe("shared browser", () => {
   });
 
   it("does not launch a browser when nothing needs Playwright", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 200 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 200 })),
+    );
     await checkLinks({ links: [link("https://example.com/ok")] });
     expect(state.launches).toBe(0);
   });
@@ -157,7 +170,7 @@ describe("shared browser", () => {
   it("shares a single launch between concurrent callers and limits open pages", async () => {
     state.gotoDelayMs = 20;
     const results = await Promise.all(
-      Array.from({ length: 12 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`))
+      Array.from({ length: 12 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`)),
     );
 
     expect(results.every((result) => result.ok)).toBe(true);
@@ -180,7 +193,7 @@ describe("shared browser", () => {
     await expect(
       withPage(async () => {
         throw new Error("boom");
-      })
+      }),
     ).rejects.toThrow("boom");
     expect(state.launches).toBe(1);
     // The context is closed even when the check throws
@@ -209,7 +222,10 @@ describe("shared browser", () => {
 
   it("reports browser launch failures as unexpected errors (not broken links)", async () => {
     state.failLaunch = true;
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 403 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
 
     const { results, errors } = await checkLinks({
       links: [link("https://blocked.example.com/a"), link("https://blocked.example.com/a#x")],
@@ -248,7 +264,7 @@ describe("shared browser across concurrent runs", () => {
       () =>
         new Promise<void>((resolve) => {
           finishFirst = resolve;
-        })
+        }),
     );
     const second = withRun(() => checkLinkWithPlaywright("https://example.com/a"));
 
@@ -284,7 +300,9 @@ describe("shared browser leases (checks outside of runs)", () => {
     state.gotoDelayMs = 20;
     // More checks than page slots: some wait for a slot (they hold a lease already)
     const checks = Promise.all(
-      Array.from({ length: PLAYWRIGHT_CONCURRENCY_LIMIT * 2 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`))
+      Array.from({ length: PLAYWRIGHT_CONCURRENCY_LIMIT * 2 }, (_, i) =>
+        checkLinkWithPlaywright(`https://example.com/${i}`),
+      ),
     );
     await new Promise((resolve) => setTimeout(resolve, 5));
     await withRun(async () => {});

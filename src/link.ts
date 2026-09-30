@@ -1,24 +1,24 @@
-import { Page } from "playwright";
 import { PromisePoolError } from "@supercharge/promise-pool";
+import type { Page } from "playwright";
+import { HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
+import { checkLinkWithGithubApi } from "./github/gh_check_link";
+import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
+import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
+import { fetchWithHostLimit } from "./http";
+import { withTimeout } from "./limiter";
+import { withRun } from "./run";
+import { incrementMetric, timePhase } from "./run_context";
+import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import {
   CONCURRENCY_LIMIT,
   FORBIDDEN_STATUS_CODES,
-  OKAY_STATUS_CODES,
-  PLAYWRIGHT_CONCURRENCY_LIMIT,
-  TASK_TIMEOUT,
   getRandomUserAgent,
   log,
+  OKAY_STATUS_CODES,
+  PLAYWRIGHT_CONCURRENCY_LIMIT,
   parallelProcess,
+  TASK_TIMEOUT,
 } from "./utils";
-import { Link, LinkCheckResult, LinkWithResult } from "./types";
-import { checkLinkWithGithubApi } from "./github/gh_check_link";
-import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
-import { AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
-import { HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
-import { withTimeout } from "./limiter";
-import { fetchWithHostLimit } from "./http";
-import { incrementMetric, timePhase } from "./run_context";
-import { withRun } from "./run";
 
 export { closeBrowser } from "./browser";
 
@@ -68,7 +68,10 @@ export const PLAYWRIGHT_RETRY_STATUS_CODES = [401, 403, 405, 406, 408, 429];
  * Only failures that could be caused by the fetch method itself (client-side rendering, bot blocking,
  * rate limiting, network errors) are re-checked. Definitive answers (like 404 from the GitHub API) are not.
  */
-export const shouldRecheckWithPlaywright = (result: LinkCheckResult, method: CheckMethod): boolean => {
+export const shouldRecheckWithPlaywright = (
+  result: LinkCheckResult,
+  method: CheckMethod,
+): boolean => {
   if (result.ok) {
     return false;
   }
@@ -99,7 +102,7 @@ export const shouldRecheckWithPlaywright = (result: LinkCheckResult, method: Che
 
 const checkLinkFirstPass = async (
   href: string,
-  pageCache: PageFetchCache
+  pageCache: PageFetchCache,
 ): Promise<{ result: LinkCheckResult; method: CheckMethod }> => {
   const method = getInitialCheckMethod(href);
   switch (method) {
@@ -116,7 +119,7 @@ const checkLinkFirstPass = async (
         result: await withTimeout(
           checkLinkWithGithubApi(href),
           TASK_TIMEOUT,
-          `GitHub API check timed out after ${TASK_TIMEOUT}ms`
+          `GitHub API check timed out after ${TASK_TIMEOUT}ms`,
         ),
         method,
       };
@@ -216,7 +219,11 @@ export const groupLinksByPage = (links: Link[]): Array<{ href: string; links: Li
  */
 export const checkLinks = (args: CheckLinksArgs) => withRun(() => checkLinksInRun(args));
 
-const checkLinksInRun = async ({ links, verbose, fetchConcurrencyLimit = CONCURRENCY_LIMIT }: CheckLinksArgs) => {
+const checkLinksInRun = async ({
+  links,
+  verbose,
+  fetchConcurrencyLimit = CONCURRENCY_LIMIT,
+}: CheckLinksArgs) => {
   console.log(`\nChecking ${links.length} links...`);
   const uniqueHrefs = new Set(links.map((link) => link.href));
   const uniquePages = new Set([...uniqueHrefs].map(stripHash));
@@ -226,7 +233,9 @@ const checkLinksInRun = async ({ links, verbose, fetchConcurrencyLimit = CONCURR
 
   // Pages linked with a hash need their HTML (GET). Links to the same page without a hash reuse that response.
   const pagesWithHash = new Set(
-    [...uniqueHrefs].filter((href) => hasHash(href) && getInitialCheckMethod(href) === "fetch").map(stripHash)
+    [...uniqueHrefs]
+      .filter((href) => hasHash(href) && getInitialCheckMethod(href) === "fetch")
+      .map(stripHash),
   );
   const pageCache = new PageFetchCache(pagesWithHash);
 
@@ -234,33 +243,37 @@ const checkLinksInRun = async ({ links, verbose, fetchConcurrencyLimit = CONCURR
   // Cache the promise (not the result), so concurrent tasks with the same href share a single check
   const checkFirstPass = memoizeByKey((href) => checkLinkFirstPass(href, pageCache));
 
-  const { results: fetchResults, errors: fetchErrors } = await timePhase("Check links (fetch, GitHub API)", () =>
-    parallelProcess({
-      items: interleaveByHost(links),
-      concurrencyLimit: fetchConcurrencyLimit,
-      // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
-      taskTimeout: null,
-      processFn: async (link): Promise<LinkWithResult | null> => {
-        // Links that need a browser go straight to the Playwright pass, so they respect its concurrency limit
-        // (and links to the same file with different line hashes share one navigation)
-        if (getInitialCheckMethod(link.href) === "playwright") {
-          linksToCheckWithPlaywright.push(link);
-          return null;
-        }
-        const { result, method } = await checkFirstPass(link.href);
-        // Failure possibly caused by the fetch method, add to Playwright queue
-        if (shouldRecheckWithPlaywright(result, method)) {
-          linksToCheckWithPlaywright.push(link);
-          return null;
-        }
-        return { ...link, result };
-      },
-    })
+  const { results: fetchResults, errors: fetchErrors } = await timePhase(
+    "Check links (fetch, GitHub API)",
+    () =>
+      parallelProcess({
+        items: interleaveByHost(links),
+        concurrencyLimit: fetchConcurrencyLimit,
+        // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
+        taskTimeout: null,
+        processFn: async (link): Promise<LinkWithResult | null> => {
+          // Links that need a browser go straight to the Playwright pass, so they respect its concurrency limit
+          // (and links to the same file with different line hashes share one navigation)
+          if (getInitialCheckMethod(link.href) === "playwright") {
+            linksToCheckWithPlaywright.push(link);
+            return null;
+          }
+          const { result, method } = await checkFirstPass(link.href);
+          // Failure possibly caused by the fetch method, add to Playwright queue
+          if (shouldRecheckWithPlaywright(result, method)) {
+            linksToCheckWithPlaywright.push(link);
+            return null;
+          }
+          return { ...link, result };
+        },
+      }),
   );
 
   // One navigation per page, all hashes pointing to that page are checked in the same DOM
   const pageGroups = groupLinksByPage(linksToCheckWithPlaywright);
-  console.log(`Checking ${linksToCheckWithPlaywright.length} links (${pageGroups.length} pages) with Playwright...`);
+  console.log(
+    `Checking ${linksToCheckWithPlaywright.length} links (${pageGroups.length} pages) with Playwright...`,
+  );
 
   const { results: playwrightGroupResults, errors: playwrightGroupErrors } = await timePhase(
     "Re-check links with Playwright",
@@ -274,20 +287,25 @@ const checkLinksInRun = async ({ links, verbose, fetchConcurrencyLimit = CONCURR
         processFn: async (group): Promise<LinkWithResult[]> => {
           const hrefs = [...new Set(group.links.map((link) => link.href))];
           const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
-          return group.links.map((link) => ({ ...link, result: resultsByHref.get(link.href)! }));
+          return group.links.map((link) => ({
+            ...link,
+            result: resultFor(resultsByHref, link.href),
+          }));
         },
-      })
+      }),
   );
   const playwrightResults = playwrightGroupResults.flat();
   // Report errors per link, like in the first pass
   const playwrightErrors = playwrightGroupErrors.flatMap((error) =>
-    error.item.links.map((link) => PromisePoolError.createFrom<Link>(error, link))
+    error.item.links.map((link) => PromisePoolError.createFrom<Link>(error, link)),
   );
 
   const finalResults = [...fetchResults.filter((r) => r !== null), ...playwrightResults];
   const finalErrors = [...fetchErrors, ...playwrightErrors];
 
-  console.log(`Checked ${finalResults.length} links (${uniqueHrefs.size} unique URLs, ${uniquePages.size} unique pages).`);
+  console.log(
+    `Checked ${finalResults.length} links (${uniqueHrefs.size} unique URLs, ${uniquePages.size} unique pages).`,
+  );
   console.log(`Unexpected errors occurred for ${finalErrors.length} links`);
   log(finalErrors, verbose);
   return { results: finalResults, errors: finalErrors };
@@ -330,7 +348,7 @@ const lazyAnchorIndex = (html: string) => {
  */
 export const fetchPage = async (
   url: string,
-  { needBody, verbose = false }: { needBody: boolean; verbose?: boolean }
+  { needBody, verbose = false }: { needBody: boolean; verbose?: boolean },
 ): Promise<FetchedPage> => {
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {
@@ -343,7 +361,9 @@ export const fetchPage = async (
     fetchWithHostLimit(url, { method, headers }, async (response) =>
       // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
       // An error page body is kept for the error detail (HEAD responses have none).
-      method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status)) ? response.text() : ""
+      method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status))
+        ? response.text()
+        : "",
     );
 
   try {
@@ -381,7 +401,11 @@ export const fetchPage = async (
       };
     }
 
-    return { ok: true, status: response.status, getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined };
+    return {
+      ok: true,
+      status: response.status,
+      getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
+    };
   } catch (error) {
     log(`Something went wrong: ${error}`, verbose);
     return {
@@ -467,7 +491,7 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
 export const checkLinkWithFetch = async (
   url: string,
   verbose = false,
-  pageCache?: PageFetchCache
+  pageCache?: PageFetchCache,
 ): Promise<LinkCheckResult> => {
   // A URL that cannot be parsed (or is not http(s)) is a broken link, not an exception
   let parsedUrl: URL;
@@ -477,7 +501,11 @@ export const checkLinkWithFetch = async (
     return { ok: false, error: "broken link", errorDetail: `Invalid URL: ${String(error)}` };
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-    return { ok: false, error: "broken link", errorDetail: `Unsupported URL scheme: ${parsedUrl.protocol}` };
+    return {
+      ok: false,
+      error: "broken link",
+      errorDetail: `Unsupported URL scheme: ${parsedUrl.protocol}`,
+    };
   }
   const needBody = hasHash(url);
   const pageUrl = stripHash(url);
@@ -491,7 +519,12 @@ export const checkLinkWithFetch = async (
   return result;
 };
 
-async function isHashPresentPlaywright(page: Page, hash: string, url: string, timeout = HASH_WAIT_TIMEOUT) {
+async function isHashPresentPlaywright(
+  page: Page,
+  hash: string,
+  url: string,
+  timeout = HASH_WAIT_TIMEOUT,
+) {
   // All values are escaped, so any hash produces a valid selector
   const selectors = getHashSelectors(hash, url);
   const locator = page.locator(selectors.join(", ")).first();
@@ -515,7 +548,7 @@ const getPlaywrightHashResult = async (
   page: Page,
   url: string,
   status: number,
-  verbose: boolean
+  verbose: boolean,
 ): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash.replace("#", "");
   if (!hash) {
@@ -539,6 +572,10 @@ const getPlaywrightHashResult = async (
   return { ok: true, status };
 };
 
+/** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
+const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkCheckResult =>
+  results.get(url) ?? { ok: false, error: "unexpected error", errorDetail: `No result for ${url}` };
+
 /**
  * Checks URLs pointing to the same page (same URL without hash) with a single Playwright navigation:
  * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
@@ -549,7 +586,7 @@ const getPlaywrightHashResult = async (
 export async function checkUrlsOnPageWithPlaywright(
   urls: string[],
   verbose = false,
-  headless = true
+  headless = true,
 ): Promise<Map<string, LinkCheckResult>> {
   const results = await checkUrlsInOneNavigation(urls, verbose, headless);
   const [firstUrl] = urls;
@@ -562,8 +599,8 @@ export async function checkUrlsOnPageWithPlaywright(
     notFound.map(async (url) => {
       incrementMetric("playwrightHashFallbacks");
       const fallback = await checkUrlsInOneNavigation([url], verbose, headless);
-      results.set(url, fallback.get(url)!);
-    })
+      results.set(url, resultFor(fallback, url));
+    }),
   );
   return results;
 }
@@ -571,7 +608,7 @@ export async function checkUrlsOnPageWithPlaywright(
 async function checkUrlsInOneNavigation(
   urls: string[],
   verbose: boolean,
-  headless: boolean
+  headless: boolean,
 ): Promise<Map<string, LinkCheckResult>> {
   const [firstUrl] = urls;
   const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
@@ -583,7 +620,10 @@ async function checkUrlsInOneNavigation(
       try {
         incrementMetric("playwrightNavigations");
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
-        const response = await page.goto(firstUrl, { waitUntil: "domcontentloaded", timeout: PAGE_OPERATION_TIMEOUT });
+        const response = await page.goto(firstUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: PAGE_OPERATION_TIMEOUT,
+        });
 
         log(`Navigation response: ${response?.status()}`, verbose);
         if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
@@ -605,7 +645,10 @@ async function checkUrlsInOneNavigation(
 
         const status = response.status();
         const results = await Promise.all(
-          urls.map(async (url) => [url, await getPlaywrightHashResult(page, url, status, verbose)] as const)
+          urls.map(
+            async (url) =>
+              [url, await getPlaywrightHashResult(page, url, status, verbose)] as const,
+          ),
         );
         return new Map(results);
       } catch (error) {
@@ -620,7 +663,7 @@ async function checkUrlsInOneNavigation(
         });
       }
     },
-    { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined, headless }
+    { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined, headless },
   );
 }
 
@@ -628,7 +671,11 @@ async function checkUrlsInOneNavigation(
  * Checks a link with a real browser (the shared browser, see `withPage`).
  * Outside of a run (`checkLinks`, `checkWebsite`...), call `closeBrowser()` when done.
  */
-export async function checkLinkWithPlaywright(url: string, verbose = false, headless = true): Promise<LinkCheckResult> {
+export async function checkLinkWithPlaywright(
+  url: string,
+  verbose = false,
+  headless = true,
+): Promise<LinkCheckResult> {
   const results = await checkUrlsOnPageWithPlaywright([url], verbose, headless);
-  return results.get(url)!;
+  return resultFor(results, url);
 }

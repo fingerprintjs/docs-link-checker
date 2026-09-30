@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
  * State of a single link-check run (`checkWebsite`, `checkReadmesInGithubOrg` or a standalone `checkLinks`):
@@ -23,7 +23,8 @@ export const createRunContext = (): RunContext => ({
 
 export const getRunContext = (): RunContext | undefined => storage.getStore();
 
-export const runInContext = <T>(context: RunContext, fn: () => Promise<T>): Promise<T> => storage.run(context, fn);
+export const runInContext = <T>(context: RunContext, fn: () => Promise<T>): Promise<T> =>
+  storage.run(context, fn);
 
 /** Metric names used in the summary log */
 export const METRICS = {
@@ -69,7 +70,8 @@ export const timePhase = async <T>(name: string, fn: () => Promise<T>): Promise<
   }
 };
 
-const formatMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
+const formatMs = (ms: number) =>
+  ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 
 export const formatRunMetrics = (metrics: RunMetrics, totalMs?: number): string => {
   const lines = ["Run metrics:"];
@@ -102,7 +104,11 @@ type RunCachedOptions = {
  * Memoizes `fn` by `key` for the current run. Concurrent callers share the same promise.
  * Outside of a run, `fn` is called every time.
  */
-export const runCached = <T>(key: string, fn: () => Promise<T>, options: RunCachedOptions = {}): Promise<T> => {
+export const runCached = <T>(
+  key: string,
+  fn: () => Promise<T>,
+  options: RunCachedOptions = {},
+): Promise<T> => {
   const context = getRunContext();
   if (!context) {
     return fn();

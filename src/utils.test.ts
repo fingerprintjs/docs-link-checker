@@ -1,7 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { bars } = vi.hoisted(() => ({
-  bars: [] as Array<{ start: ReturnType<typeof vi.fn>; increment: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }>,
+  bars: [] as Array<{
+    start: ReturnType<typeof vi.fn>;
+    increment: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+  }>,
 }));
 
 vi.mock("cli-progress", () => ({
@@ -38,7 +42,8 @@ describe("parallelProcess() progress bar", () => {
 
     await parallelProcess({
       items: [1, 2],
-      processFn: async (item) => parallelProcess({ items: [item, item], processFn: async (x) => x }),
+      processFn: async (item) =>
+        parallelProcess({ items: [item, item], processFn: async (x) => x }),
     });
 
     // One outer bar + one bar per nested call
@@ -104,7 +109,9 @@ describe("parallelProcess() error logging", () => {
 
     expect(errors).toHaveLength(1);
     const output = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
-    expect(output).toContain("https://example.com/fails (on https://example.com/source): Something exploded");
+    expect(output).toContain(
+      "https://example.com/fails (on https://example.com/source): Something exploded",
+    );
     expect(output).not.toContain("[object Object]");
   });
 
@@ -140,7 +147,10 @@ describe("getSampleRate()", () => {
 });
 
 describe("sampleItems()", () => {
-  const items = Array.from({ length: 100 }, (_, i) => `https://example.com/page-${String(i).padStart(3, "0")}`);
+  const items = Array.from(
+    { length: 100 },
+    (_, i) => `https://example.com/page-${String(i).padStart(3, "0")}`,
+  );
   const shuffled = [...items].reverse();
 
   it("returns all items with rate 1", () => {
