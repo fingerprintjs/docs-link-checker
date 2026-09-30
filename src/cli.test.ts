@@ -268,6 +268,24 @@ describe("runCli()", () => {
     expect(stdout).toBe("");
   });
 
+  it("files: links local files to the checked commit in the HTML report in GitHub Actions", async () => {
+    const out = tempDir();
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    await runCli(
+      ["files", "docs/*.md", "--output-dir", out, "--no-fail-on-broken"],
+      io({
+        GITHUB_ACTIONS: "true",
+        GITHUB_WORKSPACE: FIXTURE,
+        GITHUB_REPOSITORY: "owner/repo",
+        GITHUB_SHA: sha,
+        GITHUB_SERVER_URL: "https://github.com",
+      }),
+    );
+    const html = readFileSync(join(out, "local-files.html"), "utf8");
+    expect(html).toContain(`href="https://github.com/owner/repo/blob/${sha}/docs/guide.md#L8"`);
+    expect(html).toContain(`href="https://github.com/owner/repo/blob/${sha}/nope.md"`);
+  });
+
   it("files --json: prints only the JSON report to stdout", async () => {
     const code = await runCli(
       ["files", "docs/*.md", "--output-dir", tempDir(), "--json", "--no-fail-on-broken"],

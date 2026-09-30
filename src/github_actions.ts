@@ -1,4 +1,5 @@
 import { appendFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { getLinksToFix, type LinkCheckReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
@@ -178,4 +179,39 @@ export const writeGithubOutputs = (
   });
   appendFileSync(outputFile, lines.join(""));
   return true;
+};
+
+const REPOSITORY_NAME = /^[\w.-]+\/[\w.-]+$/;
+const COMMIT_SHA = /^[\da-f]{40}(?:[\da-f]{24})?$/;
+
+/**
+ * Base URL of the checked commit's files on GitHub (`https://github.com/owner/repo/blob/<sha>/`), used to link
+ * local files in the HTML report. Only when running in GitHub Actions from the repository root
+ * (`cwd` is `GITHUB_WORKSPACE`), so file paths are relative to the repository. All values are validated.
+ */
+export const getGithubBlobBaseUrl = (
+  env: Record<string, string | undefined>,
+  cwd: string,
+): string | undefined => {
+  const { GITHUB_ACTIONS, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_WORKSPACE } =
+    env;
+  if (
+    GITHUB_ACTIONS !== "true" ||
+    !GITHUB_WORKSPACE ||
+    resolve(cwd) !== resolve(GITHUB_WORKSPACE)
+  ) {
+    return undefined;
+  }
+  if (!GITHUB_REPOSITORY || !REPOSITORY_NAME.test(GITHUB_REPOSITORY)) return undefined;
+  if (!GITHUB_SHA || !COMMIT_SHA.test(GITHUB_SHA)) return undefined;
+  let server: URL;
+  try {
+    server = new URL(GITHUB_SERVER_URL || "https://github.com");
+  } catch {
+    return undefined;
+  }
+  if (server.protocol !== "https:" || server.search || server.hash || server.pathname !== "/") {
+    return undefined;
+  }
+  return `${server.origin}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/`;
 };

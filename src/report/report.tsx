@@ -91,6 +91,57 @@ const safeHref = (url: string): string | undefined => {
   }
 };
 
+const isHttpUrl = (value: string) => safeHref(value) !== undefined;
+
+export type RenderOptions = {
+  /**
+   * Base URL of the checked files, ending with `/` (e.g. `https://github.com/owner/repo/blob/<sha>/`, see
+   * `getGithubBlobBaseUrl`). Local pages (files reports) and their relative links are linked to it.
+   * Without it, local values are rendered as plain text: a relative `href` would resolve against the report file,
+   * not the checked files.
+   */
+  sourceBaseUrl?: string;
+};
+
+/** Keeps a URL only if it is inside the base URL (a `../` link must not leave the repository) */
+const insideBase = (url: URL, base: string): string | undefined =>
+  url.href.startsWith(base) ? safeHref(url.href) : undefined;
+
+const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
+
+/** URL of a local file (the page of a link), with its line: `<base>docs/a.md#L7` */
+export const getLocalFileUrl = (
+  base: string | undefined,
+  path: string,
+  line?: number,
+): string | undefined => {
+  if (!base) return undefined;
+  try {
+    const url = new URL(encodePath(path), base);
+    url.hash = line ? `L${line}` : "";
+    return insideBase(url, base);
+  } catch {
+    return undefined;
+  }
+};
+
+/** URL of a local link (relative, root-relative or `#anchor`) found in the local file `page` */
+export const getLocalLinkUrl = (
+  base: string | undefined,
+  page: string,
+  href: string,
+): string | undefined => {
+  if (!base) return undefined;
+  try {
+    const url = href.startsWith("/")
+      ? new URL(href.replace(/^\/+/, ""), base)
+      : new URL(href, new URL(encodePath(page), base));
+    return insideBase(url, base);
+  } catch {
+    return undefined;
+  }
+};
+
 const HrefRenderer = ({ link }: { link: LinkWithResult }) => {
   const { href, result } = link;
 
@@ -136,7 +187,65 @@ const ResultRenderer = ({ link }: { link: LinkWithResult | IgnoredLink }) =>
     </span>
   );
 
-const LinksTable = ({ links }: { links: Array<LinkWithResult | IgnoredLink> }) => (
+const PageCell = ({ link, options }: { link: Link; options: RenderOptions }) => {
+  if (isHttpUrl(link.page)) {
+    return (
+      <>
+        {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}📄{" "}
+        <a
+          href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)}
+          target="_blank"
+          rel="noopener"
+        >
+          {pageLabel(link)}
+        </a>
+      </>
+    );
+  }
+  // Local file: link to the checked file if its URL is known, plain text otherwise
+  const url = getLocalFileUrl(options.sourceBaseUrl, link.page, link.line);
+  const label = <code>{pageLabel(link)}</code>;
+  return (
+    <>
+      📄{" "}
+      {url ? (
+        <a href={url} target="_blank" rel="noopener">
+          {label}
+        </a>
+      ) : (
+        label
+      )}
+    </>
+  );
+};
+
+const LinkCell = ({ link, options }: { link: LinkWithResult; options: RenderOptions }) => {
+  const content = (
+    <>
+      🔗"{link.text}" ➡️ <HrefRenderer link={link} />
+    </>
+  );
+  const url = isHttpUrl(link.href)
+    ? link.href
+    : isHttpUrl(link.page)
+      ? undefined
+      : getLocalLinkUrl(options.sourceBaseUrl, link.page, link.href);
+  return url ? (
+    <a href={url} target="_blank" rel="noopener">
+      {content}
+    </a>
+  ) : (
+    <span data-local-link="">{isHttpUrl(link.href) ? content : <code>{content}</code>}</span>
+  );
+};
+
+const LinksTable = ({
+  links,
+  options,
+}: {
+  links: Array<LinkWithResult | IgnoredLink>;
+  options: RenderOptions;
+}) => (
   <table className="border-collapse border border-gray-300 mb-6">
     <thead>
       <tr className="bg-gray-100">
@@ -150,19 +259,10 @@ const LinksTable = ({ links }: { links: Array<LinkWithResult | IgnoredLink> }) =
         // biome-ignore lint/suspicious/noArrayIndexKey: rendered once to static HTML, rows are never reordered, and the same link can appear twice
         <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
           <td className="py-2 px-4 border-b break-all sm:break-words">
-            {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}📄{" "}
-            <a
-              href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)}
-              target="_blank"
-              rel="noopener"
-            >
-              {pageLabel(link)}
-            </a>
+            <PageCell link={link} options={options} />
           </td>
           <td className="py-2 px-4 border-b break-all sm:break-words">
-            <a href={safeHref(link.href)} target="_blank" rel="noopener">
-              🔗"{link.text}" ➡️ <HrefRenderer link={link} />
-            </a>
+            <LinkCell link={link} options={options} />
             {/* Copied by the script in `renderReportToHTML`, no inline JS so any URL is safe */}
             <button
               type="button"
@@ -183,7 +283,13 @@ const LinksTable = ({ links }: { links: Array<LinkWithResult | IgnoredLink> }) =
   </table>
 );
 
-const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
+const JSONReportRenderer = ({
+  report,
+  options,
+}: {
+  report: LinkCheckReport;
+  options: RenderOptions;
+}) => {
   const allBrokenLinks = [
     ...report.brokenLinks,
     ...report.hashNotFound,
@@ -207,12 +313,12 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
         </ul>
       </div>
 
-      <LinksTable links={allBrokenLinks} />
+      <LinksTable links={allBrokenLinks} options={options} />
 
       {report.ignored.length > 0 ? (
         <section data-section="ignored">
           <h2 className="text-xl font-semibold mb-3">Ignored (matched the baseline file)</h2>
-          <LinksTable links={report.ignored} />
+          <LinksTable links={report.ignored} options={options} />
         </section>
       ) : null}
     </div>
@@ -232,8 +338,13 @@ document.addEventListener("click", function (event) {
 /**
  * Renders the report as a full HTML page. All dynamic values are escaped by React.
  */
-export function renderReportToHTML(jsonReport: LinkCheckReport): string {
-  const htmlString = renderToStaticMarkup(<JSONReportRenderer report={jsonReport} />);
+export function renderReportToHTML(
+  jsonReport: LinkCheckReport,
+  options: RenderOptions = {},
+): string {
+  const htmlString = renderToStaticMarkup(
+    <JSONReportRenderer report={jsonReport} options={options} />,
+  );
   return `
     <!DOCTYPE html>
     <html>
@@ -249,8 +360,12 @@ export function renderReportToHTML(jsonReport: LinkCheckReport): string {
   `;
 }
 
-export function renderReportToHTMLFile(jsonReport: LinkCheckReport, filePath: string) {
-  writeFileSync(filePath, renderReportToHTML(jsonReport));
+export function renderReportToHTMLFile(
+  jsonReport: LinkCheckReport,
+  filePath: string,
+  options: RenderOptions = {},
+) {
+  writeFileSync(filePath, renderReportToHTML(jsonReport, options));
 }
 
 export const DEFAULT_OUTPUT_DIR = "results";
@@ -268,14 +383,18 @@ export const getReportPaths = (siteName: string, outputDir = DEFAULT_OUTPUT_DIR)
  * Saves the report as JSON and HTML into `outputDir` (created if needed).
  * @returns the paths of the saved reports
  */
-export function saveReport(report: LinkCheckReport, outputDir = DEFAULT_OUTPUT_DIR) {
+export function saveReport(
+  report: LinkCheckReport,
+  outputDir = DEFAULT_OUTPUT_DIR,
+  options: RenderOptions = {},
+) {
   const paths = getReportPaths(report.siteName, outputDir);
   mkdirSync(outputDir, { recursive: true });
 
   writeFileSync(paths.json, JSON.stringify(report, null, 2));
   console.log(`Saved JSON report to ${paths.json}`);
 
-  renderReportToHTMLFile(report, paths.html);
+  renderReportToHTMLFile(report, paths.html, options);
   console.log(`Saved HTML report to ${paths.html}`);
   return paths;
 }

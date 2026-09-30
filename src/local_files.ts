@@ -305,6 +305,11 @@ type CheckLocalFilesArgs = {
   baseline?: Baseline;
   /** Where to save the JSON and HTML reports, `false` to not save them. Default `results` */
   outputDir?: string | false;
+  /**
+   * Base URL of `cwd` (ending with `/`, e.g. `https://github.com/owner/repo/blob/<sha>/`): the HTML report links
+   * files and relative links to it. Without it, they are rendered as plain text.
+   */
+  sourceBaseUrl?: string;
 };
 
 /**
@@ -317,6 +322,7 @@ export const checkLocalFiles = ({
   sampleRate,
   baseline = EMPTY_BASELINE,
   outputDir = "results",
+  sourceBaseUrl,
 }: CheckLocalFilesArgs) =>
   withRun(async () => {
     const root = isAbsolute(cwd) ? cwd : resolve(cwd);
@@ -347,7 +353,7 @@ export const checkLocalFiles = ({
       baseline,
     });
     if (outputDir !== false) {
-      saveReport(report, outputDir);
+      saveReport(report, outputDir, { sourceBaseUrl });
     }
     console.log(report.summary);
     return report;

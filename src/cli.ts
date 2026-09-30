@@ -15,6 +15,7 @@ import { checkReadmesInGithubOrg } from "./github/gh_get_links";
 import {
   describeResult,
   getFileAnnotations,
+  getGithubBlobBaseUrl,
   writeGithubOutputs,
   writeJobSummary,
 } from "./github_actions";
@@ -328,6 +329,7 @@ const runCommand = (
   command: Exclude<CliCommand, { command: "help" }>,
   baseline: Baseline,
   cwd: string,
+  env: Record<string, string | undefined>,
 ): Promise<LinkCheckReport> => {
   const { sampleRate, outputDir } = command.options;
   switch (command.command) {
@@ -343,7 +345,14 @@ const runCommand = (
     case "github-org":
       return checkReadmesInGithubOrg(command.org, { sampleRate, baseline, outputDir });
     case "files":
-      return checkLocalFiles({ patterns: command.patterns, cwd, sampleRate, baseline, outputDir });
+      return checkLocalFiles({
+        patterns: command.patterns,
+        cwd,
+        sampleRate,
+        baseline,
+        outputDir,
+        sourceBaseUrl: getGithubBlobBaseUrl(env, cwd),
+      });
   }
 };
 
@@ -444,7 +453,7 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
       return 0;
     }
 
-    const report = await runCommand(command, baseline, cwd);
+    const report = await runCommand(command, baseline, cwd, env);
     const reportPaths = getReportPaths(report.siteName, options.outputDir);
     const linksToFix = report.summary.totalLinksToFix;
 

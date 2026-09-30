@@ -7,6 +7,7 @@ import {
   escapeTableCell,
   formatAnnotation,
   getFileAnnotations,
+  getGithubBlobBaseUrl,
   renderJobSummary,
   writeGithubOutputs,
   writeJobSummary,
@@ -182,5 +183,42 @@ describe("writeGithubOutputs()", () => {
     expect(readFileSync(file, "utf8")).toBe("links-to-fix=3\nreport-path=results/x.json\n");
     expect(writeGithubOutputs({ a: 1 }, undefined)).toBe(false);
     expect(() => writeGithubOutputs({ a: "x\ny" }, file)).toThrow("single line");
+  });
+});
+
+describe("getGithubBlobBaseUrl()", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const env = {
+    GITHUB_ACTIONS: "true",
+    GITHUB_SERVER_URL: "https://github.com",
+    GITHUB_REPOSITORY: "owner/repo",
+    GITHUB_SHA: SHA,
+    GITHUB_WORKSPACE: "/work/repo",
+  };
+
+  it("returns the blob URL of the commit when running from the workspace in GitHub Actions", () => {
+    expect(getGithubBlobBaseUrl(env, "/work/repo")).toBe(
+      `https://github.com/owner/repo/blob/${SHA}/`,
+    );
+    expect(getGithubBlobBaseUrl(env, "/work/repo/")).toBe(
+      `https://github.com/owner/repo/blob/${SHA}/`,
+    );
+    expect(
+      getGithubBlobBaseUrl({ ...env, GITHUB_SERVER_URL: "https://ghe.example.com/" }, "/work/repo"),
+    ).toBe(`https://ghe.example.com/owner/repo/blob/${SHA}/`);
+  });
+
+  it.each([
+    [{ GITHUB_ACTIONS: "" }, "/work/repo"],
+    [{}, "/work/repo/docs"],
+    [{ GITHUB_WORKSPACE: "" }, "/work/repo"],
+    [{ GITHUB_REPOSITORY: "owner/repo/../x" }, "/work/repo"],
+    [{ GITHUB_REPOSITORY: "owner" }, "/work/repo"],
+    [{ GITHUB_SHA: "main" }, "/work/repo"],
+    [{ GITHUB_SERVER_URL: "javascript:alert(1)" }, "/work/repo"],
+    [{ GITHUB_SERVER_URL: "http://github.com" }, "/work/repo"],
+    [{ GITHUB_SERVER_URL: "https://github.com/x?y" }, "/work/repo"],
+  ])("returns undefined for %j (cwd %s)", (overrides, cwd) => {
+    expect(getGithubBlobBaseUrl({ ...env, ...overrides }, cwd)).toBeUndefined();
   });
 });
