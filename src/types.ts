@@ -2,6 +2,8 @@ export type Link = {
   page: string;
   href: string;
   text: string;
+  /** Line of the link in the page (local files only) */
+  line?: number;
 };
 
 export type LinkWithResult = Link & { result: LinkCheckResult };
@@ -21,4 +23,6 @@ export type LinkCheckResult =
         | "could not check"; // Recaptcha or other anti-scraping measures returning 403, 401 or the link requires a login
       status?: number;
       errorDetail?: string;
+      /** The destination is a private or local address (see `src/destination.ts`), it was never requested */
+      destinationBlocked?: boolean;
     };

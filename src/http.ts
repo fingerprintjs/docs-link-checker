@@ -1,3 +1,4 @@
+import { assertDestinationAllowed } from "./destination";
 import { parseRetryAfter } from "./limiter";
 import { incrementMetric } from "./run_context";
 import { FETCH_TIMEOUT, getHostLimiter, TASK_TIMEOUT } from "./utils";
@@ -66,6 +67,8 @@ type HopResult<T> =
  *   that host starts during the pause), then the request is retried, at most `MAX_RATE_LIMIT_RETRIES` times.
  * - The final response (possibly still a 429) is returned. `read` consumes what it needs of the body inside the slot,
  *   any unread body (also of redirect and 429 responses) is cancelled before the slot is released.
+ * - Every hop must go to a public address (see `src/destination.ts`), a blocked hop is never sent.
+ * @throws {DestinationNotAllowedError} for a non-public destination (also after a redirect)
  * @throws {Error} on network errors, timeouts and too many redirects (like `fetch`)
  */
 export const fetchWithHostLimit = async <T>(
@@ -82,6 +85,8 @@ export const fetchWithHostLimit = async <T>(
   for (;;) {
     const requestUrl = currentUrl;
     const requestMethod = currentMethod;
+    // SSRF guard: every hop (the first request and every redirect) must go to a public address
+    await assertDestinationAllowed(requestUrl);
     const result = await hostLimiter.run(requestUrl, async (): Promise<HopResult<T>> => {
       // Counted per actual request (every redirect hop and retry)
       incrementMetric("httpRequests");

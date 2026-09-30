@@ -1,0 +1,80 @@
+name: Action self-test
+# Runs the reusable action (action.yml) from this repository on an offline fixture (relative links and anchors only)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FIXTURE_FILES: 'test/action-fixture/**/*.md'
+  FIXTURE_BASELINE: test/action-fixture/linkcheck.baseline.json
+  # The fixture has one broken relative link and one broken anchor
+  EXPECTED_LINKS_TO_FIX: '2'
+
+jobs:
+  selftest:
+    name: Run the action on the fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the fixture with the baseline (passes, broken links are ignored)
+        id: with-baseline
+        uses: ./
+        with:
+          files: ${{ env.FIXTURE_FILES }}
+          baseline: ${{ env.FIXTURE_BASELINE }}
+
+      - name: Check the fixture without the baseline (reports broken links, doesn't fail)
+        id: without-baseline
+        uses: ./
+        with:
+          files: ${{ env.FIXTURE_FILES }}
+          fail-on-broken: false
+
+      - name: Check the fixture with fail-on-broken (fails)
+        id: failing
+        continue-on-error: true
+        uses: ./
+        with:
+          files: ${{ env.FIXTURE_FILES }}
+          # Already annotated by the previous step
+          annotations: false
+
+      - name: Assert outputs
+        env:
+          WITH_BASELINE: ${{ steps.with-baseline.outputs.links-to-fix }}
+          WITHOUT_BASELINE: ${{ steps.without-baseline.outputs.links-to-fix }}
+          REPORT_PATH: ${{ steps.without-baseline.outputs.report-path }}
+          REPORT_HTML_PATH: ${{ steps.without-baseline.outputs.report-html-path }}
+          FAILING_OUTCOME: ${{ steps.failing.outcome }}
+        run: |
+          failed=0
+          fail() { echo "::error::$1"; failed=1; }
+          [ "$WITH_BASELINE" = "0" ] || fail "With the baseline: expected 0 links to fix, got '$WITH_BASELINE'."
+          [ "$WITHOUT_BASELINE" = "$EXPECTED_LINKS_TO_FIX" ] || fail "Without the baseline: expected $EXPECTED_LINKS_TO_FIX links to fix, got '$WITHOUT_BASELINE'."
+          [ -f "$REPORT_PATH" ] || fail "JSON report not found at '$REPORT_PATH'."
+          [ -f "$REPORT_HTML_PATH" ] || fail "HTML report not found at '$REPORT_HTML_PATH'."
+          [ "$FAILING_OUTCOME" = "failure" ] || fail "With fail-on-broken: expected the step to fail, got '$FAILING_OUTCOME'."
+          if [ -f "$REPORT_PATH" ]; then
+            ignored=$(node -p "require(process.argv[1]).summary.ignored" "$REPORT_PATH")
+            [ "$ignored" = "0" ] || fail "Without the baseline: expected 0 ignored links, got '$ignored'."
+          fi
+          exit "$failed"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: action-selftest-report
+          path: ${{ steps.without-baseline.outputs.report-html-path }}
+          retention-days: 7
+          if-no-files-found: warn

@@ -1,6 +1,7 @@
 import { PromisePoolError } from "@supercharge/promise-pool";
 import type { Page } from "playwright";
 import { HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
+import { assertDestinationAllowed, DestinationNotAllowedError } from "./destination";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
 import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
@@ -60,6 +61,16 @@ export const getInitialCheckMethod = (href: string): CheckMethod => {
   }
 };
 
+/** Result for a link to a private or local address: never requested, not counted as broken */
+export const getBlockedDestinationResult = (
+  error: DestinationNotAllowedError,
+): LinkCheckResult => ({
+  ok: false,
+  error: "could not check",
+  errorDetail: error.message,
+  destinationBlocked: true,
+});
+
 // Status codes returned by fetch that might be caused by bot protection, rate limiting or the request itself
 export const PLAYWRIGHT_RETRY_STATUS_CODES = [401, 403, 405, 406, 408, 429];
 
@@ -73,6 +84,10 @@ export const shouldRecheckWithPlaywright = (
   method: CheckMethod,
 ): boolean => {
   if (result.ok) {
+    return false;
+  }
+  // Blocked by the destination policy (SSRF guard), the browser must not request it either
+  if (result.destinationBlocked) {
     return false;
   }
   switch (method) {
@@ -407,6 +422,9 @@ export const fetchPage = async (
       getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
     };
   } catch (error) {
+    if (error instanceof DestinationNotAllowedError) {
+      return { ok: false, result: getBlockedDestinationResult(error) };
+    }
     log(`Something went wrong: ${error}`, verbose);
     return {
       ok: false,
@@ -612,6 +630,17 @@ async function checkUrlsInOneNavigation(
 ): Promise<Map<string, LinkCheckResult>> {
   const [firstUrl] = urls;
   const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
+
+  // Links reach Playwright after the fetch pass (which blocks private destinations), check again for direct callers.
+  // Redirects and page resources to blocked IP literals and localhost names are aborted by the route handler.
+  try {
+    await assertDestinationAllowed(firstUrl);
+  } catch (error) {
+    if (error instanceof DestinationNotAllowedError) {
+      return sameForAll(getBlockedDestinationResult(error));
+    }
+    throw error;
+  }
 
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
   // Errors while navigating and checking the page are reported as broken links.

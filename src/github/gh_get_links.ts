@@ -1,8 +1,9 @@
+import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import { fetchWithHostLimit } from "../http";
 import { checkLinks } from "../link";
 import { extractLinksFromMarkdown } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
-import { getJSONReport, saveReport } from "../report/report";
+import { DEFAULT_OUTPUT_DIR, getJSONReport, saveReport } from "../report/report";
 import { withRun } from "../run";
 import { timePhase } from "../run_context";
 import type { Link } from "../types";
@@ -59,10 +60,10 @@ async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFil
 
 /**
  * Lists README files in all public, non-archived repositories of the organization
- * (sampled according to `LINK_CHECK_SAMPLE_RATE`).
+ * (sampled according to `sampleRate`, default `LINK_CHECK_SAMPLE_RATE`).
  * @throws {Error} if the repositories cannot be listed
  */
-export async function getReadmesFromOrg(orgName: string): Promise<MdFile[]> {
+export async function getReadmesFromOrg(orgName: string, sampleRate?: number): Promise<MdFile[]> {
   let repos: Awaited<ReturnType<typeof getOrgRepos>>;
   try {
     repos = await getOrgRepos(orgName);
@@ -89,7 +90,12 @@ export async function getReadmesFromOrg(orgName: string): Promise<MdFile[]> {
   console.log(
     `\nFound ${readmes.length} public Readmes files in ${repos.length} repositories of ${orgName} organization.`,
   );
-  return sampleItems({ items: readmes, key: (readme) => readme.sourcePath, label: "README files" });
+  return sampleItems({
+    items: readmes,
+    key: (readme) => readme.sourcePath,
+    rate: sampleRate,
+    label: "README files",
+  });
 }
 
 /** Downloads README files (limited per host) and extracts their links */
@@ -122,17 +128,36 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   return links;
 }
 
+/** Report name of an organization (`fingerprintjs` -> `fingerprintjs-github-readmes.html`) */
+export const getGithubOrgSiteName = (org: string) => `${org} GitHub readmes`;
+
+export type CheckReadmesOptions = {
+  /** Share of README files to check (0-1), defaults to `LINK_CHECK_SAMPLE_RATE` */
+  sampleRate?: number;
+  /** Failing links matching the baseline are reported as ignored */
+  baseline?: Baseline;
+  /** Where to save the JSON and HTML reports, `false` to not save them. Default `results` */
+  outputDir?: string | false;
+};
+
 /**
  * Checks links in README files of all public repositories of a GitHub organization.
  * Runs as a single run (see `withRun`): GitHub API responses are cached, the browser is closed at the end.
  */
-export const checkReadmesInGithubOrg = (org: string) =>
+export const checkReadmesInGithubOrg = (
+  org: string,
+  {
+    sampleRate,
+    baseline = EMPTY_BASELINE,
+    outputDir = DEFAULT_OUTPUT_DIR,
+  }: CheckReadmesOptions = {},
+) =>
   withRun(async () => {
     const startTime = performance.now();
     await checkGitHubRateLimit(getMyOctokit());
 
     const fingerprintPublicReadmes = await timePhase("List README files", () =>
-      getReadmesFromOrg(org),
+      getReadmesFromOrg(org, sampleRate),
     );
 
     const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
@@ -144,9 +169,16 @@ export const checkReadmesInGithubOrg = (org: string) =>
       fetchConcurrencyLimit: 20,
     });
 
-    const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
+    const report = getJSONReport({
+      links: results,
+      errors,
+      siteName: getGithubOrgSiteName(org),
+      baseline,
+    });
 
-    saveReport(report);
+    if (outputDir !== false) {
+      saveReport(report, outputDir);
+    }
     console.log(report.summary);
 
     console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
