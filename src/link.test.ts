@@ -41,7 +41,7 @@ for (const { function: checkLink, name } of linkCheckMethods) {
      */
     it(`${name} should return OK for hashes that exist (server-rendered)`, async () => {
       const result = await checkLink(
-        "https://fingerprint.com/blog/android-device-reputation-network-fraud-detection#api-responses"
+        "https://fingerprint.com/blog/browser-fingerprinting-techniques/#how-does-browser-fingerprinting-work"
       );
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
@@ -57,14 +57,14 @@ for (const { function: checkLink, name } of linkCheckMethods) {
 
     it(`${name} should return OK for hashes implemented using 'href', like on GitHub`, async () => {
       const result = await checkLink(
-        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#getting-started"
+        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#installation"
       );
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
     it(`${name} should return OK for hashes implemented using 'href', like on GitHub, even despite different casing`, async () => {
       const result = await checkLink(
-        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#GeTTing-StArteD"
+        "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#InStAlLaTiOn"
       );
       expect(result).toMatchObject({ ok: true, status: 200 });
     });

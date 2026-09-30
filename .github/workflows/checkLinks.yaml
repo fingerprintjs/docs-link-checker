@@ -159,9 +159,22 @@ jobs:
       - name: Create index page
         id: index
         run: |
+          # Deploy only complete runs: if any report is missing (e.g. a checker crashed),
+          # keep the last complete site on GitHub Pages instead of replacing it with a partial one.
           mkdir -p reports
-          if [ -z "$(ls -A reports)" ]; then
-            echo "::warning::No reports were generated, skipping deployment."
+          REPORT_ITEMS=""
+          MISSING=""
+          for entry in "${DEV_REPORT}|dev.fingerprint.com Report" "${GITHUB_REPORT}|GitHub READMEs Report" "${WEB_REPORT}|fingerprint.com Report"; do
+            file="${entry%%|*}"
+            title="${entry#*|}"
+            if [ -f "reports/${file}" ]; then
+              REPORT_ITEMS="${REPORT_ITEMS}<div class=\"report-item\"><a href=\"${file}\">${title}</a></div>"
+            else
+              MISSING="${MISSING} ${file}"
+            fi
+          done
+          if [ -n "${MISSING}" ]; then
+            echo "::warning::Missing reports:${MISSING}. Skipping deployment to keep the last complete reports on GitHub Pages."
             exit 0
           fi
           echo "has_reports=true" >> "$GITHUB_OUTPUT"
@@ -187,15 +200,7 @@ jobs:
               <a href="https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml">Run workflow again</a>
             </div>
             <div class="report-list">
-              <div class="report-item">
-                <a href="${DEV_REPORT}">dev.fingerprint.com Report</a>
-              </div>
-              <div class="report-item">
-                <a href="${GITHUB_REPORT}">GitHub READMEs Report</a>
-              </div>
-              <div class="report-item">
-                <a href="${WEB_REPORT}">fingerprint.com Report</a>
-              </div>
+              ${REPORT_ITEMS}
             </div>
             <p>Last updated: ${TIMESTAMP}</p>
           </body>
