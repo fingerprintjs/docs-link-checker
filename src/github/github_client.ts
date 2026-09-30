@@ -2,6 +2,7 @@ import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { Octokit } from "@octokit/rest";
 import dotenv from "dotenv";
+import { incrementMetric } from "../run_context";
 
 dotenv.config();
 
@@ -46,8 +47,19 @@ export const getMyOctokit = (): MyOctokitInstance => {
       throw new Error("GH_TOKEN is not set. A GitHub token is required to check GitHub links.");
     }
     client = new MyOctokit({ auth: token, throttle: throttleOptions });
+    countRequests(client);
   }
   return client;
+};
+
+/**
+ * Counts every request sent by the client (all API operations, pagination pages, the rate limit check,
+ * GraphQL, retries by the retry/throttling plugins) in the run metrics, in one place.
+ */
+export const countRequests = (octokit: Pick<MyOctokitInstance, "hook">) => {
+  octokit.hook.before("request", () => {
+    incrementMetric("githubApiRequests");
+  });
 };
 
 /** Only for tests: forget the cached client */

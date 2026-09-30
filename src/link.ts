@@ -2,7 +2,6 @@ import { Page } from "playwright";
 import { PromisePoolError } from "@supercharge/promise-pool";
 import {
   CONCURRENCY_LIMIT,
-  FETCH_TIMEOUT,
   FORBIDDEN_STATUS_CODES,
   OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
@@ -17,7 +16,7 @@ import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh
 import { AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
 import { withPage } from "./browser";
 import { withTimeout } from "./limiter";
-import { discardBody, fetchWithHostLimit } from "./http";
+import { fetchWithHostLimit } from "./http";
 import { incrementMetric, timePhase } from "./run_context";
 import { withRun } from "./run";
 
@@ -334,31 +333,22 @@ export const fetchPage = async (
     headers.set("User-Agent", getRandomUserAgent());
   }
 
+  // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
+  // unread bodies are cancelled (see `fetchWithHostLimit`)
   const request = (method: "GET" | "HEAD") =>
-    fetch(url, {
-      method,
-      redirect: "follow",
-      headers,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT),
-    });
+    fetchWithHostLimit(url, { method, headers }, async (response) =>
+      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
+      // An error page body is kept for the error detail (HEAD responses have none).
+      method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status)) ? response.text() : ""
+    );
 
   try {
-    // Limited per host, a 429 with Retry-After pauses the host and is retried (see `fetchWithHostLimit`)
-    const response = await fetchWithHostLimit(
-      url,
-      async () => {
-        const response = await request(needBody ? "GET" : "HEAD");
-        // Some servers don't support (or block) HEAD requests, retry once with GET
-        if (!needBody && HEAD_FALLBACK_STATUS_CODES.includes(response.status)) {
-          log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-          await discardBody(response);
-          return request("GET");
-        }
-        return response;
-      },
-      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead
-      async (response) => (needBody || !OKAY_STATUS_CODES.includes(response.status) ? response.text() : "")
-    );
+    let response = await request(needBody ? "GET" : "HEAD");
+    // Some servers don't support (or block) HEAD requests, retry once with GET
+    if (!needBody && HEAD_FALLBACK_STATUS_CODES.includes(response.status)) {
+      log(`HEAD returned ${response.status}, retrying with GET`, verbose);
+      response = await request("GET");
+    }
 
     // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
     const retryAfter = response.headers.get("Retry-After");

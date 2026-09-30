@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
-import { FETCH_TIMEOUT, getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
+import { getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 import { withPage } from "./browser";
 import { fetchWithHostLimit } from "./http";
 import { incrementMetric } from "./run_context";
@@ -56,14 +56,9 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
     pageContent = pageHTML;
   } else {
     // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
-    const response = await fetchWithHostLimit(
-      pageUrl,
-      () =>
-        fetch(pageUrl, {
-          headers: { "User-Agent": getRandomUserAgent() },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT),
-        }),
-      async (response) => (response.ok ? response.text() : "")
+    // Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL, as before
+    const response = await fetchWithHostLimit(pageUrl, { headers: { "User-Agent": getRandomUserAgent() } }, async (response) =>
+      response.ok ? response.text() : ""
     );
     if (response.status < 200 || response.status >= 300) {
       // Thrown (not an empty list), so the page shows up in the extraction errors instead of silently having no links

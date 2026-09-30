@@ -101,10 +101,10 @@ describe("GitHub API cache", () => {
     expect(results.map((result) => result.ok)).toEqual([true, true, true, false]);
   });
 
-  it("counts API requests and cache hits in the run metrics", async () => {
+  it("counts cache hits in the run metrics (requests are counted by the Octokit client)", async () => {
     await withRun(async () => {
       await Promise.all([getContentCached(params), getContentCached(params), getRepoCached("owner", "repo")]);
-      expect(getRunContext()!.metrics.counters).toMatchObject({ githubApiRequests: 2, githubCacheHits: 1 });
+      expect(getRunContext()!.metrics.counters).toMatchObject({ githubCacheHits: 1 });
     });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { Route } from "playwright";
-import { blockHeavyResources, shouldBlockRequest } from "./browser";
+import { blockHeavyResources, createResourceBlocker, shouldBlockRequest } from "./browser";
 
 const request = (resourceType: string, url: string, isMainFrameNavigation = false) => ({
   resourceType,
@@ -109,5 +109,62 @@ describe("blockHeavyResources() route handler", () => {
     const route = fakeRoute({ resourceType: "font", url: "https://example.com/a.woff2" });
     route.abort.mockRejectedValue(new Error("Target closed"));
     await expect(blockHeavyResources(route as unknown as Route)).resolves.toBeUndefined();
+  });
+
+  it("createResourceBlocker() allows the vendor's own resources when the checked page is hosted by it", async () => {
+    const blocker = createResourceBlocker();
+    const navigation = fakeRoute({ resourceType: "document", url: "https://segment.com/docs/", navigation: true });
+    const ownScript = fakeRoute({ resourceType: "script", url: "https://cdn.segment.com/app.js" });
+    const tagManager = fakeRoute({ resourceType: "script", url: "https://www.googletagmanager.com/gtm.js" });
+    const image = fakeRoute({ resourceType: "image", url: "https://segment.com/logo.png" });
+
+    for (const route of [navigation, ownScript, tagManager, image]) {
+      await blocker(route as unknown as Route);
+    }
+
+    expect(navigation.continue).toHaveBeenCalled();
+    expect(ownScript.continue).toHaveBeenCalled();
+    expect(tagManager.abort).toHaveBeenCalled();
+    expect(image.abort).toHaveBeenCalled();
+  });
+
+  it("createResourceBlocker() tracks the page URL of its own context only", async () => {
+    const segmentPage = createResourceBlocker();
+    const otherPage = createResourceBlocker();
+    await segmentPage(fakeRoute({ resourceType: "document", url: "https://segment.com/", navigation: true }) as never);
+    await otherPage(fakeRoute({ resourceType: "document", url: "https://example.com/", navigation: true }) as never);
+
+    const script = fakeRoute({ resourceType: "script", url: "https://cdn.segment.com/analytics.js" });
+    await otherPage(script as unknown as Route);
+    expect(script.abort).toHaveBeenCalled();
+  });
+});
+
+describe("shouldBlockRequest() with the checked page URL", () => {
+  it("does not block requests to the checked page's own vendor host (and its subdomains)", () => {
+    const pageUrl = "https://segment.com/docs/connections/";
+    expect(shouldBlockRequest({ ...request("script", "https://segment.com/app.js"), pageUrl })).toBe(false);
+    expect(shouldBlockRequest({ ...request("xhr", "https://api.segment.com/v1/docs"), pageUrl })).toBe(false);
+    expect(shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl })).toBe(false);
+  });
+
+  it("works when the page is on a subdomain of the vendor", () => {
+    const pageUrl = "https://help.hotjar.com/hc/en-us";
+    expect(shouldBlockRequest({ ...request("script", "https://static.hotjar.com/c/hotjar.js"), pageUrl })).toBe(false);
+  });
+
+  it("still blocks other vendors and heavy resource types on a vendor-hosted page", () => {
+    const pageUrl = "https://segment.com/docs/";
+    expect(shouldBlockRequest({ ...request("script", "https://www.googletagmanager.com/gtm.js"), pageUrl })).toBe(true);
+    expect(shouldBlockRequest({ ...request("font", "https://segment.com/font.woff2"), pageUrl })).toBe(true);
+  });
+
+  it("blocks vendor hosts on regular pages", () => {
+    const pageUrl = "https://docs.example.com/";
+    expect(shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl })).toBe(true);
+  });
+
+  it("ignores an invalid page URL", () => {
+    expect(shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl: "nope" })).toBe(true);
   });
 });

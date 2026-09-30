@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchWithHostLimit, MAX_RATE_LIMIT_RETRIES } from "./http";
+import { fetchWithHostLimit, getRedirectMethod, MAX_RATE_LIMIT_RETRIES, MAX_REDIRECTS } from "./http";
 import { HostLimiter } from "./limiter";
 import { setHostLimiter } from "./utils";
 import { getLinksFromPages, parseLinksFromPage } from "./page";
@@ -19,27 +19,34 @@ afterEach(() => {
 
 const text = (response: Response) => response.text();
 
+type Handler = (url: string, init: RequestInit) => Response | Promise<Response>;
+
+/** Stubs `fetch`, handlers get the URL (without the hash) and the request init */
+const stubFetch = (handler: Handler) => {
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => handler(String(input), init ?? {}));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+};
+
+const redirect = (location: string, status = 301) => new Response("moved", { status, headers: { Location: location } });
+
 describe("fetchWithHostLimit()", () => {
   it("pauses the host before releasing the slot, so a queued request does not start during Retry-After", async () => {
     setHostLimiter(new HostLimiter(1));
     const events: Array<{ name: string; at: number }> = [];
     let first = true;
-    const rateLimitedRequest = async () => {
-      events.push({ name: "a", at: Date.now() });
-      if (first) {
+    stubFetch((url) => {
+      events.push({ name: url, at: Date.now() });
+      if (url.endsWith("/a") && first) {
         first = false;
         return new Response(null, { status: 429, headers: { "Retry-After": "1" } });
       }
-      return new Response("a", { status: 200 });
-    };
-    const queuedRequest = async () => {
-      events.push({ name: "b", at: Date.now() });
-      return new Response("b", { status: 200 });
-    };
+      return new Response(url.slice(-1), { status: 200 });
+    });
 
     const results = await Promise.all([
-      fetchWithHostLimit("https://limited.example.com/a", rateLimitedRequest, text),
-      fetchWithHostLimit("https://limited.example.com/b", queuedRequest, text),
+      fetchWithHostLimit("https://limited.example.com/a", {}, text),
+      fetchWithHostLimit("https://limited.example.com/b", {}, text),
     ]);
 
     expect(results.map((result) => [result.status, result.data])).toEqual([
@@ -47,26 +54,133 @@ describe("fetchWithHostLimit()", () => {
       [200, "b"],
     ]);
     const rateLimitedAt = events[0].at;
-    const queuedStart = events.find((event) => event.name === "b")!.at;
+    const queuedStart = events.find((event) => event.name.endsWith("/b"))!.at;
     expect(queuedStart - rateLimitedAt).toBeGreaterThanOrEqual(950);
   });
 
   it("returns the last 429 after the retries", async () => {
     setHostLimiter(new HostLimiter(2));
-    const request = vi.fn(async () => new Response("slow down", { status: 429, headers: { "Retry-After": "0" } }));
+    const fetchMock = stubFetch(() => new Response("slow down", { status: 429, headers: { "Retry-After": "0" } }));
 
-    const result = await fetchWithHostLimit("https://limited.example.com/", request, text);
+    const result = await fetchWithHostLimit("https://limited.example.com/", {}, text);
 
     expect(result).toMatchObject({ status: 429, data: "slow down" });
-    expect(request).toHaveBeenCalledTimes(MAX_RATE_LIMIT_RETRIES + 1);
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_RATE_LIMIT_RETRIES + 1);
   });
 
   it("does not retry a 429 without a usable Retry-After", async () => {
     setHostLimiter(new HostLimiter(2));
-    const request = vi.fn(async () => new Response(null, { status: 429 }));
+    const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
 
-    expect((await fetchWithHostLimit("https://limited.example.com/", request, text)).status).toBe(429);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect((await fetchWithHostLimit("https://limited.example.com/", {}, text)).status).toBe(429);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("fetchWithHostLimit() redirects", () => {
+  it("follows redirects manually and returns the final status, URL and body", async () => {
+    setHostLimiter(new HostLimiter(2));
+    const fetchMock = stubFetch((url) => {
+      if (url === "https://old.example.com/page") return redirect("https://new.example.com/start", 301);
+      if (url === "https://new.example.com/start") return redirect("/final?x=1", 307);
+      return new Response("final", { status: 200 });
+    });
+
+    const result = await fetchWithHostLimit("https://old.example.com/page", { method: "HEAD" }, text);
+
+    expect(result).toMatchObject({ status: 200, url: "https://new.example.com/final?x=1", data: "final" });
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.redirect])).toEqual([
+      ["https://old.example.com/page", "HEAD", "manual"],
+      // HEAD stays HEAD on 301 and 307, relative Location is resolved against the current URL
+      ["https://new.example.com/start", "HEAD", "manual"],
+      ["https://new.example.com/final?x=1", "HEAD", "manual"],
+    ]);
+  });
+
+  it("respects the per-host limit of the redirect destination", async () => {
+    setHostLimiter(new HostLimiter(2));
+    let active = 0;
+    let maxActive = 0;
+    stubFetch(async (url) => {
+      if (!url.startsWith("https://destination.example.com/")) {
+        // Every source host redirects to the same destination host
+        return redirect(`https://destination.example.com/${new URL(url).hostname}`);
+      }
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return new Response("ok", { status: 200 });
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => fetchWithHostLimit(`https://source-${i}.example.com/`, {}, text))
+    );
+
+    expect(results.every((result) => result.status === 200)).toBe(true);
+    expect(maxActive).toBe(2);
+  });
+
+  it("gives up after MAX_REDIRECTS redirects", async () => {
+    setHostLimiter(new HostLimiter(2));
+    const fetchMock = stubFetch((url) => redirect(`${url}x`, 302));
+
+    await expect(fetchWithHostLimit("https://loop.example.com/", {}, text)).rejects.toThrow("Too many redirects");
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_REDIRECTS + 1);
+  });
+
+  it("reports too many redirects as a broken link in link checks", async () => {
+    setHostLimiter(new HostLimiter(2));
+    stubFetch((url) => redirect(`${url}x`, 302));
+
+    const result = await checkLinkWithFetch("https://loop.example.com/");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link" });
+    expect(result.ok === false && result.errorDetail).toContain("Too many redirects");
+  });
+
+  it("switches to GET on 303 (fetch spec)", async () => {
+    setHostLimiter(new HostLimiter(2));
+    const fetchMock = stubFetch((url) =>
+      url.endsWith("/form") ? redirect("https://example.com/result", 303) : new Response("done", { status: 200 })
+    );
+
+    await fetchWithHostLimit("https://example.com/form", { method: "POST" }, text);
+
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["POST", "GET"]);
+  });
+
+  it.each([
+    [303, "POST", "GET"],
+    [303, "HEAD", "HEAD"],
+    [303, "GET", "GET"],
+    [301, "POST", "GET"],
+    [302, "POST", "GET"],
+    [301, "HEAD", "HEAD"],
+    [302, "HEAD", "HEAD"],
+    [307, "POST", "POST"],
+    [308, "HEAD", "HEAD"],
+  ])("getRedirectMethod(%i, %s) is %s", (status, method, expected) => {
+    expect(getRedirectMethod(status, method)).toBe(expected);
+  });
+
+  it("cancels the body of every redirect response while holding the slot of its host", async () => {
+    const limiter = new HostLimiter(1);
+    setHostLimiter(limiter);
+    const hop = trackedResponse(302, limiter, "https://a.example.com/", { Location: "https://b.example.com/" });
+    stubFetch((url) => (url === "https://a.example.com/" ? hop.response : new Response("ok", { status: 200 })));
+
+    const result = await fetchWithHostLimit("https://a.example.com/", {}, text);
+
+    expect(result).toMatchObject({ status: 200, url: "https://b.example.com/" });
+    expect(hop.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
+  });
+
+  it("returns a 3xx without Location as the final response", async () => {
+    setHostLimiter(new HostLimiter(2));
+    stubFetch(() => new Response(null, { status: 301 }));
+
+    expect((await fetchWithHostLimit("https://example.com/", {}, text)).status).toBe(301);
   });
 });
 
@@ -93,8 +207,9 @@ describe("unread response bodies are cancelled before the host slot is released"
     setHostLimiter(limiter);
     const url = "https://example.com/big-file";
     const { response, tracking } = trackedResponse(200, limiter, url);
+    vi.stubGlobal("fetch", vi.fn(async () => response));
 
-    await fetchWithHostLimit(url, async () => response, async () => "not read");
+    await fetchWithHostLimit(url, {}, async () => "not read");
 
     expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
   });

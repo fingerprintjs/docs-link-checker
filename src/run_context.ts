@@ -36,8 +36,8 @@ export const METRICS = {
   // A hash missing in the shared DOM of its page is re-checked with a dedicated navigation (included above)
   playwrightHashFallbacks: "Playwright hash fallbacks",
   browserLaunches: "Browser launches",
-  // Cache misses, Octokit's own retries are not counted
-  githubApiRequests: "GitHub API calls (cache misses)",
+  // Every request sent by the Octokit client (all operations, pagination, retries), counted by a request hook
+  githubApiRequests: "GitHub API requests",
   githubCacheHits: "GitHub API cache hits",
 } as const;
 

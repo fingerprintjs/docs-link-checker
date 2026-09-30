@@ -1,4 +1,4 @@
-import { FETCH_TIMEOUT, formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
 import { fetchWithHostLimit } from "../http";
 import { Link } from "../types";
 import { extractLinksFromMarkdown } from "../markdown";
@@ -99,10 +99,8 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
     // every request has its own timeout instead of the task timeout
     taskTimeout: null,
     processFn: async (file) => {
-      const response = await fetchWithHostLimit(
-        file.downloadUrl,
-        () => fetch(file.downloadUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) }),
-        async (response) => (response.ok ? response.text() : "")
+      const response = await fetchWithHostLimit(file.downloadUrl, {}, async (response) =>
+        response.ok ? response.text() : ""
       );
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);

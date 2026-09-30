@@ -39,31 +39,50 @@ export const BLOCKED_HOSTS = [
   "plausible.io",
 ];
 
-const isBlockedHost = (hostname: string) =>
-  BLOCKED_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
+const matchesHost = (hostname: string, host: string) => hostname === host || hostname.endsWith(`.${host}`);
+
+const getHostname = (url: string | undefined): string | undefined => {
+  if (!url) {
+    return undefined;
+  }
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+};
 
 export type RequestInfo = {
   resourceType: string;
   url: string;
   /** The top-level document navigation (the link being checked) is never blocked */
   isMainFrameNavigation: boolean;
+  /**
+   * URL of the checked page (main frame). If the page itself is hosted by a blocked vendor (e.g. segment.com docs),
+   * requests to that vendor's hosts are its own resources and are not blocked.
+   */
+  pageUrl?: string;
 };
 
 /**
  * Decides if a request made by a page should be aborted (pure function, used by the Playwright route handler).
  */
-export const shouldBlockRequest = ({ resourceType, url, isMainFrameNavigation }: RequestInfo): boolean => {
+export const shouldBlockRequest = ({ resourceType, url, isMainFrameNavigation, pageUrl }: RequestInfo): boolean => {
   if (isMainFrameNavigation) {
     return false;
   }
+  // Images, media and fonts never add anchors, whoever hosts them
   if (BLOCKED_RESOURCE_TYPES.has(resourceType)) {
     return true;
   }
-  try {
-    return isBlockedHost(new URL(url).hostname);
-  } catch {
+  const hostname = getHostname(url);
+  if (hostname === undefined) {
     return false;
   }
+  const pageHostname = getHostname(pageUrl);
+  return BLOCKED_HOSTS.some(
+    (host) => matchesHost(hostname, host) && !(pageHostname !== undefined && matchesHost(pageHostname, host))
+  );
 };
 
 const isMainFrameNavigation = (route: Route): boolean => {
@@ -79,15 +98,34 @@ const isMainFrameNavigation = (route: Route): boolean => {
   }
 };
 
-export const blockHeavyResources = async (route: Route) => {
+/**
+ * Route handler blocking heavy resources of a page.
+ * @param pageUrl URL of the checked page (see `RequestInfo.pageUrl`)
+ */
+export const blockHeavyResources = async (route: Route, pageUrl?: string) => {
   const request = route.request();
   const block = shouldBlockRequest({
     resourceType: request.resourceType(),
     url: request.url(),
     isMainFrameNavigation: isMainFrameNavigation(route),
+    pageUrl,
   });
   // The page might already be closed, ignore errors
   await (block ? route.abort("blockedbyclient") : route.continue()).catch(() => {});
+};
+
+/**
+ * Route handler for one browser context: remembers the URL of the latest main frame navigation
+ * (including redirects), so the page's own resources are recognised.
+ */
+export const createResourceBlocker = () => {
+  let pageUrl: string | undefined;
+  return async (route: Route) => {
+    if (isMainFrameNavigation(route)) {
+      pageUrl = route.request().url();
+    }
+    await blockHeavyResources(route, pageUrl);
+  };
 };
 
 let browserPromise: Promise<Browser> | undefined;
@@ -179,7 +217,9 @@ type WithPageOptions = {
 const runWithNewPage = async <T>(browser: Browser, fn: (page: Page) => Promise<T>, userAgent?: string) => {
   const context = await browser.newContext({ userAgent });
   try {
-    await context.route("**/*", blockHeavyResources);
+    // One blocker per context: it tracks the URL of this context's page
+    const blocker = createResourceBlocker();
+    await context.route("**/*", (route) => blocker(route));
     const page = await context.newPage();
     return await fn(page);
   } finally {

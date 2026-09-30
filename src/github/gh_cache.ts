@@ -16,8 +16,8 @@ const isNotFound = (error: unknown) => (error as { status?: number } | undefined
 const cachedRequest = <T>(key: string, request: () => Promise<T>): Promise<T> =>
   runCached(`github:${key}`, request, {
     cacheError: isNotFound,
+    // Requests themselves are counted by the Octokit client (see `countRequests`)
     onHit: () => incrementMetric("githubCacheHits"),
-    onMiss: () => incrementMetric("githubApiRequests"),
   });
 
 /** `GET /repos/{owner}/{repo}`, cached per repository (GitHub names are case-insensitive) */
