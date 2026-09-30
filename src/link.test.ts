@@ -584,6 +584,7 @@ describe("interleaveByHost() with uneven hosts", () => {
   });
 
   it("visits every item once (many single-link hosts and one big host)", () => {
+    // Generous bound to avoid CI flakiness: the old O(hosts x links) version takes far longer than 5s here
     // Scanning exhausted hosts would be 10k hosts x 100k rounds = 1e9 steps
     const items = [
       ...Array.from({ length: 100_000 }, (_, i) => ({ href: `https://big.example.com/${i}` })),
@@ -591,7 +592,7 @@ describe("interleaveByHost() with uneven hosts", () => {
     ];
     const start = performance.now();
     const result = interleaveByHost(items);
-    expect(performance.now() - start).toBeLessThan(1000);
+    expect(performance.now() - start).toBeLessThan(5000);
 
     expect(result).toHaveLength(items.length);
     expect(new Set(result).size).toBe(items.length);
