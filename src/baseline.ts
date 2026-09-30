@@ -179,23 +179,24 @@ type UpdateBaselineArgs = {
   /** All failing links of the run that should be in the baseline (links to fix and ignored links) */
   failures: Pick<LinkWithResult, "href" | "page" | "result">[];
   /**
-   * Keep existing `href` entries that matched no failure. Use it when not every page was checked
-   * (sampling), otherwise entries of fixed links are dropped.
+   * Also remove existing `href` entries that match no failure (fixed links). Only correct when the run checked
+   * everything the baseline covers: with file globs, `--include` or sampling, entries of pages that were not
+   * checked would be removed. Default `false`: entries are only added.
    */
-  keepUnmatched?: boolean;
+  prune?: boolean;
   reason?: string;
 };
 
 /**
  * Computes the new baseline after a run:
  * - `pattern` entries are always kept (they are hand-written).
- * - Existing `href` entries are kept if they still match a failure (or with `keepUnmatched`), with their reason.
+ * - Existing `href` entries are kept, with their reason. With `prune`, only if they still match a failure.
  * - Failures not matched by any entry are added as `{ href, page, reason }`.
  */
 export const updateBaseline = ({
   baseline,
   failures,
-  keepUnmatched = false,
+  prune = false,
   reason,
 }: UpdateBaselineArgs): BaselineFile => {
   const matched = new Set<BaselineEntry>();
@@ -220,7 +221,7 @@ export const updateBaseline = ({
     }
   }
   const kept = baseline.entries.filter(
-    (entry) => entry.href === undefined || keepUnmatched || matched.has(entry),
+    (entry) => entry.href === undefined || !prune || matched.has(entry),
   );
   const newEntries = [...added.values()].sort(
     (a, b) =>

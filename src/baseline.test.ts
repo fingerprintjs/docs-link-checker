@@ -179,8 +179,20 @@ describe("updateBaseline()", () => {
     broken("https://new-a.com/", "a.md"),
   ];
 
-  it("keeps matching entries and patterns, drops stale hrefs, adds new failures (sorted, deduplicated)", () => {
+  it("by default keeps every entry (partial runs) and adds new failures (sorted, deduplicated)", () => {
     expect(updateBaseline({ baseline, failures })).toEqual({
+      ignore: [
+        { href: "https://still-broken.com/", reason: "keep my reason" },
+        { href: "https://fixed.com/" },
+        { pattern: "https://unused-pattern.com/**" },
+        { href: "https://new-a.com/", page: "a.md" },
+        { href: "https://new-b.com/", page: "b.md" },
+      ],
+    });
+  });
+
+  it("with `prune`, drops exact entries that no longer fail, keeps patterns", () => {
+    expect(updateBaseline({ baseline, failures, prune: true })).toEqual({
       ignore: [
         { href: "https://still-broken.com/", reason: "keep my reason" },
         { pattern: "https://unused-pattern.com/**" },
@@ -190,9 +202,8 @@ describe("updateBaseline()", () => {
     });
   });
 
-  it("keeps unmatched entries with `keepUnmatched` (sampled runs) and adds a reason", () => {
-    const { ignore } = updateBaseline({ baseline, failures, keepUnmatched: true, reason: "why" });
-    expect(ignore).toContainEqual({ href: "https://fixed.com/" });
+  it("adds a reason to new entries", () => {
+    const { ignore } = updateBaseline({ baseline, failures, reason: "why" });
     expect(ignore).toContainEqual({ href: "https://new-a.com/", page: "a.md", reason: "why" });
   });
 
@@ -214,6 +225,7 @@ describe("updateBaseline()", () => {
       updateBaseline({
         baseline: overlapping,
         failures: [broken("https://broad.com/still-broken", "a.md")],
+        prune: true,
       }),
     ).toEqual({
       ignore: [

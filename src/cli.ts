@@ -38,9 +38,13 @@ export type CommonOptions = {
   /** Path of the baseline file, if any */
   baseline?: string;
   updateBaseline: boolean;
+  /** With `updateBaseline`: also remove exact entries that no longer fail (only for full-scope runs) */
+  pruneBaseline: boolean;
   outputDir: string;
   json: boolean;
   hostConcurrency?: number;
+  /** Allow requests to private and local addresses (SSRF guard off, see `src/destination.ts`) */
+  allowPrivateHosts: boolean;
 };
 
 export type CliCommand =
@@ -76,11 +80,16 @@ const COMMON_HELP = `Common options:
   --no-fail-on-broken        Only report links to fix
   --baseline <file>          Baseline (ignore) file with known false positives and accepted broken links
                              (default: LINK_CHECK_BASELINE). Matching links are reported as ignored.
-  --update-baseline          Write the current failures to the baseline file (default ${DEFAULT_BASELINE_FILE})
-                             and exit with code 0
+  --update-baseline          Add the current failures to the baseline file (default ${DEFAULT_BASELINE_FILE})
+                             and exit with code 0. Existing entries are kept.
+  --prune-baseline           With --update-baseline: also remove exact entries that no longer fail. Only for
+                             runs that check everything the baseline covers (all files / pages, no sampling)
   --output-dir <dir>         Where to save the JSON and HTML reports (default: ${DEFAULT_OUTPUT_DIR})
   --json                     Print the JSON report to stdout (logs go to stderr)
   --host-concurrency <n>     Max concurrent requests per host (default: LINK_CHECK_HOST_CONCURRENCY or 8)
+  --allow-private-hosts      Allow links to private and local addresses (localhost, 10.x, 169.254.x...), blocked by
+                             default. Only for trusted documents, e.g. a local dev server
+                             (default: LINK_CHECK_ALLOW_PRIVATE_HOSTS=true)
   -h, --help                 Show help`;
 
 const HELP: Record<"main" | CommandName, string> = {
@@ -100,6 +109,7 @@ Environment variables:
   LINK_CHECK_SAMPLE_RATE       Default for --sample-rate
   LINK_CHECK_HOST_CONCURRENCY  Default for --host-concurrency
   LINK_CHECK_BASELINE          Default for --baseline
+  LINK_CHECK_ALLOW_PRIVATE_HOSTS  "true" for --allow-private-hosts
 
 Exit codes: 0 no links to fix (or not failing), 1 links to fix or the check crashed, 2 invalid arguments or baseline.`,
   site: `Checks links on all pages of a website, found in its sitemap (sitemap.xml or robots.txt).
@@ -157,9 +167,11 @@ const OPTIONS = {
   "fail-on-broken": { type: "boolean" },
   baseline: { type: "string" },
   "update-baseline": { type: "boolean" },
+  "prune-baseline": { type: "boolean" },
   "output-dir": { type: "string" },
   json: { type: "boolean" },
   "host-concurrency": { type: "string" },
+  "allow-private-hosts": { type: "boolean" },
 } as const;
 
 /** Options that only make sense for one command */
@@ -252,6 +264,21 @@ export const parseCliArgs = (
     parseOrThrow(() => getHostConcurrencyLimit(env.LINK_CHECK_HOST_CONCURRENCY));
   }
   const updateBaseline = values["update-baseline"] ?? false;
+  const pruneBaseline = values["prune-baseline"] ?? false;
+  if (pruneBaseline && !updateBaseline) {
+    throw new UsageError("--prune-baseline can only be used with --update-baseline.");
+  }
+  if (pruneBaseline && sampleRate < 1) {
+    throw new UsageError(
+      "--prune-baseline needs a full run (sample rate 1), entries of pages that were not checked would be removed.",
+    );
+  }
+  const allowPrivateHostsEnv = env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
+  if (allowPrivateHostsEnv && !["true", "false"].includes(allowPrivateHostsEnv)) {
+    throw new UsageError(
+      `Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "${allowPrivateHostsEnv}", expected "true" or "false".`,
+    );
+  }
   const baseline =
     values.baseline ??
     (env.LINK_CHECK_BASELINE ? env.LINK_CHECK_BASELINE : undefined) ??
@@ -261,8 +288,10 @@ export const parseCliArgs = (
     failOnBroken: values["fail-on-broken"] ?? env.FAIL_ON_BROKEN_LINKS !== "false",
     baseline,
     updateBaseline,
+    pruneBaseline,
     outputDir: values["output-dir"] || DEFAULT_OUTPUT_DIR,
     json: values.json ?? false,
+    allowPrivateHosts: values["allow-private-hosts"] ?? allowPrivateHostsEnv === "true",
     ...(hostConcurrency !== undefined ? { hostConcurrency } : {}),
   };
 
@@ -399,6 +428,13 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
   // Workflow commands (annotations) are read from stdout, keep them off it only in --json mode
   const annotationOut = options.json ? stderr : stdout;
 
+  // The destination guard reads the environment variable (also in the browser route handler), restored at the end
+  const previousAllowPrivateHosts = process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
+  process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS = String(options.allowPrivateHosts);
+  if (options.allowPrivateHosts) {
+    console.warn("Links to private and local addresses are allowed (--allow-private-hosts).");
+  }
+
   try {
     if (options.hostConcurrency !== undefined) {
       // Read when the shared per-host limiter is created (on the first request)
@@ -478,8 +514,9 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
       const file = updateBaseline({
         baseline,
         failures: [...getLinksToFix(report), ...report.ignored],
-        // With sampling, entries for pages that were not checked are not stale
-        keepUnmatched: options.sampleRate < 1,
+        // A run can check only part of what the baseline covers (file globs, --include, sampling),
+        // entries are only removed when asked for
+        prune: options.pruneBaseline,
       });
       writeBaseline(options.baseline, file);
       console.log(
@@ -509,6 +546,11 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
     return 1;
   } finally {
     globalThis.console = originalConsole;
+    if (previousAllowPrivateHosts === undefined) {
+      delete process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
+    } else {
+      process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS = previousAllowPrivateHosts;
+    }
   }
 };
 

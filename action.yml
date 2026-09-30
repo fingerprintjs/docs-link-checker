@@ -103,6 +103,8 @@ runs:
         LINK_CHECK_SAMPLE_RATE: ''
         LINK_CHECK_BASELINE: ''
         LINK_CHECK_HOST_CONCURRENCY: ''
+        # Private and local destinations are always blocked in the action (links can come from untrusted PRs)
+        LINK_CHECK_ALLOW_PRIVATE_HOSTS: ''
       run: |
         for input in "fail-on-broken=${INPUT_FAIL_ON_BROKEN}" "annotations=${INPUT_ANNOTATIONS}"; do
           case "${input#*=}" in
@@ -164,6 +166,8 @@ runs:
         LINK_CHECK_SAMPLE_RATE: ''
         LINK_CHECK_BASELINE: ''
         LINK_CHECK_HOST_CONCURRENCY: ''
+        # Private and local destinations are always blocked in the action (links can come from untrusted PRs)
+        LINK_CHECK_ALLOW_PRIVATE_HOSTS: ''
       run: |
         set -f
         # shellcheck disable=SC2086

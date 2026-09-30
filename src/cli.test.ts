@@ -40,9 +40,40 @@ describe("parseCliArgs()", () => {
     failOnBroken: true,
     baseline: undefined,
     updateBaseline: false,
+    pruneBaseline: false,
     outputDir: "results",
     json: false,
+    allowPrivateHosts: false,
   };
+
+  it("parses --allow-private-hosts and LINK_CHECK_ALLOW_PRIVATE_HOSTS, blocked by default", () => {
+    expect(optionsOf(["files", "a.md"]).allowPrivateHosts).toBe(false);
+    expect(optionsOf(["files", "a.md", "--allow-private-hosts"]).allowPrivateHosts).toBe(true);
+    expect(
+      optionsOf(["files", "a.md"], { LINK_CHECK_ALLOW_PRIVATE_HOSTS: "true" }).allowPrivateHosts,
+    ).toBe(true);
+    expect(
+      optionsOf(["files", "a.md", "--no-allow-private-hosts"], {
+        LINK_CHECK_ALLOW_PRIVATE_HOSTS: "true",
+      }).allowPrivateHosts,
+    ).toBe(false);
+    expect(() => parse(["files", "a.md"], { LINK_CHECK_ALLOW_PRIVATE_HOSTS: "yes" })).toThrow(
+      'Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "yes"',
+    );
+  });
+
+  it("parses --prune-baseline, only with --update-baseline and without sampling", () => {
+    expect(optionsOf(["files", "a.md", "--update-baseline", "--prune-baseline"])).toMatchObject({
+      updateBaseline: true,
+      pruneBaseline: true,
+    });
+    expect(() => parse(["files", "a.md", "--prune-baseline"])).toThrow(
+      "--prune-baseline can only be used with --update-baseline.",
+    );
+    expect(() =>
+      parse(["files", "a.md", "--update-baseline", "--prune-baseline", "--sample-rate", "0.5"]),
+    ).toThrow("--prune-baseline needs a full run");
+  });
 
   it("parses site with --include prefixes", () => {
     expect(
@@ -351,6 +382,57 @@ describe("runCli()", () => {
     expect(stdout).toBe("");
     const report = JSON.parse(readFileSync(join(dir, "local-files.json"), "utf8"));
     expect(report.summary).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
+  });
+
+  it("baseline: --update-baseline on a partial scope keeps entries of other files, --prune-baseline drops them", async () => {
+    const dir = tempDir();
+    const baselinePath = join(dir, "baseline.json");
+    const otherEntry = { href: "missing.md", page: "other/README.md", reason: "shared baseline" };
+    writeFileSync(baselinePath, JSON.stringify({ ignore: [otherEntry] }));
+    const update = (...extra: string[]) =>
+      runCli(
+        [
+          "files",
+          "docs/*.md",
+          "--baseline",
+          baselinePath,
+          "--update-baseline",
+          "--output-dir",
+          dir,
+          ...extra,
+        ],
+        io(),
+      );
+
+    expect(await update()).toBe(0);
+    expect(JSON.parse(readFileSync(baselinePath, "utf8"))).toEqual({
+      ignore: [otherEntry, { href: "../nope.md", page: "docs/guide.md" }],
+    });
+
+    expect(await update("--prune-baseline")).toBe(0);
+    expect(JSON.parse(readFileSync(baselinePath, "utf8"))).toEqual({
+      ignore: [{ href: "../nope.md", page: "docs/guide.md" }],
+    });
+  });
+
+  it("--allow-private-hosts sets the guard's environment variable for the run only", async () => {
+    // Set to "false" for this test (restored by `unstubEnvs`), the CLI must restore it after the run
+    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "false");
+    mocks.checkWebsite.mockImplementation(async () => {
+      expect(process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS).toBe("true");
+      return {
+        siteName: "localhost",
+        summary: { totalLinksToFix: 0 },
+        brokenLinks: [],
+        hashNotFound: [],
+        networkErrors: [],
+        couldNotCheck: [],
+        ignored: [],
+      };
+    });
+    expect(await runCli(["site", "http://localhost:3000", "--allow-private-hosts"], io())).toBe(0);
+    expect(mocks.checkWebsite).toHaveBeenCalledTimes(1);
+    expect(process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS).toBe("false");
   });
 
   it("baseline: returns 2 with a clear message for an invalid file", async () => {

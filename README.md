@@ -50,10 +50,12 @@ Common options (environment variables are the defaults):
 | `--sample-rate <0-1>` | `LINK_CHECK_SAMPLE_RATE` | Check only a deterministic share of the pages / README files / markdown files. Default `1`. |
 | `--fail-on-broken`, `--no-fail-on-broken` | `FAIL_ON_BROKEN_LINKS` (`false` to not fail) | Exit with code 1 when there are links to fix. Default: fail. |
 | `--baseline <file>` | `LINK_CHECK_BASELINE` | [Baseline file](#baseline-file) with known false positives and accepted broken links. |
-| `--update-baseline` | | Write the current failures to the baseline file (default `linkcheck.baseline.json`) and exit with code 0. |
+| `--update-baseline` | | Add the current failures to the baseline file (default `linkcheck.baseline.json`) and exit with code 0. Existing entries are kept. |
+| `--prune-baseline` | | With `--update-baseline`: also remove exact entries that no longer fail. Only on a full-scope run (see [Baseline file](#baseline-file)). |
 | `--output-dir <dir>` | | Where to save the JSON and HTML reports. Default `results`. |
 | `--json` | | Print the JSON report to stdout, logs go to stderr. |
 | `--host-concurrency <n>` | `LINK_CHECK_HOST_CONCURRENCY` | Max concurrent requests per host. Default `8`. |
+| `--allow-private-hosts` | `LINK_CHECK_ALLOW_PRIVATE_HOSTS=true` | Allow links to private and local addresses, blocked by default (see [Security](#security)). Only for trusted documents, e.g. a local dev server. |
 
 * `GH_TOKEN` (environment variable or `.env` file) is used to check GitHub links with the API. `github-org` requires it, the other commands fall back to a browser without it.
 * Exit codes: `0` no links to fix (or not failing), `1` links to fix or the check crashed, `2` invalid arguments or baseline file.
@@ -82,7 +84,19 @@ A baseline (ignore) file lists known false positives and accepted broken links. 
 * `reason` (optional): shown in the report.
 * Regular expressions are not supported on purpose (a `regex` key is rejected): the file is user input, and a pattern like `(a+)+$` could make the check hang ([ReDoS](https://owasp.org/www-community/attacks/Regular_expression_Denial_of_Service_-_ReDoS)). Globs are matched without regular expressions, in linear time.
 * A bare array of entries works too. Unknown keys and invalid entries fail with a message pointing to the entry (exit code `2`).
-* `--update-baseline` rewrites the file: `pattern` entries are kept, `href` entries are kept only if they still match a failure (all are kept when sampling), and new failures are added as `{ "href", "page" }` entries (add a `reason` by hand).
+* `--update-baseline` adds new failures as `{ "href", "page" }` entries (add a `reason` by hand) and keeps every existing entry: a run can check only part of what a shared baseline covers (`files docs/*.md`, `site --include`, sampling), so entries of other files are never lost.
+* `--update-baseline --prune-baseline` also removes exact `href` entries that no longer match a failure (fixed links), `pattern` entries are always kept. Only use it on a run that checks everything the baseline covers (all files and pages, no sampling, the CLI refuses it with `--sample-rate` below 1).
+
+## Security
+
+Links can come from untrusted documents, for example markdown changed in a pull request that the [GitHub Action](#github-action) checks. So the checker never sends requests to non-public destinations (SSRF protection):
+
+* Blocked: loopback (`127.0.0.0/8`, `::1`), unspecified (`0.0.0.0/8`, `::`), private (`10/8`, `172.16/12`, `192.168/16`), link-local (`169.254/16` incl. cloud metadata `169.254.169.254`, `fe80::/10`), CGNAT (`100.64/10`), unique local (`fc00::/7`), multicast, reserved ranges, their IPv4-mapped IPv6 forms, and `localhost` / `*.localhost`.
+* Every request and every redirect hop is checked: IP literals directly, host names by resolving them and blocking if any address is non-public. A blocked link is reported as "could not check" ("Destination not allowed (private or local address)"). It doesn't count as a link to fix and is never requested.
+* The fetch pass is the primary guard. Links it blocks are never re-checked in the browser. Playwright only re-checks links that passed it, and additionally aborts requests (navigation, redirects, page resources) to blocked IP literals and localhost names, without resolving names.
+* Limitation: `fetch` resolves the name again when connecting, so DNS rebinding (a name that answers with a public address first and a private one right after) is not prevented.
+* The action always blocks private destinations. Locally, `--allow-private-hosts` (or `LINK_CHECK_ALLOW_PRIVATE_HOSTS=true`) allows them, e.g. to check a dev server on `localhost`. Only use it with trusted documents.
+* Only run the action on `pull_request` (not `pull_request_target`), with the default read-only `GITHUB_TOKEN`: the checked documents come from the pull request.
 
 ## GitHub Action
 
