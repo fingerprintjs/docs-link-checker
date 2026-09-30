@@ -1,6 +1,7 @@
 import { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
 import { getMyOctokit } from "../github_client";
+import { getContentCached } from "../gh_cache";
 
 /**
  * Check if a GitHub branch/tree exists
@@ -58,7 +59,7 @@ export const checkGitHubTreeLink = async (
   // For paths, we need to check if the specific path exists
   // Get the content directly - this is more efficient than getting the whole tree
   const contentResult = await tryCatch(
-    octokit.repos.getContent({
+    getContentCached({
       owner,
       repo,
       ref: branch,

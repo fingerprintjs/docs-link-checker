@@ -1,5 +1,5 @@
 import { LinkCheckResult } from "../../types";
-import { getMyOctokit } from "../github_client";
+import { getRepoCached } from "../gh_cache";
 
 /**
  * Check if a repository exists
@@ -11,9 +11,8 @@ export const checkIfRepositoryExists = async (
   owner: string,
   repo: string
 ): Promise<LinkCheckResult> => {
-  const octokit = getMyOctokit();
   try {
-    await octokit.repos.get({ owner, repo });
+    await getRepoCached(owner, repo);
     return { ok: true, status: 200 };
   } catch (error: any) {
     return {

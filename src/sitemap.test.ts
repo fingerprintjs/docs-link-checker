@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getPagesFromSitemap, getWebsitePages, MAX_SITEMAP_DEPTH, SITEMAP_FETCH_CONCURRENCY } from "./sitemap";
+import { HostLimiter } from "./limiter";
+import { setHostLimiter } from "./utils";
 
 const sitemapIndex = (locs: string[]) =>
   `<?xml version="1.0" encoding="UTF-8"?>
@@ -42,6 +44,30 @@ describe("getWebsitePages()", () => {
   it("fails loudly when a nested sitemap cannot be fetched", async () => {
     stubSitemaps({ [`${SITE}/sitemap.xml`]: sitemapIndex([`${SITE}/sitemap-missing.xml`]) });
     await expect(getWebsitePages(SITE)).rejects.toThrow(`Could not fetch sitemap ${SITE}/sitemap-missing.xml: status 404`);
+  });
+
+  it("does not read the body of a failed sitemap response", async () => {
+    let failedBodyCancelled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        if (String(input) === `${SITE}/sitemap.xml`) {
+          return new Response(sitemapIndex([`${SITE}/sitemap-broken.xml`]), { status: 200 });
+        }
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new TextEncoder().encode("large error page"));
+          },
+          cancel() {
+            failedBodyCancelled = true;
+          },
+        });
+        return new Response(body, { status: 500 });
+      })
+    );
+
+    await expect(getWebsitePages(SITE)).rejects.toThrow("status 500");
+    expect(failedBodyCancelled).toBe(true);
   });
 
   it("follows nested sitemap indexes recursively and dedupes pages and sitemaps", async () => {
@@ -113,6 +139,49 @@ describe("getPagesFromSitemap()", () => {
 
     expect(pages).toHaveLength(children.length);
     expect(maxActive).toBe(SITEMAP_FETCH_CONCURRENCY);
+  });
+
+  it("also respects a per-host limit (LINK_CHECK_HOST_CONCURRENCY) lower than SITEMAP_FETCH_CONCURRENCY", async () => {
+    setHostLimiter(new HostLimiter(2));
+    try {
+      const children = Array.from({ length: 20 }, (_, i) => `${SITE}/child-${i}.xml`);
+      let active = 0;
+      let maxActive = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          const url = String(input);
+          active++;
+          maxActive = Math.max(maxActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          active--;
+          const body = url.endsWith("index.xml") ? sitemapIndex(children) : urlSet([url.replace(".xml", "")]);
+          return new Response(body, { status: 200 });
+        })
+      );
+
+      const pages = await getPagesFromSitemap(`${SITE}/index.xml`);
+
+      expect(pages).toHaveLength(children.length);
+      expect(maxActive).toBe(2);
+    } finally {
+      setHostLimiter(undefined);
+    }
+  });
+
+  it("retries a sitemap after a 429 with Retry-After", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        ++calls === 1
+          ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
+          : new Response(urlSet([`${SITE}/page`]), { status: 200 })
+      )
+    );
+
+    expect(await getPagesFromSitemap(`${SITE}/pages.xml`)).toEqual([`${SITE}/page`]);
+    expect(calls).toBe(2);
   });
 
   it("re-processes a sitemap index reached at a shallower depth than an earlier visit", async () => {

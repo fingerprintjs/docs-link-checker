@@ -1,7 +1,9 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
 import { getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
-import { chromium } from "playwright";
+import { PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
+import { fetchWithHostLimit } from "./http";
+import { incrementMetric } from "./run_context";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
 const isHttpUrl = (href: string) => {
@@ -53,12 +55,16 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   if (pageHTML) {
     pageContent = pageHTML;
   } else {
-    const response = await fetch(pageUrl, { headers: { "User-Agent": getRandomUserAgent() } });
-    if (!response.ok) {
-      console.error(`Could not fetch ${pageUrl}! status: ${response.status}`);
-      return [];
+    // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
+    // Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL, as before
+    const response = await fetchWithHostLimit(pageUrl, { headers: { "User-Agent": getRandomUserAgent() } }, async (response) =>
+      response.ok ? response.text() : ""
+    );
+    if (response.status < 200 || response.status >= 300) {
+      // Thrown (not an empty list), so the page shows up in the extraction errors instead of silently having no links
+      throw new Error(`Could not fetch ${pageUrl}, status: ${response.status}`);
     }
-    pageContent = await response.text();
+    pageContent = response.data;
   }
 
   // Parse links from page HTML
@@ -112,6 +118,8 @@ export const getLinksFromPages = async ({
       return usePlaywright ? parseLinksFromPageWithPlaywright(page) : parseLinksFromPage(page);
     },
     concurrencyLimit: usePlaywright ? PLAYWRIGHT_CONCURRENCY_LIMIT : undefined,
+    // With fetch, tasks can wait for a per-host slot, every request has its own timeout instead
+    taskTimeout: usePlaywright ? undefined : null,
   });
 
   // Flatten and filter results if a link filter is provided
@@ -137,56 +145,48 @@ export const getLinksFromPages = async ({
 };
 
 /**
- * Not used right now, might be useful if you need to parse links from a client-rendered page
+ * Not used right now, might be useful if you need to parse links from a client-rendered page.
+ * Uses the shared browser (see `withPage`), call `closeBrowser()` when done if you use it outside of a run.
  * @param pageUrl
  * @returns
  */
 export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise<Link[]> => {
-  // Launch the browser
-  const browser = await chromium.launch({
-    headless: true,
-  });
-
   try {
-    // Create a new page
-    const page = await browser.newPage();
+    return await withPage(async (page) => {
+      incrementMetric("playwrightNavigations");
+      // Navigate to the URL (heavy resources are blocked, the content is waited for below)
+      const response = await page.goto(pageUrl, {
+        timeout: PAGE_OPERATION_TIMEOUT,
+        waitUntil: "domcontentloaded",
+      });
 
-    // Navigate to the URL
-    const response = await page.goto(pageUrl, {
-      timeout: 30000, // 30 second timeout
+      if (!response?.ok()) {
+        console.error(`Could not fetch ${pageUrl} status: ${response?.status()}`);
+        return [];
+      }
+
+      await page.waitForSelector(".markdown-body");
+
+      // Extract all links using page.evaluate
+      const links = await page.evaluate(
+        ([pageUrl]) => {
+          // Get all 'a' elements (but not anchor icons) inside article content
+          const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
+
+          // Convert NodeList to array and map to desired format
+          return Array.from(anchors).map((anchor) => ({
+            page: pageUrl,
+            href: anchor.href,
+            text: anchor.textContent?.trim() ?? "",
+          }));
+        },
+        [pageUrl]
+      );
+
+      return filterOutIrrelevantLinks(links);
     });
-
-    if (!response?.ok()) {
-      console.error(`Could not fetch ${pageUrl} status: ${response?.status()}`);
-      return [];
-    }
-
-    await page.waitForSelector(".markdown-body");
-
-    // Extract all links using page.evaluate
-    const links = await page.evaluate(
-      ([pageUrl]) => {
-        // Get all 'a' elements (but not anchor icons) inside article content
-        const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
-
-        // Convert NodeList to array and map to desired format
-        return Array.from(anchors).map((anchor) => ({
-          page: pageUrl,
-          href: anchor.href,
-          text: anchor.textContent?.trim() ?? "",
-        }));
-      },
-      [pageUrl]
-    );
-
-    return filterOutIrrelevantLinks(links);
   } catch (error) {
     console.error("Error occurred while scraping:", error);
     throw error;
-  } finally {
-    // Always close the browser
-    await browser.close();
   }
 };
-
-

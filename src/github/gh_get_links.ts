@@ -1,10 +1,14 @@
 import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { fetchWithHostLimit } from "../http";
 import { Link } from "../types";
 import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";
 import { filterOutIrrelevantLinks } from "../page";
 import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
+import { getRepoCached } from "./gh_cache";
+import { withRun } from "../run";
+import { timePhase } from "../run_context";
 
 export interface MdFile {
   sourcePath: string;
@@ -30,11 +34,8 @@ async function getOrgRepos(orgName: string) {
 
 async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFile[]> {
   const octokit = getMyOctokit();
-  // Get the default branch
-  const { data: repoData } = await octokit.repos.get({
-    owner,
-    repo,
-  });
+  // Get the default branch (cached, links to the repository reuse the response)
+  const { data: repoData } = await getRepoCached(owner, repo);
   const defaultBranch = repoData.default_branch;
 
   // Get the complete tree with all files
@@ -89,17 +90,22 @@ export async function getReadmesFromOrg(orgName: string): Promise<MdFile[]> {
   return sampleItems({ items: readmes, key: (readme) => readme.sourcePath, label: "README files" });
 }
 
-async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
+/** Downloads README files (limited per host) and extracts their links */
+export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
   const { results, errors } = await parallelProcess({
     items: files,
+    // Downloads wait for a per-host slot (all files are on raw.githubusercontent.com),
+    // every request has its own timeout instead of the task timeout
+    taskTimeout: null,
     processFn: async (file) => {
-      const response = await fetch(file.downloadUrl);
-      if (!response.ok) {
+      const response = await fetchWithHostLimit(file.downloadUrl, {}, async (response) =>
+        response.ok ? response.text() : ""
+      );
+      if (response.status < 200 || response.status >= 300) {
         throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);
       }
-      const markdown = await response.text();
-      const links = extractLinksFromMarkdown(markdown, file.sourcePath);
+      const links = extractLinksFromMarkdown(response.data, file.sourcePath);
       return links;
     },
   });
@@ -114,27 +120,32 @@ async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   return links;
 }
 
-export async function checkReadmesInGithubOrg(org: string) {
-  const startTime = performance.now();
-  await checkGitHubRateLimit(getMyOctokit());
+/**
+ * Checks links in README files of all public repositories of a GitHub organization.
+ * Runs as a single run (see `withRun`): GitHub API responses are cached, the browser is closed at the end.
+ */
+export const checkReadmesInGithubOrg = (org: string) =>
+  withRun(async () => {
+    const startTime = performance.now();
+    await checkGitHubRateLimit(getMyOctokit());
 
-  const fingerprintPublicReadmes = await getReadmesFromOrg(org);
+    const fingerprintPublicReadmes = await timePhase("List README files", () => getReadmesFromOrg(org));
 
-  const links = await getReadmeLinks(fingerprintPublicReadmes);
-  const filteredLinks = filterOutIrrelevantLinks(links);
+    const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
+    const filteredLinks = filterOutIrrelevantLinks(links);
 
-  const { results, errors } = await checkLinks({
-    links: filteredLinks,
-    verbose: true,
-    fetchConcurrencyLimit: 20,
+    const { results, errors } = await checkLinks({
+      links: filteredLinks,
+      verbose: true,
+      fetchConcurrencyLimit: 20,
+    });
+
+    const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
+
+    saveReport(report);
+    console.log(report.summary);
+
+    console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
+
+    return report;
   });
-
-  const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
-
-  saveReport(report);
-  console.log(report.summary);
-
-  console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
-
-  return report;
-}

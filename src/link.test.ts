@@ -17,7 +17,14 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     selectors: [] as string[],
     // HTML the fake browser "renders"
     html: "",
+    // HTML per navigated URL (hash included), falls back to `html`
+    htmlByUrl: {} as Record<string, string>,
     status: 200,
+    // Simulated navigation time
+    gotoDelayMs: 0,
+    // Timeouts passed to `goto` and set as page defaults
+    gotoTimeouts: [] as Array<number | undefined>,
+    pageTimeouts: [] as number[],
   },
 }));
 
@@ -30,36 +37,60 @@ vi.mock("playwright", () => ({
   chromium: {
     launch: async () => ({
       close: async () => {},
+      on: () => {},
+      isConnected: () => true,
       newContext: async () => ({
-        newPage: async () => ({
-          goto: async (url: string) => {
-            playwrightState.visited.push(url);
-            return {
-              status: () => playwrightState.status,
-              statusText: () => "",
-              text: async () => "",
-            };
-          },
-          locator: (selector: string) => ({
-            first: () => ({
-              waitFor: async () => {
-                playwrightState.selectors.push(selector);
-                // Throws for invalid selectors, like Playwright would
-                if (cheerio.load(playwrightState.html)(selector).length === 0) {
-                  const error = new Error("Timeout");
-                  error.name = "TimeoutError";
-                  throw error;
-                }
-              },
+        route: async () => {},
+        close: async () => {},
+        newPage: async () => {
+          let currentUrl = "";
+          return {
+            isClosed: () => false,
+            setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
+            setDefaultNavigationTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
+            goto: async (url: string, options?: { timeout?: number }) => {
+              currentUrl = url;
+              playwrightState.visited.push(url);
+              playwrightState.gotoTimeouts.push(options?.timeout);
+              if (playwrightState.gotoDelayMs > 0) {
+                await new Promise((resolve) => setTimeout(resolve, playwrightState.gotoDelayMs));
+              }
+              return {
+                status: () => playwrightState.status,
+                statusText: () => "",
+                text: async () => "",
+              };
+            },
+            locator: (selector: string) => ({
+              first: () => ({
+                waitFor: async () => {
+                  playwrightState.selectors.push(selector);
+                  // Throws for invalid selectors, like Playwright would
+                  const html = playwrightState.htmlByUrl[currentUrl] ?? playwrightState.html;
+                  if (cheerio.load(html)(selector).length === 0) {
+                    const error = new Error("Timeout");
+                    error.name = "TimeoutError";
+                    throw error;
+                  }
+                },
+              }),
             }),
-          }),
-        }),
+          };
+        },
       }),
     }),
   },
 }));
 
-import { checkLinks, checkLinkWithFetch, checkLinkWithPlaywright, shouldRecheckWithPlaywright } from "./link";
+import {
+  checkLinks,
+  checkLinkWithFetch,
+  checkLinkWithPlaywright,
+  interleaveByHost,
+  shouldRecheckWithPlaywright,
+} from "./link";
+import { withRun } from "./run";
+import { getRunContext } from "./run_context";
 
 const hashesHtml = readFileSync(join(__dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -79,6 +110,10 @@ beforeEach(() => {
   playwrightState.visited = [];
   playwrightState.selectors = [];
   playwrightState.html = "<html><body></body></html>";
+  playwrightState.htmlByUrl = {};
+  playwrightState.gotoDelayMs = 0;
+  playwrightState.gotoTimeouts = [];
+  playwrightState.pageTimeouts = [];
   playwrightState.status = 200;
   checkLinkWithGithubApiMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -344,5 +379,242 @@ describe("checkLinkWithPlaywright() hash check", () => {
     const result = await checkLinkWithPlaywright("https://example.com/docs#it's-%22missing%22");
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+});
+
+describe("checkLinks() grouping by page (URL without hash)", () => {
+  it("fetches a page once for all its hashes and checks every hash against the same HTML", async () => {
+    const fetchMock = stubFetch(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return new Response(hashesHtml, { status: 200 });
+    });
+    const hrefs = ["#version-1.2.3", "#legacy-anchor", "#caf%C3%A9", "#does-not-exist", ""].map(
+      (hash) => `https://example.com/docs${hash}`
+    );
+    // Every href appears twice (on different source pages)
+    const links = [...hrefs, ...hrefs].map((href, i) => link(href, `https://example.com/source-${i}`));
+
+    const { results, errors } = await checkLinks({ links });
+
+    expect(errors).toHaveLength(0);
+    // One GET for the page, also used by the link without a hash (no extra HEAD request)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("GET");
+    expect(results).toHaveLength(10);
+    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
+    expect(resultByHref.get("https://example.com/docs#version-1.2.3")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/docs#caf%C3%A9")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/docs")).toEqual({ ok: true, status: 200 });
+    // Re-checked with Playwright (empty page), still not found
+    expect(resultByHref.get("https://example.com/docs#does-not-exist")).toEqual({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+    // Every link keeps its own source page
+    expect(new Set(results.map((r) => r.page)).size).toBe(10);
+  });
+
+  it("uses HEAD for pages that are never linked with a hash", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+
+    await checkLinks({ links: [link("https://example.com/a"), link("https://example.com/b")] });
+
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "HEAD"]);
+  });
+
+  it("reports a broken page for every hash pointing to it (one request)", async () => {
+    const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
+    const links = ["#a", "#b", "#c"].map((hash) => link(`https://example.com/gone${hash}`));
+
+    const { results } = await checkLinks({ links });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => r.result)).toEqual(
+      Array(3).fill(expect.objectContaining({ ok: false, error: "broken link", status: 404 }))
+    );
+  });
+
+  it("navigates once with Playwright for all hashes of a page and checks each hash in the same DOM", async () => {
+    // Client-side rendered page: the server HTML has no anchors
+    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+    playwrightState.html = '<html><body><h2 id="one">One</h2><a name="two"></a></body></html>';
+    const links = ["#one", "#two", "#three"].map((hash) => link(`https://example.com/spa${hash}`));
+
+    const { results } = await checkLinks({ links });
+
+    // One shared navigation, plus a dedicated one for the hash missing in the shared DOM
+    expect(playwrightState.visited).toEqual(["https://example.com/spa#one", "https://example.com/spa#three"]);
+    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
+    expect(resultByHref.get("https://example.com/spa#one")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/spa#two")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/spa#three")).toEqual({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+  });
+
+  it("checks GitHub code line links to the same file with one navigation", async () => {
+    playwrightState.html = '<html><body><div data-line-number="5"></div><div data-line-number="6"></div></body></html>';
+    const file = "https://github.com/owner/repo/blob/main/a.js";
+    const links = ["#L5", "#L6", "#L5-L6", "#L99"].map((hash) => link(`${file}${hash}`));
+
+    const { results } = await checkLinks({ links });
+
+    expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
+    // Found line numbers share one navigation, the missing one gets a dedicated navigation
+    expect(playwrightState.visited).toEqual([`${file}#L5`, `${file}#L99`]);
+    expect(results.filter((r) => r.result.ok).map((r) => r.href)).toEqual([
+      `${file}#L5`,
+      `${file}#L6`,
+      `${file}#L5-L6`,
+    ]);
+    expect(results.find((r) => r.href === `${file}#L99`)?.result).toMatchObject({ error: "hash not found" });
+  });
+
+  it("navigates once per page with Playwright", async () => {
+    stubFetch(() => new Response(null, { status: 403 }));
+    const links = [
+      link("https://blocked.example.com/a"),
+      link("https://blocked.example.com/a#x"),
+      link("https://blocked.example.com/b"),
+    ];
+
+    const { results } = await checkLinks({ links });
+
+    // One navigation per page, plus a dedicated one for `#x` (not in the shared DOM of page `a`)
+    expect(playwrightState.visited).toEqual([
+      "https://blocked.example.com/a",
+      "https://blocked.example.com/b",
+      "https://blocked.example.com/a#x",
+    ]);
+    expect(results).toHaveLength(3);
+  });
+});
+
+describe("checkLinks() Playwright hash fallback", () => {
+  it("re-checks a hash missing in the shared DOM with a dedicated navigation (SPA tabs)", async () => {
+    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+    // The SPA renders a different tab per hash
+    playwrightState.htmlByUrl = {
+      "https://example.com/app#tab-a": '<div id="tab-a"></div>',
+      "https://example.com/app#tab-b": '<div id="tab-b"></div>',
+    };
+    const links = ["#tab-a", "#tab-b", "#missing"].map((hash) => link(`https://example.com/app${hash}`));
+
+    const { results, errors } = await withRun(async () => {
+      const checked = await checkLinks({ links });
+      expect(getRunContext()!.metrics.counters).toMatchObject({ playwrightNavigations: 3, playwrightHashFallbacks: 2 });
+      return checked;
+    });
+
+    expect(errors).toHaveLength(0);
+    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
+    expect(resultByHref.get("https://example.com/app#tab-a")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/app#tab-b")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/app#missing")).toEqual({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+    expect(playwrightState.visited).toEqual([
+      "https://example.com/app#tab-a",
+      "https://example.com/app#tab-b",
+      "https://example.com/app#missing",
+    ]);
+  });
+
+  it("does not time out a page group whose fallback navigations together take longer than the task timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+      // Every tab is only rendered on its own URL: 1 shared navigation + 11 fallbacks, 5 page slots,
+      // 25s per navigation (each within its own 30s timeout) -> about 100s in total, more than TASK_TIMEOUT (80s)
+      playwrightState.gotoDelayMs = 25_000;
+      const hrefs = Array.from({ length: 12 }, (_, i) => `https://example.com/app#tab-${i}`);
+      playwrightState.htmlByUrl = Object.fromEntries(hrefs.map((href, i) => [href, `<div id="tab-${i}"></div>`]));
+
+      const promise = checkLinks({ links: hrefs.map((href) => link(href)) });
+      await vi.advanceTimersByTimeAsync(300_000);
+      const { results, errors } = await promise;
+
+      expect(errors).toHaveLength(0);
+      expect(results).toHaveLength(12);
+      expect(results.every((r) => r.result.ok)).toBe(true);
+      expect(playwrightState.visited).toHaveLength(12);
+      // Every navigation is bounded on its own
+      expect(playwrightState.gotoTimeouts).toEqual(Array(12).fill(30000));
+      expect(new Set(playwrightState.pageTimeouts)).toEqual(new Set([30000]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not add navigations when every hash is in the shared DOM", async () => {
+    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+    playwrightState.html = '<div id="a"></div><div id="b"></div>';
+
+    await checkLinks({ links: [link("https://example.com/p#a"), link("https://example.com/p#b")] });
+
+    expect(playwrightState.visited).toEqual(["https://example.com/p#a"]);
+  });
+});
+
+describe("interleaveByHost() with uneven hosts", () => {
+  it("keeps the round-robin order when hosts run out at different times", () => {
+    const hrefs = [
+      "https://a.com/1",
+      "https://b.com/1",
+      "https://a.com/2",
+      "https://c.com/1",
+      "https://a.com/3",
+      "https://c.com/2",
+      "https://a.com/4",
+    ];
+    expect(interleaveByHost(hrefs.map((href) => ({ href }))).map((item) => item.href)).toEqual([
+      "https://a.com/1",
+      "https://b.com/1",
+      "https://c.com/1",
+      "https://a.com/2",
+      "https://c.com/2",
+      "https://a.com/3",
+      "https://a.com/4",
+    ]);
+  });
+
+  it("visits every item once (many single-link hosts and one big host)", () => {
+    // Generous bound to avoid CI flakiness: the old O(hosts x links) version takes far longer than 5s here
+    // Scanning exhausted hosts would be 10k hosts x 100k rounds = 1e9 steps
+    const items = [
+      ...Array.from({ length: 100_000 }, (_, i) => ({ href: `https://big.example.com/${i}` })),
+      ...Array.from({ length: 10_000 }, (_, i) => ({ href: `https://host-${i}.example.com/` })),
+    ];
+    const start = performance.now();
+    const result = interleaveByHost(items);
+    expect(performance.now() - start).toBeLessThan(5000);
+
+    expect(result).toHaveLength(items.length);
+    expect(new Set(result).size).toBe(items.length);
+    // First round: one item of every host, then only the big host is left
+    expect(result[0].href).toBe("https://big.example.com/0");
+    expect(result[1].href).toBe("https://host-0.example.com/");
+    expect(result[10_001].href).toBe("https://big.example.com/1");
+    expect(result.at(-1)!.href).toBe("https://big.example.com/99999");
+  });
+});
+
+describe("interleaveByHost()", () => {
+  it("orders items round-robin by host, keeping the order within a host", () => {
+    const items = ["https://a.com/1", "https://a.com/2", "https://a.com/3", "https://b.com/1", "https://c.com/1"].map(
+      (href) => ({ href })
+    );
+    expect(interleaveByHost(items).map((item) => item.href)).toEqual([
+      "https://a.com/1",
+      "https://b.com/1",
+      "https://c.com/1",
+      "https://a.com/2",
+      "https://a.com/3",
+    ]);
   });
 });

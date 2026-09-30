@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { getRandomUserAgent, log } from "./utils";
+import { fetchWithHostLimit } from "./http";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;
@@ -34,6 +35,26 @@ const createConcurrencyLimiter = (max: number) => {
 
 const limitSitemapFetch = createConcurrencyLimiter(SITEMAP_FETCH_CONCURRENCY);
 
+// Sitemaps can be large, give them more time than a regular page
+const SITEMAP_FETCH_TIMEOUT = 60000;
+
+const isSuccess = (status: number) => status >= 200 && status < 300;
+
+/**
+ * Fetches a sitemap: at most `SITEMAP_FETCH_CONCURRENCY` at the same time overall, and within the per-host limit
+ * (`LINK_CHECK_HOST_CONCURRENCY`, with 429 Retry-After handling and redirects, see `fetchWithHostLimit`).
+ * @returns the status and the body (empty if `readBody` is false or the response is not successful)
+ */
+const fetchSitemap = (sitemapUrl: string, readBody = true) =>
+  limitSitemapFetch(() =>
+    fetchWithHostLimit(
+      sitemapUrl,
+      { headers: { "User-Agent": getRandomUserAgent() }, timeoutMs: SITEMAP_FETCH_TIMEOUT },
+      // Failed responses are not read, fetchWithHostLimit cancels their body
+      async (response) => (readBody && response.ok ? response.text() : "")
+    )
+  );
+
 /**
  * Retrieves all the pages from a website by fetching the sitemap and parsing it.
  *
@@ -63,21 +84,13 @@ export const getWebsitePages = async (url: string, verbose = false) => {
  * @return {Promise<string[]>} - A promise that resolves to an array of sitemap URLs.
  */
 export const getWebsiteSitemaps = async (url: string, verbose = false): Promise<string[]> => {
-  const sitemapExists = (
-    await fetch(`${url}/sitemap.xml`, {
-      headers: { "User-Agent": getRandomUserAgent() },
-    })
-  ).ok;
+  const sitemapExists = isSuccess((await fetchSitemap(`${url}/sitemap.xml`, false)).status);
   if (sitemapExists) {
     log("Sitemap.xml exists, parsing pages from it", verbose);
     return [`${url}/sitemap.xml`];
   }
 
-  const sitemapIndex = await (
-    await fetch(`${url}/sitemap-index.xml`, {
-      headers: { "User-Agent": getRandomUserAgent() },
-    })
-  ).text();
+  const sitemapIndex = (await fetchSitemap(`${url}/sitemap-index.xml`)).data;
   if (!sitemapIndex) {
     console.error("No sitemap.xml or sitemap-index.xml found");
     return [];
@@ -132,14 +145,12 @@ export const getPagesFromSitemap = async (
   visitedSitemaps.set(sitemapUrl, depth);
 
   // Only the fetch is limited (not the recursion), so nested sitemaps can't deadlock waiting for their parents
-  const response = await limitSitemapFetch(async () => {
-    const sitemapResponse = await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } });
-    // Fail loudly, silently skipping a sitemap would skip all of its pages
-    if (!sitemapResponse.ok) {
-      throw new Error(`Could not fetch sitemap ${sitemapUrl}: status ${sitemapResponse.status}`);
-    }
-    return sitemapResponse.text();
-  });
+  const sitemapResponse = await fetchSitemap(sitemapUrl);
+  // Fail loudly, silently skipping a sitemap would skip all of its pages
+  if (!isSuccess(sitemapResponse.status)) {
+    throw new Error(`Could not fetch sitemap ${sitemapUrl}: status ${sitemapResponse.status}`);
+  }
+  const response = sitemapResponse.data;
   const $ = cheerio.load(response, { xmlMode: true });
 
   if ($("sitemapindex").length > 0) {

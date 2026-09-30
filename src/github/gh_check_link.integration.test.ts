@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { checkLinkWithGithubApi } from "./gh_check_link";
+import { closeBrowser } from "../browser";
+
+// Checks outside of a run share one browser, close it when done
+afterAll(closeBrowser);
 
 describe("checkLinkWithGithubApi", () => {
   it("should handle GitHub issue links", async () => {

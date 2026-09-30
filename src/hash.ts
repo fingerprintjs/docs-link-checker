@@ -63,32 +63,58 @@ export const getHashSelectors = (hash: string, url: string): string[] => {
 };
 
 /**
+ * All the values in a (server-rendered) page a hash can point to. Built once per page, so many hashes
+ * pointing to the same page can be checked without parsing the HTML again.
+ */
+export type AnchorIndex = {
+  /** `id` attributes of any element */
+  ids: Set<string>;
+  /** `name` attributes of `<a>` elements */
+  names: Set<string>;
+  /** `href` attributes */
+  hrefs: Set<string>;
+  /** `data-line-number` attributes (GitHub code views) */
+  lineNumbers: Set<string>;
+};
+
+export const buildAnchorIndex = (html: string): AnchorIndex => {
+  const index: AnchorIndex = { ids: new Set(), names: new Set(), hrefs: new Set(), lineNumbers: new Set() };
+  const $ = cheerio.load(html);
+  $("[id], a[name], [href], [data-line-number]").each((_, element) => {
+    const { id, name, href } = element.attribs;
+    const lineNumber = element.attribs["data-line-number"];
+    if (id !== undefined) index.ids.add(id);
+    if (name !== undefined && element.tagName === "a") index.names.add(name);
+    if (href !== undefined) index.hrefs.add(href);
+    if (lineNumber !== undefined) index.lineNumbers.add(lineNumber);
+  });
+  return index;
+};
+
+/**
+ * Checks if the hash points to an element in the anchor index of a page.
+ * Compares attribute values directly instead of building selectors, so no hash value can break the check.
+ * @param index - anchor index of the page, see `buildAnchorIndex`
+ * @param hash - the hash, with or without the leading `#`
+ * @param url - the full URL (used to detect GitHub code line links)
+ */
+export const isHashInAnchorIndex = (index: AnchorIndex, hash: string, url: string): boolean => {
+  const variants = getHashVariants(hash);
+  if (variants.some((variant) => index.ids.has(variant) || index.names.has(variant))) {
+    return true;
+  }
+  if (variants.some((variant) => index.hrefs.has(`#${variant}`) || index.hrefs.has(`#${variant.toLowerCase()}`))) {
+    return true;
+  }
+  const lineNumber = getGithubLineNumber(hash, url);
+  return lineNumber !== undefined && index.lineNumbers.has(lineNumber);
+};
+
+/**
  * Checks if the hash points to an element in the (server-rendered) HTML.
- * Compares attributes directly instead of building selectors, so no hash value can break the check.
  * @param html - page HTML
  * @param hash - the hash, with or without the leading `#`
  * @param url - the full URL (used to detect GitHub code line links)
  */
-export const isHashPresentInHtml = (html: string, hash: string, url: string): boolean => {
-  const variants = getHashVariants(hash);
-  const ids = new Set(variants);
-  const hrefs = new Set(variants.flatMap((variant) => [`#${variant}`, `#${variant.toLowerCase()}`]));
-  const lineNumber = getGithubLineNumber(hash, url);
-
-  const $ = cheerio.load(html);
-  let found = false;
-  $("[id], a[name], [href], [data-line-number]").each((_, element) => {
-    const { id, name, href } = element.attribs;
-    if (
-      (id !== undefined && ids.has(id)) ||
-      (name !== undefined && element.tagName === "a" && ids.has(name)) ||
-      (href !== undefined && hrefs.has(href)) ||
-      (lineNumber !== undefined && element.attribs["data-line-number"] === lineNumber)
-    ) {
-      found = true;
-      return false; // stop iterating
-    }
-    return undefined;
-  });
-  return found;
-};
+export const isHashPresentInHtml = (html: string, hash: string, url: string): boolean =>
+  isHashInAnchorIndex(buildAnchorIndex(html), hash, url);
