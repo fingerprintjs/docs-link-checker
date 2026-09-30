@@ -17,7 +17,7 @@ import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh
 import { AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
 import { withPage } from "./browser";
 import { withTimeout } from "./limiter";
-import { fetchWithHostLimit } from "./http";
+import { discardBody, fetchWithHostLimit } from "./http";
 import { incrementMetric, timePhase } from "./run_context";
 import { withRun } from "./run";
 
@@ -351,19 +351,13 @@ export const fetchPage = async (
         // Some servers don't support (or block) HEAD requests, retry once with GET
         if (!needBody && HEAD_FALLBACK_STATUS_CODES.includes(response.status)) {
           log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-          await response.body?.cancel();
+          await discardBody(response);
           return request("GET");
         }
         return response;
       },
-      async (response) => {
-        if (needBody || !OKAY_STATUS_CODES.includes(response.status)) {
-          return response.text();
-        }
-        // Don't download the body when it's not needed (it might be a large file)
-        await response.body?.cancel();
-        return "";
-      }
+      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead
+      async (response) => (needBody || !OKAY_STATUS_CODES.includes(response.status) ? response.text() : "")
     );
 
     // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
@@ -552,12 +546,36 @@ const getPlaywrightHashResult = async (
 /**
  * Checks URLs pointing to the same page (same URL without hash) with a single Playwright navigation:
  * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
+ * Some pages render different content per hash (e.g. SPA tabs), so a hash not found in the shared DOM gets
+ * a dedicated navigation to its exact URL before it is reported as "hash not found".
  * @returns results by URL
  */
 export async function checkUrlsOnPageWithPlaywright(
   urls: string[],
   verbose = false,
   headless = true
+): Promise<Map<string, LinkCheckResult>> {
+  const results = await checkUrlsInOneNavigation(urls, verbose, headless);
+  const [firstUrl] = urls;
+  const notFound = urls.filter((url) => {
+    const result = results.get(url);
+    return url !== firstUrl && result?.ok === false && result.error === "hash not found";
+  });
+  // After the shared navigation (its page slot is released), so the fallbacks can't deadlock waiting for slots
+  await Promise.all(
+    notFound.map(async (url) => {
+      incrementMetric("playwrightHashFallbacks");
+      const fallback = await checkUrlsInOneNavigation([url], verbose, headless);
+      results.set(url, fallback.get(url)!);
+    })
+  );
+  return results;
+}
+
+async function checkUrlsInOneNavigation(
+  urls: string[],
+  verbose: boolean,
+  headless: boolean
 ): Promise<Map<string, LinkCheckResult>> {
   const [firstUrl] = urls;
   const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));

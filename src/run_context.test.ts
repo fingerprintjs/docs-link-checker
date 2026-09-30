@@ -47,7 +47,7 @@ describe("run context", () => {
   it("formats metrics", () => {
     expect(
       formatRunMetrics({ counters: { pagesFetched: 3 }, phases: [{ name: "Extract links", ms: 1500 }] }, 2000)
-    ).toBe("Run metrics:\n  Pages fetched (HTTP requests): 3\n  Phases:\n    Extract links: 1.5s\n  Total: 2.0s");
+    ).toBe("Run metrics:\n  Page fetches (operations, incl. 429 retries): 3\n  Phases:\n    Extract links: 1.5s\n  Total: 2.0s");
   });
 });
 

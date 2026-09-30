@@ -1,5 +1,6 @@
 import { beginBrowserRun, endBrowserRun } from "./browser";
 import { createRunContext, formatRunMetrics, getRunContext, runInContext } from "./run_context";
+import { getHostLimiter } from "./utils";
 
 /**
  * Runs `fn` as a link-check run: in-memory caches (GitHub API responses...) and metrics live for the duration of the run.
@@ -11,6 +12,9 @@ export const withRun = async <T>(fn: () => Promise<T>): Promise<T> => {
   if (getRunContext()) {
     return fn();
   }
+  // Fail fast on invalid configuration (e.g. LINK_CHECK_HOST_CONCURRENCY), before any work. Otherwise the error would
+  // be thrown inside individual checks and reported as broken links or page extraction errors.
+  getHostLimiter();
   const context = createRunContext();
   return runInContext(context, async () => {
     const startTime = performance.now();

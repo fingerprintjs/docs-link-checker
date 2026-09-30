@@ -30,10 +30,14 @@ export const METRICS = {
   totalLinks: "Total links",
   uniqueUrls: "Unique URLs",
   uniquePages: "Unique pages (URLs without hash)",
-  pagesFetched: "Pages fetched (HTTP requests)",
+  // One per host-limited fetch operation (a 429 retry is a new one), a HEAD with GET fallback or redirects count once
+  pagesFetched: "Page fetches (operations, incl. 429 retries)",
   playwrightNavigations: "Playwright navigations",
+  // A hash missing in the shared DOM of its page is re-checked with a dedicated navigation (included above)
+  playwrightHashFallbacks: "Playwright hash fallbacks",
   browserLaunches: "Browser launches",
-  githubApiRequests: "GitHub API requests (cached)",
+  // Cache misses, Octokit's own retries are not counted
+  githubApiRequests: "GitHub API calls (cache misses)",
   githubCacheHits: "GitHub API cache hits",
 } as const;
 

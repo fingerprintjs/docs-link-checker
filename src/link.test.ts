@@ -17,6 +17,8 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     selectors: [] as string[],
     // HTML the fake browser "renders"
     html: "",
+    // HTML per navigated URL (hash included), falls back to `html`
+    htmlByUrl: {} as Record<string, string>,
     status: 200,
   },
 }));
@@ -35,30 +37,35 @@ vi.mock("playwright", () => ({
       newContext: async () => ({
         route: async () => {},
         close: async () => {},
-        newPage: async () => ({
-          isClosed: () => false,
-          goto: async (url: string) => {
-            playwrightState.visited.push(url);
-            return {
-              status: () => playwrightState.status,
-              statusText: () => "",
-              text: async () => "",
-            };
-          },
-          locator: (selector: string) => ({
-            first: () => ({
-              waitFor: async () => {
-                playwrightState.selectors.push(selector);
-                // Throws for invalid selectors, like Playwright would
-                if (cheerio.load(playwrightState.html)(selector).length === 0) {
-                  const error = new Error("Timeout");
-                  error.name = "TimeoutError";
-                  throw error;
-                }
-              },
+        newPage: async () => {
+          let currentUrl = "";
+          return {
+            isClosed: () => false,
+            goto: async (url: string) => {
+              currentUrl = url;
+              playwrightState.visited.push(url);
+              return {
+                status: () => playwrightState.status,
+                statusText: () => "",
+                text: async () => "",
+              };
+            },
+            locator: (selector: string) => ({
+              first: () => ({
+                waitFor: async () => {
+                  playwrightState.selectors.push(selector);
+                  // Throws for invalid selectors, like Playwright would
+                  const html = playwrightState.htmlByUrl[currentUrl] ?? playwrightState.html;
+                  if (cheerio.load(html)(selector).length === 0) {
+                    const error = new Error("Timeout");
+                    error.name = "TimeoutError";
+                    throw error;
+                  }
+                },
+              }),
             }),
-          }),
-        }),
+          };
+        },
       }),
     }),
   },
@@ -71,6 +78,8 @@ import {
   interleaveByHost,
   shouldRecheckWithPlaywright,
 } from "./link";
+import { withRun } from "./run";
+import { getRunContext } from "./run_context";
 
 const hashesHtml = readFileSync(join(__dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -90,6 +99,7 @@ beforeEach(() => {
   playwrightState.visited = [];
   playwrightState.selectors = [];
   playwrightState.html = "<html><body></body></html>";
+  playwrightState.htmlByUrl = {};
   playwrightState.status = 200;
   checkLinkWithGithubApiMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -419,7 +429,8 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const { results } = await checkLinks({ links });
 
-    expect(playwrightState.visited).toEqual(["https://example.com/spa#one"]);
+    // One shared navigation, plus a dedicated one for the hash missing in the shared DOM
+    expect(playwrightState.visited).toEqual(["https://example.com/spa#one", "https://example.com/spa#three"]);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     expect(resultByHref.get("https://example.com/spa#one")).toEqual({ ok: true, status: 200 });
     expect(resultByHref.get("https://example.com/spa#two")).toEqual({ ok: true, status: 200 });
@@ -438,7 +449,8 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     const { results } = await checkLinks({ links });
 
     expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
-    expect(playwrightState.visited).toEqual([`${file}#L5`]);
+    // Found line numbers share one navigation, the missing one gets a dedicated navigation
+    expect(playwrightState.visited).toEqual([`${file}#L5`, `${file}#L99`]);
     expect(results.filter((r) => r.result.ok).map((r) => r.href)).toEqual([
       `${file}#L5`,
       `${file}#L6`,
@@ -457,8 +469,55 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const { results } = await checkLinks({ links });
 
-    expect(playwrightState.visited).toHaveLength(2);
+    // One navigation per page, plus a dedicated one for `#x` (not in the shared DOM of page `a`)
+    expect(playwrightState.visited).toEqual([
+      "https://blocked.example.com/a",
+      "https://blocked.example.com/b",
+      "https://blocked.example.com/a#x",
+    ]);
     expect(results).toHaveLength(3);
+  });
+});
+
+describe("checkLinks() Playwright hash fallback", () => {
+  it("re-checks a hash missing in the shared DOM with a dedicated navigation (SPA tabs)", async () => {
+    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+    // The SPA renders a different tab per hash
+    playwrightState.htmlByUrl = {
+      "https://example.com/app#tab-a": '<div id="tab-a"></div>',
+      "https://example.com/app#tab-b": '<div id="tab-b"></div>',
+    };
+    const links = ["#tab-a", "#tab-b", "#missing"].map((hash) => link(`https://example.com/app${hash}`));
+
+    const { results, errors } = await withRun(async () => {
+      const checked = await checkLinks({ links });
+      expect(getRunContext()!.metrics.counters).toMatchObject({ playwrightNavigations: 3, playwrightHashFallbacks: 2 });
+      return checked;
+    });
+
+    expect(errors).toHaveLength(0);
+    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
+    expect(resultByHref.get("https://example.com/app#tab-a")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/app#tab-b")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/app#missing")).toEqual({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+    expect(playwrightState.visited).toEqual([
+      "https://example.com/app#tab-a",
+      "https://example.com/app#tab-b",
+      "https://example.com/app#missing",
+    ]);
+  });
+
+  it("does not add navigations when every hash is in the shared DOM", async () => {
+    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+    playwrightState.html = '<div id="a"></div><div id="b"></div>';
+
+    await checkLinks({ links: [link("https://example.com/p#a"), link("https://example.com/p#b")] });
+
+    expect(playwrightState.visited).toEqual(["https://example.com/p#a"]);
   });
 });
 

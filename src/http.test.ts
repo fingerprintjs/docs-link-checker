@@ -3,6 +3,9 @@ import { fetchWithHostLimit, MAX_RATE_LIMIT_RETRIES } from "./http";
 import { HostLimiter } from "./limiter";
 import { setHostLimiter } from "./utils";
 import { getLinksFromPages, parseLinksFromPage } from "./page";
+import { checkLinks, checkLinkWithFetch } from "./link";
+import { checkWebsite } from "./website";
+import { getReadmeLinks } from "./github/gh_get_links";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -64,6 +67,91 @@ describe("fetchWithHostLimit()", () => {
 
     expect((await fetchWithHostLimit("https://limited.example.com/", request, text)).status).toBe(429);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A response whose body stream records if it was cancelled, and whether the request still held its host slot then.
+ */
+const trackedResponse = (status: number, limiter: HostLimiter, url: string, headers?: HeadersInit) => {
+  const tracking = { cancelled: false, slotHeldOnCancel: false };
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new TextEncoder().encode("chunk"));
+    },
+    cancel() {
+      tracking.cancelled = true;
+      tracking.slotHeldOnCancel = limiter.activeCount(url) === 1;
+    },
+  });
+  return { response: new Response(body, { status, headers }), tracking };
+};
+
+describe("unread response bodies are cancelled before the host slot is released", () => {
+  it("fetchWithHostLimit cancels a body the reader did not consume", async () => {
+    const limiter = new HostLimiter(1);
+    setHostLimiter(limiter);
+    const url = "https://example.com/big-file";
+    const { response, tracking } = trackedResponse(200, limiter, url);
+
+    await fetchWithHostLimit(url, async () => response, async () => "not read");
+
+    expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
+  });
+
+  it("a source page that fails (404) has its body cancelled and is reported as an error", async () => {
+    const limiter = new HostLimiter(1);
+    setHostLimiter(limiter);
+    const url = "https://docs.example.com/missing";
+    const { response, tracking } = trackedResponse(404, limiter, url);
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+
+    await expect(parseLinksFromPage(url)).rejects.toThrow("status: 404");
+    expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
+  });
+
+  it("a failed README download has its body cancelled", async () => {
+    const limiter = new HostLimiter(1);
+    setHostLimiter(limiter);
+    const url = "https://raw.githubusercontent.com/org/repo/main/README.md";
+    const { response, tracking } = trackedResponse(500, limiter, url);
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+
+    const links = await getReadmeLinks([{ sourcePath: "https://github.com/org/repo/blob/main/README.md", downloadUrl: url }]);
+
+    expect(links).toEqual([]);
+    expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
+  });
+
+  it("link checks cancel both the HEAD body before the GET fallback and the unneeded GET body", async () => {
+    const limiter = new HostLimiter(1);
+    setHostLimiter(limiter);
+    const url = "https://example.com/no-head";
+    const head = trackedResponse(405, limiter, url);
+    const get = trackedResponse(200, limiter, url);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL, init?: RequestInit) => (init?.method === "HEAD" ? head.response : get.response))
+    );
+
+    expect(await checkLinkWithFetch(url)).toEqual({ ok: true, status: 200 });
+    expect(head.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
+    expect(get.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
+  });
+});
+
+describe("invalid LINK_CHECK_HOST_CONCURRENCY", () => {
+  it.each([
+    ["checkLinks", () => checkLinks({ links: [{ href: "https://example.com/", page: "https://example.com", text: "" }] })],
+    ["checkWebsite", () => checkWebsite({ websiteUrl: "https://example.com" })],
+  ])("%s fails before doing any work", async (_name, run) => {
+    setHostLimiter(undefined);
+    vi.stubEnv("LINK_CHECK_HOST_CONCURRENCY", "abc");
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(run()).rejects.toThrow('Invalid LINK_CHECK_HOST_CONCURRENCY "abc"');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
