@@ -25,7 +25,13 @@ jobs:
       - name: Run type check
         run: pnpm run tsc
 
+      # Offline, no network or GH_TOKEN needed
       - name: Run unit tests
         run: pnpm run test
+
+      # Hit real websites and the GitHub API. Runs even if unit tests fail, so both results are visible.
+      - name: Run integration tests
+        if: ${{ !cancelled() }}
+        run: pnpm run test:integration
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}

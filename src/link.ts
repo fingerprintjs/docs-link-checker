@@ -1,7 +1,7 @@
-import * as cheerio from "cheerio";
 import { chromium, Page } from "playwright";
 import {
   CONCURRENCY_LIMIT,
+  FETCH_TIMEOUT,
   FORBIDDEN_STATUS_CODES,
   OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
@@ -11,7 +11,9 @@ import {
   parallelProcess,
 } from "./utils";
 import { Link, LinkCheckResult, LinkWithResult } from "./types";
-import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./github/gh_check_link";
+import { checkLinkWithGithubApi } from "./github/gh_check_link";
+import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
+import { getHashSelectors, isHashPresentInHtml } from "./hash";
 
 type CheckLinksArgs = {
   links: Link[];
@@ -19,57 +21,134 @@ type CheckLinksArgs = {
   fetchConcurrencyLimit?: number;
 };
 
+/**
+ * How a link is checked in the first pass:
+ * - `github-api`: GitHub links checked with the GitHub API (definitive answers)
+ * - `fetch`: plain `fetch`, assumes the page is server-side rendered
+ * - `playwright`: needs a real browser (GitHub code line links), checked in the Playwright pass only
+ * - `invalid`: the URL cannot be parsed or is not http(s), reported as broken link without any request
+ */
+export type CheckMethod = "fetch" | "github-api" | "playwright" | "invalid";
+
+export const getInitialCheckMethod = (href: string): CheckMethod => {
+  // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
+  // when links are extracted, anything that gets here anyway is reported without any request.
+  if (!URL.canParse(href) || !["http:", "https:"].includes(new URL(href).protocol)) {
+    return "invalid";
+  }
+  try {
+    if (!isGithubUrl(href)) {
+      return "fetch";
+    }
+    if (isGithubCodeLineLink(href)) {
+      return "playwright";
+    }
+    if (isGithubWikiLink(href)) {
+      return "fetch";
+    }
+    return "github-api";
+  } catch {
+    // Invalid URL, let fetch report it
+    return "fetch";
+  }
+};
+
+// Status codes returned by fetch that might be caused by bot protection, rate limiting or the request itself
+export const PLAYWRIGHT_RETRY_STATUS_CODES = [401, 403, 405, 406, 408, 429];
+
+/**
+ * Decides if a failed first-pass result should be re-checked with Playwright.
+ * Only failures that could be caused by the fetch method itself (client-side rendering, bot blocking,
+ * rate limiting, network errors) are re-checked. Definitive answers (like 404 from the GitHub API) are not.
+ */
+export const shouldRecheckWithPlaywright = (result: LinkCheckResult, method: CheckMethod): boolean => {
+  if (result.ok) {
+    return false;
+  }
+  switch (method) {
+    case "playwright":
+      // Already checked with Playwright
+      return false;
+    case "invalid":
+      // A URL that cannot be parsed is definitively broken
+      return false;
+    case "github-api":
+      // "broken link" and "hash not found" from the API are definitive.
+      // Unexpected errors (unknown link type, API errors) might still work in a browser.
+      return result.error === "unexpected error";
+    case "fetch":
+      if (result.error === "broken link") {
+        // No status means a network error or a timeout
+        return (
+          result.status === undefined ||
+          PLAYWRIGHT_RETRY_STATUS_CODES.includes(result.status) ||
+          result.status >= 500
+        );
+      }
+      // "hash not found" (the page might be client-side rendered), "could not check", "unexpected error"
+      return true;
+  }
+};
+
+const checkLinkFirstPass = async (
+  href: string
+): Promise<{ result: LinkCheckResult; method: CheckMethod }> => {
+  const method = getInitialCheckMethod(href);
+  // `invalid` URLs are reported by checkLinkWithFetch without any request
+  const result =
+    method === "fetch" || method === "invalid" ? await checkLinkWithFetch(href) : await checkLinkWithGithubApi(href);
+  return { result, method };
+};
+
+/**
+ * Returns a function that calls `fn` at most once per key. Concurrent callers share the same promise.
+ */
+const memoizeByKey = <R>(fn: (key: string) => Promise<R>) => {
+  const cache = new Map<string, Promise<R>>();
+  return (key: string): Promise<R> => {
+    let promise = cache.get(key);
+    if (!promise) {
+      promise = fn(key);
+      cache.set(key, promise);
+    }
+    return promise;
+  };
+};
+
 export const checkLinks = async ({ links, verbose, fetchConcurrencyLimit = CONCURRENCY_LIMIT }: CheckLinksArgs) => {
   console.log(`\nChecking ${links.length} links...`);
 
   const linksToCheckWithPlaywright: Link[] = [];
-  const resultMap = new Map<string, LinkCheckResult>();
+  // Cache the promise (not the result), so concurrent tasks with the same href share a single check
+  const checkFirstPass = memoizeByKey(checkLinkFirstPass);
 
   const { results: fetchResults, errors: fetchErrors } = await parallelProcess({
     items: links,
     concurrencyLimit: fetchConcurrencyLimit,
     processFn: async (link): Promise<LinkWithResult | null> => {
-      let result: LinkCheckResult | null = null;
-      const existingResult = resultMap.get(link.href);
-      if (existingResult) {
-        // Already checked, just use the result
-        result = existingResult;
-      } else {
-        // New link, check it
-        if (isGithubUrl(link.href)) {
-          result = await checkLinkWithGithubApi(link.href);
-        } else {
-          result = await checkLinkWithFetch(link.href);
-        }
-        resultMap.set(link.href, result);
-      }
-      // Link not okay, add to Playwright queue
-      if (result.ok === false) {
+      // Links that need a browser go straight to the Playwright pass, so they respect its concurrency limit
+      if (getInitialCheckMethod(link.href) === "playwright") {
         linksToCheckWithPlaywright.push(link);
         return null;
-      } else {
-        return { ...link, result };
       }
+      const { result, method } = await checkFirstPass(link.href);
+      // Failure possibly caused by the fetch method, add to Playwright queue
+      if (shouldRecheckWithPlaywright(result, method)) {
+        linksToCheckWithPlaywright.push(link);
+        return null;
+      }
+      return { ...link, result };
     },
   });
 
   console.log(`Checking ${linksToCheckWithPlaywright.length} links with Playwright...`);
 
-  const resultMapPlaywright = new Map<string, LinkCheckResult>();
+  const checkWithPlaywright = memoizeByKey((href) => checkLinkWithPlaywright(href));
   const { results: playwrightResults, errors: playwrightErrors } = await parallelProcess({
     items: linksToCheckWithPlaywright,
     concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
-    processFn: async (link) => {
-      let result: LinkCheckResult | null = null;
-      const existingResult = resultMapPlaywright.get(link.href);
-      if (existingResult) {
-        // Already checked, just use the result
-        result = existingResult;
-      } else {
-        // New link, check it
-        result = await checkLinkWithPlaywright(link.href);
-        resultMapPlaywright.set(link.href, result);
-      }
+    processFn: async (link): Promise<LinkWithResult> => {
+      const result = await checkWithPlaywright(link.href);
       return { ...link, result };
     },
   });
@@ -91,26 +170,46 @@ function shouldSpoofUserAgent(url: string) {
   return true;
 }
 
+// When a HEAD request returns one of these, retry once with GET before failing
+const HEAD_FALLBACK_STATUS_CODES = [403, 405, 501];
+
 /**
  * Check a link with fetch, assuming page is server-side rendered
  * @param url link URL
- * @returns LinkCheckResult
- * @throws {Error} - network can fail or something
+ * @returns LinkCheckResult, a URL that cannot be parsed is reported as a broken link
  */
 export const checkLinkWithFetch = async (url: string, verbose = false): Promise<LinkCheckResult> => {
-  const hash = new URL(url).hash;
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch (error) {
+    return { ok: false, error: "broken link", errorDetail: `Invalid URL: ${String(error)}` };
+  }
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    return { ok: false, error: "broken link", errorDetail: `Unsupported URL scheme: ${parsedUrl.protocol}` };
+  }
+  const hash = parsedUrl.hash;
 
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {
     headers.set("User-Agent", getRandomUserAgent());
   }
 
-  try {
-    const response = await fetch(url, {
-      method: hash ? "GET" : "HEAD",
+  const request = (method: "GET" | "HEAD") =>
+    fetch(url, {
+      method,
       redirect: "follow",
       headers,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT),
     });
+
+  try {
+    let response = await request(hash ? "GET" : "HEAD");
+    // Some servers don't support (or block) HEAD requests, retry once with GET
+    if (!hash && HEAD_FALLBACK_STATUS_CODES.includes(response.status)) {
+      log(`HEAD returned ${response.status}, retrying with GET`, verbose);
+      response = await request("GET");
+    }
 
     // GitHub web rate limit makes you wait 60 seconds after 500 requests
     const retryAfter = response.headers.get("Retry-After");
@@ -157,21 +256,9 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
       return { ok: true, status: response.status, note: "Text Fragment" };
     }
 
-    var $ = cheerio.load(await response.text());
-
-    const selectors = [
-      // Normal `id="hash"` selector
-      hash,
-      // Some websites put the hash into the `href="#hash"` attribute instead of `id="hash"`
-      `[href=${hash}]`,
-      `[href=${hash.toLowerCase()}]`,
-      // GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
-      // Note: This no longer works since GitHub seems to have switched to client-side rendering 🤦 Playwright fallback still works
-      // Keeping it here just in case GitHub comes to their senses and switches back to server-side rendering
-      isGithubCodeLineLink(url) && `[data-line-number=${hash.split("-")[0].slice(2)}]`,
-    ];
-    var element = $(selectors.join(", ")).first();
-    if (element.length === 0) {
+    // Note: GitHub `#L12` line links no longer work server-side, since GitHub switched to client-side rendering 🤦
+    // Playwright fallback still works. The check is kept in case GitHub switches back to server-side rendering.
+    if (!isHashPresentInHtml(await response.text(), hash, url)) {
       return {
         ok: false,
         status: response.status,
@@ -192,19 +279,14 @@ export const checkLinkWithFetch = async (url: string, verbose = false): Promise<
 };
 
 async function isHashPresentPlaywright(page: Page, hash: string, url: string, timeout = 3000) {
-  const selectors = [
-    `[id="${hash}"]`,
-    `[href="#${hash}"]`,
-    `[href="#${hash.toLowerCase()}"]`,
-    // GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
-    isGithubCodeLineLink(url) && `[data-line-number="${hash.split("-")[0].slice(1)}"]`,
-  ];
-
+  // All values are escaped, so any hash produces a valid selector
+  const selectors = getHashSelectors(hash, url);
   const locator = page.locator(selectors.join(", ")).first();
 
   try {
-    // Wait for the locator to be visible with a custom timeout
-    await locator.waitFor({ state: "visible", timeout: timeout });
+    // Wait for the element to be in the DOM (client-side rendered pages add it later).
+    // Anchors like `<a id="x"></a>` are valid targets but never "visible", so visibility is not required.
+    await locator.waitFor({ state: "attached", timeout: timeout });
     return true;
   } catch (error) {
     // If the timeout is reached, return false instead of throwing an error

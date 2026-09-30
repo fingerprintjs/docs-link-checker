@@ -19,6 +19,8 @@ env:
   # On pull requests, broken links in external docs must not fail the check (CI should reflect this repo's health).
   # On push to main and manual runs, broken links fail the run.
   FAIL_ON_BROKEN_LINKS: ${{ github.event_name != 'pull_request' }}
+  # On pull requests, check only a deterministic 10% sample of pages/READMEs to keep CI fast. Check everything otherwise.
+  LINK_CHECK_SAMPLE_RATE: ${{ github.event_name == 'pull_request' && '0.1' || '1' }}
   DEV_REPORT: dev-fingerprint-com.html
   GITHUB_REPORT: fingerprintjs-github-readmes.html
   WEB_REPORT: fingerprint-com.html

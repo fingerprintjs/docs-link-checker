@@ -44,6 +44,18 @@ export const getJSONReport = ({ links, errors, siteName }: GetReportArgs) => {
   };
 };
 
+/**
+ * Only allow http(s) URLs in `href` attributes (no `javascript:` or other schemes from scraped pages)
+ */
+const safeHref = (url: string): string | undefined => {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const HrefRenderer = ({ link }: { link: LinkWithResult }) => {
   const { href, result } = link;
 
@@ -101,19 +113,23 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
               <td className="py-2 px-4 border-b break-all sm:break-words">
                 {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}
                 📄{" "}
-                <a href={`${link.page}#:~:text=${encodeURIComponent(link.text)}`} target="_blank">
+                <a href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)} target="_blank">
                   {link.page}
                 </a>
               </td>
               <td className="py-2 px-4 border-b break-all sm:break-words">
-                <a href={link.href} target="_blank">
+                <a href={safeHref(link.href)} target="_blank">
                   🔗"{link.text}" ➡️ <HrefRenderer link={link} />
                 </a>
-                <span
-                  dangerouslySetInnerHTML={{
-                    __html: `<button onclick="navigator.clipboard.writeText('${link.href}')" class="ml-2 hover:bg-gray-200 rounded p-1" title="Copy link to clipboard">📋</button>`,
-                  }}
-                />
+                {/* Copied by the script in `renderReportToHTML`, no inline JS so any URL is safe */}
+                <button
+                  type="button"
+                  data-copy-href={link.href}
+                  className="ml-2 hover:bg-gray-200 rounded p-1"
+                  title="Copy link to clipboard"
+                >
+                  📋
+                </button>
               </td>
 
               <td className="py-2 px-4 border-b">
@@ -144,9 +160,22 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
   );
 };
 
-export function renderReportToHTMLFile(jsonReport: LinkCheckReport, filePath: string) {
+// Copies the link from the `data-copy-href` attribute of the clicked copy button
+const COPY_LINK_SCRIPT = `
+document.addEventListener("click", function (event) {
+  var button = event.target instanceof Element ? event.target.closest("[data-copy-href]") : null;
+  if (button) {
+    navigator.clipboard.writeText(button.getAttribute("data-copy-href") || "");
+  }
+});
+`;
+
+/**
+ * Renders the report as a full HTML page. All dynamic values are escaped by React.
+ */
+export function renderReportToHTML(jsonReport: LinkCheckReport): string {
   const htmlString = ReactDOMServer.renderToStaticMarkup(<JSONReportRenderer report={jsonReport} />);
-  const html = `
+  return `
     <!DOCTYPE html>
     <html>
       <head>
@@ -155,11 +184,14 @@ export function renderReportToHTMLFile(jsonReport: LinkCheckReport, filePath: st
       </head>
       <body>
         <div id="root">${htmlString}</div>
+        <script>${COPY_LINK_SCRIPT}</script>
       </body>
     </html>
   `;
+}
 
-  writeFileSync(filePath, html);
+export function renderReportToHTMLFile(jsonReport: LinkCheckReport, filePath: string) {
+  writeFileSync(filePath, renderReportToHTML(jsonReport));
 }
 
 export function saveReport(report: LinkCheckReport) {

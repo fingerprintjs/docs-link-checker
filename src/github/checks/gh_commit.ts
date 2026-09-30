@@ -3,13 +3,12 @@ import { tryCatch } from "../../utils/tryCatch";
 import { getMyOctokit } from "../github_client";
 import { LinkCheckResult } from "../../types";
 
-const octokit = getMyOctokit();
-
 export const checkGitHubCommitLink = async (
   owner: string,
   repo: string,
   pathParts: string[]
 ): Promise<LinkCheckResult> => {
+  const octokit = getMyOctokit();
   const [, commit] = pathParts;
   const { data, error } = await tryCatch(octokit.repos.getCommit({ owner, repo, ref: commit }));
 

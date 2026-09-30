@@ -3,8 +3,6 @@ import { getMyOctokit } from "../github_client";
 import { tryCatch } from "../../utils/tryCatch";
 import { RequestError } from "@octokit/types";
 
-const octokit = getMyOctokit();
-
 /**
  * Check if a GitHub discussion exists
  * @param owner - The owner of the repository
@@ -17,6 +15,7 @@ export const checkGitHubDiscussionLink = async (
   repo: string,
   discussionNumber: number
 ): Promise<LinkCheckResult> => {
+  const octokit = getMyOctokit();
   const { data, error } = await tryCatch(
     octokit.graphql(`
       query {

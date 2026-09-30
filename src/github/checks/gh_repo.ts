@@ -1,8 +1,6 @@
 import { LinkCheckResult } from "../../types";
 import { getMyOctokit } from "../github_client";
 
-const octokit = getMyOctokit();
-
 /**
  * Check if a repository exists
  * @param owner - The owner of the repository
@@ -13,6 +11,7 @@ export const checkIfRepositoryExists = async (
   owner: string,
   repo: string
 ): Promise<LinkCheckResult> => {
+  const octokit = getMyOctokit();
   try {
     await octokit.repos.get({ owner, repo });
     return { ok: true, status: 200 };

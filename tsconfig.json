@@ -15,13 +15,13 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "jsx": "react",
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "checks/**/*"],
   "exclude": ["node_modules", "dist"]
 }

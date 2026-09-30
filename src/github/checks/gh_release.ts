@@ -3,8 +3,6 @@ import { getMyOctokit } from "../github_client";
 import { tryCatch } from "../../utils/tryCatch";
 import { RequestError } from "@octokit/types";
 
-const octokit = getMyOctokit();
-
 /**
  * Check if a GitHub release exists
  * @param owner - The owner of the repository
@@ -17,6 +15,7 @@ export const checkGitHubReleaseLink = async (
   repo: string,
   pathParts: string[]
 ): Promise<LinkCheckResult> => {
+  const octokit = getMyOctokit();
   // If pathParts[1] is "download", check if the release asset exists
   if (pathParts[1] === "download") {
     const tag = pathParts[2];

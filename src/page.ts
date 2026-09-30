@@ -1,12 +1,17 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
-import {
-  getRandomUserAgent,
-  parallelProcess,
-  PLAYWRIGHT_CONCURRENCY_LIMIT,
-  progressBar,
-} from "./utils";
+import { getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 import { chromium } from "playwright";
+
+// Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
+const isHttpUrl = (href: string) => {
+  try {
+    return ["http:", "https:"].includes(new URL(href).protocol);
+  } catch {
+    // Unparsable URLs are kept, they are reported as broken links
+    return true;
+  }
+};
 
 export function filterOutIrrelevantLinks(links: Link[]): Link[] {
   const patternsToFilterOut = [
@@ -31,7 +36,9 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
     /^https:\/\/dev\.fingerprint\.com\/recipes/,
     /^https:\/\/dev\.fingerprint\.com\/discuss/,
   ];
-  return links.filter((link) => !patternsToFilterOut.some((pattern) => pattern.test(link.href)));
+  return links.filter(
+    (link) => isHttpUrl(link.href) && !patternsToFilterOut.some((pattern) => pattern.test(link.href))
+  );
 }
 
 /**
@@ -99,7 +106,6 @@ export const getLinksFromPages = async ({
 }) => {
   console.log(`Retrieving links from ${pages.length} pages...`);
   // Parse links from pages
-  progressBar.start(pages.length, 0);
   const { results, errors } = await parallelProcess({
     items: pages,
     processFn: async (page: string) => {
