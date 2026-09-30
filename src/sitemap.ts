@@ -13,8 +13,8 @@ export const MAX_SITEMAP_DEPTH = 3;
  */
 export const getWebsitePages = async (url: string, verbose = false) => {
   const sitemaps = await getWebsiteSitemaps(url, verbose);
-  // Shared between all sitemaps, so each sitemap is fetched only once
-  const visitedSitemaps = new Set<string>();
+  // Shared between all sitemaps, so each sitemap is processed only once (per shallowest depth)
+  const visitedSitemaps = new Map<string, number>();
   const pages = (
     await Promise.all(
       // Not verbose, that would log every page
@@ -79,7 +79,7 @@ function getSitemapsFromSitemapIndex(sitemapIndexXml: string) {
 /**
  * Retrieves pages from a sitemap URL and logs the number of pages retrieved.
  * If the sitemap is a sitemap index (`<sitemapindex>`), the nested sitemaps are followed recursively
- * (up to `MAX_SITEMAP_DEPTH`, each sitemap is fetched only once).
+ * (up to `MAX_SITEMAP_DEPTH`, each sitemap is processed once, or again if reached at a shallower depth).
  *
  * @param {string} sitemapUrl - The URL of the sitemap.
  * @param {boolean} [verbose=false] - Whether to log the progress.
@@ -89,13 +89,17 @@ export const getPagesFromSitemap = async (
   sitemapUrl: string,
   verbose = false,
   depth = 0,
-  visitedSitemaps = new Set<string>()
+  // Sitemap URL -> shallowest depth it was processed at
+  visitedSitemaps = new Map<string, number>()
 ): Promise<string[]> => {
-  if (visitedSitemaps.has(sitemapUrl)) {
+  const visitedDepth = visitedSitemaps.get(sitemapUrl);
+  // Only skip if it was already processed at the same or a shallower depth. A shallower visit can follow
+  // nested indexes further, so it must not be skipped because of an earlier (concurrent) deeper visit.
+  if (visitedDepth !== undefined && visitedDepth <= depth) {
     log(`Skipping already visited sitemap ${sitemapUrl}`, verbose);
     return [];
   }
-  visitedSitemaps.add(sitemapUrl);
+  visitedSitemaps.set(sitemapUrl, depth);
 
   const sitemapResponse = await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } });
   // Fail loudly, silently skipping a sitemap would skip all of its pages

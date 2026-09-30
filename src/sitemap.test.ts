@@ -91,4 +91,19 @@ describe("getPagesFromSitemap()", () => {
     expect(pages).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(MAX_SITEMAP_DEPTH + 1);
   });
+
+  it("re-processes a sitemap index reached at a shallower depth than an earlier visit", async () => {
+    stubSitemaps({
+      [`${SITE}/index.xml`]: sitemapIndex([`${SITE}/pages.xml`]),
+      [`${SITE}/pages.xml`]: urlSet([`${SITE}/page`]),
+    });
+    const visited = new Map<string, number>();
+
+    // First reached at the max depth: its nested sitemaps are too deep to follow
+    expect(await getPagesFromSitemap(`${SITE}/index.xml`, false, MAX_SITEMAP_DEPTH, visited)).toEqual([]);
+    // Then reached at depth 0: must not be skipped as already visited
+    expect(await getPagesFromSitemap(`${SITE}/index.xml`, false, 0, visited)).toEqual([`${SITE}/page`]);
+    // Same or deeper visits are still skipped
+    expect(await getPagesFromSitemap(`${SITE}/index.xml`, false, 1, visited)).toEqual([]);
+  });
 });
