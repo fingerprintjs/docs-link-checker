@@ -30,8 +30,10 @@ export const METRICS = {
   totalLinks: "Total links",
   uniqueUrls: "Unique URLs",
   uniquePages: "Unique pages (URLs without hash)",
-  // One per host-limited fetch operation (a 429 retry is a new one), a HEAD with GET fallback or redirects count once
-  pagesFetched: "Page fetches (operations, incl. 429 retries)",
+  // Distinct page fetches of link checks (per URL without hash and method), whatever the number of links to the page
+  uniquePagesFetched: "Unique pages fetched",
+  // Every `fetch()` call: each redirect hop, 429 retry and HEAD-to-GET fallback counts
+  httpRequests: "HTTP requests (incl. redirects, retries and HEAD-to-GET fallbacks)",
   playwrightNavigations: "Playwright navigations",
   // A hash missing in the shared DOM of its page is re-checked with a dedicated navigation (included above)
   playwrightHashFallbacks: "Playwright hash fallbacks",

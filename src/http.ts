@@ -79,7 +79,8 @@ export const fetchWithHostLimit = async <T>(
     const requestUrl = currentUrl;
     const requestMethod = currentMethod;
     const result = await hostLimiter.run(requestUrl, async (): Promise<HopResult<T>> => {
-      incrementMetric("pagesFetched");
+      // Counted per actual request (every redirect hop and retry)
+      incrementMetric("httpRequests");
       const response = await fetch(requestUrl, {
         method: requestMethod,
         headers,

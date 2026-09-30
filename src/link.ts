@@ -14,7 +14,7 @@ import { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
 import { AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
-import { withPage } from "./browser";
+import { HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
 import { withTimeout } from "./limiter";
 import { fetchWithHostLimit } from "./http";
 import { incrementMetric, timePhase } from "./run_context";
@@ -267,6 +267,9 @@ const checkLinksInRun = async ({ links, verbose, fetchConcurrencyLimit = CONCURR
       parallelProcess({
         items: pageGroups,
         concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
+        // No timeout for the whole group: it can include many per-hash fallback navigations waiting for page slots.
+        // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT).
+        taskTimeout: null,
         processFn: async (group): Promise<LinkWithResult[]> => {
           const hrefs = [...new Set(group.links.map((link) => link.href))];
           const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
@@ -409,6 +412,7 @@ export class PageFetchCache {
     const key = useGet ? getKey : `HEAD ${pageUrl}`;
     let page = this.pages.get(key);
     if (!page) {
+      incrementMetric("uniquePagesFetched");
       page = fetchPage(pageUrl, { needBody: useGet, verbose });
       this.pages.set(key, page);
     }
@@ -485,7 +489,7 @@ export const checkLinkWithFetch = async (
   return result;
 };
 
-async function isHashPresentPlaywright(page: Page, hash: string, url: string, timeout = 3000) {
+async function isHashPresentPlaywright(page: Page, hash: string, url: string, timeout = HASH_WAIT_TIMEOUT) {
   // All values are escaped, so any hash produces a valid selector
   const selectors = getHashSelectors(hash, url);
   const locator = page.locator(selectors.join(", ")).first();
@@ -577,7 +581,7 @@ async function checkUrlsInOneNavigation(
       try {
         incrementMetric("playwrightNavigations");
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
-        const response = await page.goto(firstUrl, { waitUntil: "domcontentloaded" });
+        const response = await page.goto(firstUrl, { waitUntil: "domcontentloaded", timeout: PAGE_OPERATION_TIMEOUT });
 
         log(`Navigation response: ${response?.status()}`, verbose);
         if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {

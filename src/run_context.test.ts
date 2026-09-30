@@ -46,8 +46,10 @@ describe("run context", () => {
 
   it("formats metrics", () => {
     expect(
-      formatRunMetrics({ counters: { pagesFetched: 3 }, phases: [{ name: "Extract links", ms: 1500 }] }, 2000)
-    ).toBe("Run metrics:\n  Page fetches (operations, incl. 429 retries): 3\n  Phases:\n    Extract links: 1.5s\n  Total: 2.0s");
+      formatRunMetrics({ counters: { httpRequests: 3 }, phases: [{ name: "Extract links", ms: 1500 }] }, 2000)
+    ).toBe(
+      "Run metrics:\n  HTTP requests (incl. redirects, retries and HEAD-to-GET fallbacks): 3\n  Phases:\n    Extract links: 1.5s\n  Total: 2.0s"
+    );
   });
 });
 
@@ -63,6 +65,28 @@ describe("checkLinks() metrics", () => {
       return getRunContext()!.metrics.counters;
     });
 
-    expect(counters).toMatchObject({ totalLinks: 4, uniqueUrls: 3, uniquePages: 2, pagesFetched: 2 });
+    expect(counters).toMatchObject({ totalLinks: 4, uniqueUrls: 3, uniquePages: 2, uniquePagesFetched: 2, httpRequests: 2 });
+  });
+
+  it("counts every HTTP request (redirect hops, HEAD-to-GET fallbacks) separately from unique pages", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "https://example.com/old") return new Response(null, { status: 301, headers: { Location: "/new" } });
+        // The redirect target refuses HEAD
+        return init?.method === "HEAD" ? new Response(null, { status: 405 }) : new Response("ok", { status: 200 });
+      })
+    );
+    const { checkLinks } = await import("./link");
+
+    const counters = await withRun(async () => {
+      await checkLinks({ links: [{ href: "https://example.com/old", page: "https://example.com", text: "" }] });
+      return getRunContext()!.metrics.counters;
+    });
+
+    // HEAD /old (301), HEAD /new (405), then the GET fallback: GET /old (301), GET /new (200)
+    expect(counters).toMatchObject({ uniquePagesFetched: 1, httpRequests: 4 });
   });
 });

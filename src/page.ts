@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
 import { getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
-import { withPage } from "./browser";
+import { PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
 import { fetchWithHostLimit } from "./http";
 import { incrementMetric } from "./run_context";
 
@@ -156,7 +156,7 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
       incrementMetric("playwrightNavigations");
       // Navigate to the URL (heavy resources are blocked, the content is waited for below)
       const response = await page.goto(pageUrl, {
-        timeout: 30000, // 30 second timeout
+        timeout: PAGE_OPERATION_TIMEOUT,
         waitUntil: "domcontentloaded",
       });
 

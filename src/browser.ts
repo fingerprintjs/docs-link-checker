@@ -3,6 +3,11 @@ import { Semaphore } from "./limiter";
 import { incrementMetric } from "./run_context";
 import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 
+// Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own
+export const PAGE_OPERATION_TIMEOUT = 30000;
+// How long a hash is waited for after the page loaded (client-side rendered anchors)
+export const HASH_WAIT_TIMEOUT = 3000;
+
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
   args: ["--disable-blink-features=AutomationControlled"],
@@ -221,6 +226,9 @@ const runWithNewPage = async <T>(browser: Browser, fn: (page: Page) => Promise<T
     const blocker = createResourceBlocker();
     await context.route("**/*", (route) => blocker(route));
     const page = await context.newPage();
+    // Every page operation is bounded (navigations, waits, reading responses...), even if a caller passes no timeout
+    page.setDefaultTimeout(PAGE_OPERATION_TIMEOUT);
+    page.setDefaultNavigationTimeout(PAGE_OPERATION_TIMEOUT);
     return await fn(page);
   } finally {
     await context.close().catch(() => {});

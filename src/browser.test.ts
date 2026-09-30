@@ -56,6 +56,8 @@ vi.mock("playwright", () => {
             let closed = false;
             return {
               isClosed: () => closed,
+              setDefaultTimeout: () => {},
+              setDefaultNavigationTimeout: () => {},
               goto: async (url: string) => {
                 const failure = state.nextGotoFailure;
                 state.nextGotoFailure = null;

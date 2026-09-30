@@ -20,6 +20,11 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     // HTML per navigated URL (hash included), falls back to `html`
     htmlByUrl: {} as Record<string, string>,
     status: 200,
+    // Simulated navigation time
+    gotoDelayMs: 0,
+    // Timeouts passed to `goto` and set as page defaults
+    gotoTimeouts: [] as Array<number | undefined>,
+    pageTimeouts: [] as number[],
   },
 }));
 
@@ -41,9 +46,15 @@ vi.mock("playwright", () => ({
           let currentUrl = "";
           return {
             isClosed: () => false,
-            goto: async (url: string) => {
+            setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
+            setDefaultNavigationTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
+            goto: async (url: string, options?: { timeout?: number }) => {
               currentUrl = url;
               playwrightState.visited.push(url);
+              playwrightState.gotoTimeouts.push(options?.timeout);
+              if (playwrightState.gotoDelayMs > 0) {
+                await new Promise((resolve) => setTimeout(resolve, playwrightState.gotoDelayMs));
+              }
               return {
                 status: () => playwrightState.status,
                 statusText: () => "",
@@ -100,6 +111,9 @@ beforeEach(() => {
   playwrightState.selectors = [];
   playwrightState.html = "<html><body></body></html>";
   playwrightState.htmlByUrl = {};
+  playwrightState.gotoDelayMs = 0;
+  playwrightState.gotoTimeouts = [];
+  playwrightState.pageTimeouts = [];
   playwrightState.status = 200;
   checkLinkWithGithubApiMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -509,6 +523,32 @@ describe("checkLinks() Playwright hash fallback", () => {
       "https://example.com/app#tab-b",
       "https://example.com/app#missing",
     ]);
+  });
+
+  it("does not time out a page group whose fallback navigations together take longer than the task timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+      // Every tab is only rendered on its own URL: 1 shared navigation + 11 fallbacks, 5 page slots,
+      // 25s per navigation (each within its own 30s timeout) -> about 100s in total, more than TASK_TIMEOUT (80s)
+      playwrightState.gotoDelayMs = 25_000;
+      const hrefs = Array.from({ length: 12 }, (_, i) => `https://example.com/app#tab-${i}`);
+      playwrightState.htmlByUrl = Object.fromEntries(hrefs.map((href, i) => [href, `<div id="tab-${i}"></div>`]));
+
+      const promise = checkLinks({ links: hrefs.map((href) => link(href)) });
+      await vi.advanceTimersByTimeAsync(300_000);
+      const { results, errors } = await promise;
+
+      expect(errors).toHaveLength(0);
+      expect(results).toHaveLength(12);
+      expect(results.every((r) => r.result.ok)).toBe(true);
+      expect(playwrightState.visited).toHaveLength(12);
+      // Every navigation is bounded on its own
+      expect(playwrightState.gotoTimeouts).toEqual(Array(12).fill(30000));
+      expect(new Set(playwrightState.pageTimeouts)).toEqual(new Set([30000]));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not add navigations when every hash is in the shared DOM", async () => {
