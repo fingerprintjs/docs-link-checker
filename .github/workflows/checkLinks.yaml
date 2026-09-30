@@ -11,7 +11,14 @@ on:
   # schedule:
   #   - cron: '0 0 * * *' # Every day at midnight
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 env:
+  # On pull requests, broken links in external docs must not fail the check (CI should reflect this repo's health).
+  # On push to main and manual runs, broken links fail the run.
+  FAIL_ON_BROKEN_LINKS: ${{ github.event_name != 'pull_request' }}
   DEV_REPORT: dev-fingerprint-com.html
   GITHUB_REPORT: fingerprintjs-github-readmes.html
   WEB_REPORT: fingerprint-com.html
@@ -23,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-environment
         id: setup
         with:
@@ -36,7 +43,7 @@ jobs:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ env.DEV_REPORT }}
@@ -49,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-environment
         id: setup
         with:
@@ -62,7 +69,7 @@ jobs:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ env.GITHUB_REPORT }}
@@ -75,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-environment
         id: setup
         with:
@@ -88,7 +95,7 @@ jobs:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ env.WEB_REPORT }}
@@ -99,33 +106,30 @@ jobs:
     name: Combine all reports
     needs: [docs, githubReadmes, web]
     runs-on: ubuntu-latest
-    if: always()
+    if: ${{ !cancelled() }}
     
     steps:
-      - name: Create reports directory
-        run: mkdir reports
-      - name: Download dev.fingerprint.com report
-        uses: actions/download-artifact@v4
+      - name: Download reports
+        uses: actions/download-artifact@v8
         with:
-          name: ${{ env.DEV_REPORT }}
+          pattern: '*.html'
           path: reports
-      - name: Download GitHub READMEs report
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.GITHUB_REPORT }}
-          path: reports
-      - name: Download fingerprint.com report
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.WEB_REPORT }}
-          path: reports
+          merge-multiple: true
       - name: Create combined archive
+        id: archive
         run: |
+          mkdir -p reports
+          if [ -z "$(ls -A reports)" ]; then
+            echo "::warning::No reports were generated, skipping combined archive."
+            exit 0
+          fi
           cd reports
           zip -r ../combined-reports.zip ./*
+          echo "created=true" >> "$GITHUB_OUTPUT"
           
       - name: Upload combined artifact
-        uses: actions/upload-artifact@v4
+        if: steps.archive.outputs.created == 'true'
+        uses: actions/upload-artifact@v7
         with:
           name: combined-reports
           path: combined-reports.zip
@@ -135,7 +139,8 @@ jobs:
     name: Deploy reports to GitHub Pages
     needs: [docs, githubReadmes, web]
     runs-on: ubuntu-latest
-    if: always()
+    # Never deploy from pull requests, only from main (push) or manual runs.
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     permissions:
       pages: write
       id-token: write
@@ -144,13 +149,35 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download reports
+        uses: actions/download-artifact@v8
         with:
+          pattern: '*.html'
           path: reports
+          merge-multiple: true
 
       - name: Create index page
+        id: index
         run: |
+          # Deploy only complete runs: if any report is missing (e.g. a checker crashed),
+          # keep the last complete site on GitHub Pages instead of replacing it with a partial one.
+          mkdir -p reports
+          REPORT_ITEMS=""
+          MISSING=""
+          for entry in "${DEV_REPORT}|dev.fingerprint.com Report" "${GITHUB_REPORT}|GitHub READMEs Report" "${WEB_REPORT}|fingerprint.com Report"; do
+            file="${entry%%|*}"
+            title="${entry#*|}"
+            if [ -f "reports/${file}" ]; then
+              REPORT_ITEMS="${REPORT_ITEMS}<div class=\"report-item\"><a href=\"${file}\">${title}</a></div>"
+            else
+              MISSING="${MISSING} ${file}"
+            fi
+          done
+          if [ -n "${MISSING}" ]; then
+            echo "::warning::Missing reports:${MISSING}. Skipping deployment to keep the last complete reports on GitHub Pages."
+            exit 0
+          fi
+          echo "has_reports=true" >> "$GITHUB_OUTPUT"
           TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
           cat > reports/index.html << EOF
           <!DOCTYPE html>
@@ -173,15 +200,7 @@ jobs:
               <a href="https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml">Run workflow again</a>
             </div>
             <div class="report-list">
-              <div class="report-item">
-                <a href="${DEV_REPORT}/${DEV_REPORT}">dev.fingerprint.com Report</a>
-              </div>
-              <div class="report-item">
-                <a href="${GITHUB_REPORT}/${GITHUB_REPORT}">GitHub READMEs Report</a>
-              </div>
-              <div class="report-item">
-                <a href="${WEB_REPORT}/${WEB_REPORT}">fingerprint.com Report</a>
-              </div>
+              ${REPORT_ITEMS}
             </div>
             <p>Last updated: ${TIMESTAMP}</p>
           </body>
@@ -189,16 +208,19 @@ jobs:
           EOF
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        if: steps.index.outputs.has_reports == 'true'
+        uses: actions/configure-pages@v6
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        if: steps.index.outputs.has_reports == 'true'
+        uses: actions/upload-pages-artifact@v5
         with:
           path: reports
 
       - name: Deploy to GitHub Pages
+        if: steps.index.outputs.has_reports == 'true'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
   # report-status:
   #   name: Report status to Slack
   #   needs: [docs, githubReadmes, web]
