@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "checkLinks:docs": "npx tsx ./checks/docs.ts",
     "checkLinks:github": "npx tsx ./checks/github.ts",
     "checkLinks:web": "npx tsx ./checks/web.ts",
@@ -14,6 +15,7 @@
   "keywords": [],
   "author": "Juraj Uhlar, Fingerprint",
   "license": "ISC",
+  "packageManager": "pnpm@10.34.6",
   "dependencies": {
     "@octokit/core": "^6.1.5",
     "@octokit/plugin-retry": "^7.2.1",
@@ -38,5 +40,10 @@
     "@types/react": "^19.1.4",
     "@types/react-dom": "^19.1.5",
     "tsx": "^4.9.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
