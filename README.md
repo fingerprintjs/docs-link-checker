@@ -1,12 +1,143 @@
 # Documentation link checker 
 
-A GitHub workflow that checks for broken links in our documentation, public GitHub readmes, and our website.
+Checks for broken links, including `#anchor` links, in documentation. It comes as:
+
+* A GitHub workflow that checks our documentation, public GitHub readmes, and our website (see below).
+* A [CLI](#cli) to check websites, GitHub organizations or local markdown files.
+* A [reusable GitHub Action](#github-action) to check markdown files in any repository.
+
+## Our workflow
 
 * Runs every day at 03:17 UTC, on pushes to `main` and on pull requests.
 * You can start the workflow manually from inside [**Actions**](https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml).
 * Slack notifications for failed runs are disabled for now (the `report-status` job in `checkLinks.yaml` is commented out). Once we fix all links and stabilize the workflow, we can re-enable them and send them to the `#documentation` channel.
 * The latest results are deployed to [GitHub pages](https://fingerprintjs.github.io/docs-link-checker/) of this repository (only from `main` and manual runs, never from pull requests).
 * On pull requests, the link checks still run end to end (on a 10% sample of pages, see `LINK_CHECK_SAMPLE_RATE` below), but broken links do not fail the check (`FAIL_ON_BROKEN_LINKS=false`). They only fail if the checker itself crashes. On `main` and manual runs, broken links fail the run.
+* Every job writes a summary (counts and the first 50 links to fix) to the GitHub job summary.
+
+## CLI
+
+```sh
+pnpm install
+pnpm cli --help                      # or: pnpm exec tsx src/cli.ts --help, or the `docs-link-checker` bin
+
+# All pages of a website (from its sitemap)
+pnpm cli site https://dev.fingerprint.com
+# Only links starting with one of the prefixes
+pnpm cli site https://fingerprint.com --include https://fingerprint.com --include https://github.com
+# README files of all public, non-archived repositories of a GitHub organization (needs GH_TOKEN)
+pnpm cli github-org fingerprintjs
+# Local markdown files
+pnpm cli files "docs/**/*.md" README.md
+pnpm cli files "**/*.md" --dry-run   # only list the links
+```
+
+Commands:
+
+* `site <url> [--include <prefix>...] [--use-playwright]`: links on all pages of the website's sitemap. `--include` (repeatable) keeps only links starting with one of the prefixes.
+* `github-org <org>`: links in README files of the organization's public repositories.
+* `files <glob...> [--dry-run] [--no-annotations]`: links in local markdown files (`.md`, `.markdown`, `node_modules` and `.git` are skipped). Quote the globs so the CLI expands them (`**` works in every shell).
+  * Relative links (`docs/a.md`, `../b/`, `a.md?plain=1`) are resolved against the file, root-relative links (`/docs/a.md`) against the current directory. The target file or directory must exist (file names are case-sensitive on Linux, like on GitHub).
+  * `#anchors` (`#install`, `docs/a.md#install`, `docs/#install` for a directory README) must match a heading slug (GitHub semantics, like for GitHub links) or an HTML anchor (`<a name="...">`). `#L10-L20` on code files must be within the file. Other anchors on non-markdown files are not checked.
+  * Absolute links (`https://...`) are checked like in the other commands (fetch, GitHub API, Playwright). `mailto:` and other schemes are skipped.
+  * Links to fix are printed as `file:line: link: error`, and as `::error file=...,line=...::` annotations in GitHub Actions.
+
+Common options (environment variables are the defaults):
+
+| Option | Environment variable | Description |
+| --- | --- | --- |
+| `--sample-rate <0-1>` | `LINK_CHECK_SAMPLE_RATE` | Check only a deterministic share of the pages / README files / markdown files. Default `1`. |
+| `--fail-on-broken`, `--no-fail-on-broken` | `FAIL_ON_BROKEN_LINKS` (`false` to not fail) | Exit with code 1 when there are links to fix. Default: fail. |
+| `--baseline <file>` | `LINK_CHECK_BASELINE` | [Baseline file](#baseline-file) with known false positives and accepted broken links. |
+| `--update-baseline` | | Write the current failures to the baseline file (default `linkcheck.baseline.json`) and exit with code 0. |
+| `--output-dir <dir>` | | Where to save the JSON and HTML reports. Default `results`. |
+| `--json` | | Print the JSON report to stdout, logs go to stderr. |
+| `--host-concurrency <n>` | `LINK_CHECK_HOST_CONCURRENCY` | Max concurrent requests per host. Default `8`. |
+
+* `GH_TOKEN` (environment variable or `.env` file) is used to check GitHub links with the API. `github-org` requires it, the other commands fall back to a browser without it.
+* Exit codes: `0` no links to fix (or not failing), `1` links to fix or the check crashed, `2` invalid arguments or baseline file.
+* Reports are saved to `<output-dir>/<name>.json` and `.html` (for example `results/dev-fingerprint-com.html`, `results/local-files.html`).
+* In GitHub Actions, the CLI appends a summary to `GITHUB_STEP_SUMMARY` and writes the `links-to-fix`, `report-path` and `report-html-path` step outputs to `GITHUB_OUTPUT`.
+
+## Baseline file
+
+A baseline (ignore) file lists known false positives and accepted broken links. Failing links that match an entry are reported in a separate "ignored" section of the report and don't count towards `totalLinksToFix` (they don't fail the run).
+
+```json
+{
+  "ignore": [
+    { "href": "https://example.com/flaky-page", "page": "docs/guide.md", "reason": "Blocks bots" },
+    { "pattern": "https://www.linkedin.com/**", "reason": "Always asks for a login" },
+    { "regex": "^https://(www\\.)?x\\.com/" },
+    "https://twitter.com/**"
+  ]
+}
+```
+
+* Every entry has exactly one of:
+  * `href`: the exact link, as reported (the resolved URL for websites and GitHub, the link as written for local files).
+  * `pattern`: a glob. `**` matches anything, `*` anything except `/`, everything else (including `?`) is literal. A plain string entry is a shorthand for `{ "pattern": "..." }`.
+  * `regex`: a JavaScript regular expression, not anchored (use `^` and `$`).
+* `page` (optional): only ignore the link on this page (an exact value or a glob, for example `docs/**`).
+* `reason` (optional): shown in the report.
+* A bare array of entries works too. Unknown keys and invalid entries fail with a message pointing to the entry (exit code `2`).
+* `--update-baseline` rewrites the file: `pattern` and `regex` entries are kept, `href` entries are kept only if they still match a failure (all are kept when sampling), and new failures are added as `{ "href", "page" }` entries (add a `reason` by hand).
+
+## GitHub Action
+
+Check the markdown files of any repository (relative links and anchors on disk, absolute links over the network):
+
+```yaml
+# .github/workflows/links.yaml
+name: Check links
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: fingerprintjs/docs-link-checker@main
+        id: links
+        with:
+          files: |
+            README.md
+            docs/**/*.md
+          baseline: linkcheck.baseline.json
+      - name: Upload report
+        if: ${{ !cancelled() && steps.links.outputs.report-html-path }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: link-check-report
+          path: ${{ steps.links.outputs.report-html-path }}
+```
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `files` | `**/*.md` | Globs or paths of markdown files, relative to the repository root, separated by spaces or new lines. |
+| `github-token` | `${{ github.token }}` | Token used to check GitHub links with the GitHub API. |
+| `fail-on-broken` | `true` | Fail the step when links need fixing. |
+| `baseline` | | Baseline file, relative to the repository root. |
+| `sample-rate` | `1` | Check only a deterministic share of the files. |
+| `annotations` | `true` | Report links to fix as annotations on the files. |
+| `output-dir` | `$RUNNER_TEMP/docs-link-checker` | Where to save the JSON and HTML reports. |
+
+| Output | Description |
+| --- | --- |
+| `links-to-fix` | Number of links to fix, not counting ignored links. |
+| `report-path` | Path of the JSON report. |
+| `report-html-path` | Path of the HTML report. |
+
+* The action sets up Node.js (the version in this repository's `.nvmrc`) for the rest of the job, and installs its own dependencies with its pinned pnpm through `npx` (the job's own pnpm setup is not changed).
+* Playwright's Chromium is only installed (and cached) when the files contain absolute links.
+* To create a baseline for an existing repository, run the CLI from its root directory with a local clone of this repository (after `pnpm install` in the clone): `node ../docs-link-checker/bin/docs-link-checker.js files "**/*.md" --update-baseline`. Globs and root-relative links are resolved against the current directory.
+* `.github/workflows/action-selftest.yaml` tests the action (`uses: ./`) on the offline fixture in `test/action-fixture/`.
 
 ## Development
 
@@ -18,7 +149,8 @@ A GitHub workflow that checks for broken links in our documentation, public GitH
   * `pnpm run check:fix` applies safe fixes and formats, `pnpm run lint` only lints, `pnpm run format` only formats.
 * `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch`, the GitHub API and Playwright, and need no network or `GH_TOKEN`.
 * `pnpm run test:integration` runs integration tests (`*.integration.test.ts`) against real websites and the GitHub API. They need network access, Playwright's Chromium and a `GH_TOKEN` environment variable.
-* Link checks (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) need a `GH_TOKEN` environment variable (can also be set in a `.env` file). They exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them.
+* The package scripts used by the workflow (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) run the [CLI](#cli) (`site` and `github-org` commands), `pnpm run checkLinks:files` checks this README. They need a `GH_TOKEN` environment variable (can also be set in a `.env` file). They exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them.
+* Code map: `src/cli.ts` (CLI), `src/website.ts` (`site`), `src/github/gh_get_links.ts` (`github-org`), `src/local_files.ts` (`files`), `src/link.ts` (`checkLinks`, the shared checking pipeline), `src/baseline.ts`, `src/report/report.tsx` (JSON and HTML reports), `src/github_actions.ts` (job summary, annotations, step outputs), `action.yml` (reusable action).
 * Set `LINK_CHECK_SAMPLE_RATE` (a number between `0` and `1`, default `1`) to check only a part of the pages (website sitemap pages, GitHub README files). The sample is deterministic (pages are sorted, then every Nth page is picked) and has at least one page. On pull requests, the workflow uses `LINK_CHECK_SAMPLE_RATE=0.1` to keep CI fast. On `main` and manual runs, it checks everything.
 * Set `LINK_CHECK_HOST_CONCURRENCY` (a positive integer, default `8`) to change the maximum number of concurrent `fetch` requests to a single host. It applies to every `fetch` request of a run (sitemaps, source pages, README downloads, link checks), and to every redirect hop (limited by the host it goes to). A `429` response with `Retry-After` pauses requests to that host, and the request is retried. Sitemaps are also limited to 5 concurrent fetches overall. GitHub API requests are limited by Octokit instead, and Playwright navigations by the browser's page limit.
 * Each run launches one shared Chromium (only if needed) that blocks images, media, fonts and analytics scripts. Links to the same page with different hashes share one fetch or browser navigation, and GitHub API responses are cached for the run. The run metrics (links, unique URLs and pages, requests, navigations, duration per phase) are logged at the end.
@@ -59,11 +191,14 @@ So a proper documentation link checker must:
 - [ ] Add more tests for everything
 - [ ] Nicer report styling
 - [x] Add `eslint`/`biome`
-- [ ] Copy link to clipboard in the report 
+- [x] Copy link to clipboard in the report 
 - [x] Improve performance
 - [x] Upgrade dependencies (0 `pnpm audit` vulnerabilities)
-- [ ] Provide a reusable GitHub action for checking `.md` files from inside a repository.
-- [ ] Make progress bar actually display progress inside GitHub actions UI
-- [ ] Improve API and documentation to make this potentially releasable on NPM as a utility package
+- [x] Provide a reusable GitHub action for checking `.md` files from inside a repository.
+- [ ] Make progress bar actually display progress inside GitHub actions UI (the job summary covers the results for now)
+- [x] Improve API and documentation (CLI, options for sampling, baselines and the output directory)
+- [x] Baseline file for known false positives and accepted broken links
+- [ ] Release on npm and the GitHub Marketplace (build to JavaScript instead of running TypeScript with `tsx`, versioned tags for the action)
+- [ ] Check links in HTML (`<a href>`) and images in local markdown files
 
 
