@@ -171,6 +171,19 @@ describe("checkLinks() Playwright escalation", () => {
     expect(results[0].result).toMatchObject({ ok: false, error: "broken link" });
   });
 
+  it.each(["tel:+123", "javascript:void(0)", "data:text/plain,hi"])(
+    "never fetches or re-checks non-http(s) URLs like %s",
+    async (href) => {
+      const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+
+      const { results } = await checkLinks({ links: [link(href)] });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(playwrightState.visited).toEqual([]);
+      expect(results[0].result).toMatchObject({ ok: false, error: "broken link" });
+    }
+  );
+
   const fetchCases: Array<[string, FetchHandler, boolean]> = [
     ["404", () => new Response("Not found", { status: 404 }), false],
     ["410", () => new Response("Gone", { status: 410 }), false],

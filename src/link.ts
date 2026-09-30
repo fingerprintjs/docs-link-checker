@@ -26,12 +26,14 @@ type CheckLinksArgs = {
  * - `github-api`: GitHub links checked with the GitHub API (definitive answers)
  * - `fetch`: plain `fetch`, assumes the page is server-side rendered
  * - `playwright`: needs a real browser (GitHub code line links), checked in the Playwright pass only
- * - `invalid`: the URL cannot be parsed, reported as broken link without any request
+ * - `invalid`: the URL cannot be parsed or is not http(s), reported as broken link without any request
  */
 export type CheckMethod = "fetch" | "github-api" | "playwright" | "invalid";
 
 export const getInitialCheckMethod = (href: string): CheckMethod => {
-  if (!URL.canParse(href)) {
+  // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
+  // when links are extracted, anything that gets here anyway is reported without any request.
+  if (!URL.canParse(href) || !["http:", "https:"].includes(new URL(href).protocol)) {
     return "invalid";
   }
   try {
@@ -177,12 +179,16 @@ const HEAD_FALLBACK_STATUS_CODES = [403, 405, 501];
  * @returns LinkCheckResult, a URL that cannot be parsed is reported as a broken link
  */
 export const checkLinkWithFetch = async (url: string, verbose = false): Promise<LinkCheckResult> => {
-  let hash: string;
+  let parsedUrl: URL;
   try {
-    hash = new URL(url).hash;
+    parsedUrl = new URL(url);
   } catch (error) {
     return { ok: false, error: "broken link", errorDetail: `Invalid URL: ${String(error)}` };
   }
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    return { ok: false, error: "broken link", errorDetail: `Unsupported URL scheme: ${parsedUrl.protocol}` };
+  }
+  const hash = parsedUrl.hash;
 
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {

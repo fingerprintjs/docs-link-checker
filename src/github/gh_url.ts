@@ -16,8 +16,21 @@ export const isGithubUrl = (url: string) => {
 export const isGithubCodeLineLink = (href: string) => {
   const url = new URL(href);
   return (
-    url.host === "github.com" && url.pathname.includes("/blob/") && /^#L\d+(-L\d+)?$/.test(url.hash)
+    url.host === "github.com" &&
+    url.pathname.includes("/blob/") &&
+    /^#L\d+(-L\d+)?$/.test(decodeUrlHash(url.hash))
   );
+};
+
+/**
+ * `URL.hash` stays percent-encoded (`#%4C12` for `#L12`), decode it (keeps the raw hash if it is malformed)
+ */
+export const decodeUrlHash = (hash: string): string => {
+  try {
+    return decodeURIComponent(hash);
+  } catch {
+    return hash;
+  }
 };
 
 /**

@@ -24,6 +24,13 @@ describe("isGithubCodeLineLink", () => {
     );
   });
 
+  it("should recognize percent-encoded code line links", () => {
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#%4C12")).toBe(true);
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L12%2DL20")).toBe(true);
+    // Malformed percent-encoding is not a line link (and does not throw)
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L12%")).toBe(false);
+  });
+
   it("should return false for invalid code line links", () => {
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L")).toBe(false);
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-")).toBe(false);

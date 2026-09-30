@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { isGithubCodeLineLink } from "./github/gh_url";
+import { decodeUrlHash, isGithubCodeLineLink } from "./github/gh_url";
 
 /**
  * Removes the leading `#` and decodes percent-encoding (`#caf%C3%A9` -> `café`).
@@ -39,7 +39,7 @@ const getHashVariants = (rawHash: string): string[] => {
  * GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
  */
 const getGithubLineNumber = (hash: string, url: string): string | undefined =>
-  isGithubCodeLineLink(url) ? hash.replace(/^#/, "").split("-")[0].slice(1) : undefined;
+  isGithubCodeLineLink(url) ? decodeUrlHash(hash).replace(/^#/, "").split("-")[0].slice(1) : undefined;
 
 /**
  * CSS selectors matching elements the hash can point to (all values properly escaped).
