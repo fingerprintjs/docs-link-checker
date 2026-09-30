@@ -1,14 +1,14 @@
-import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
 import { fetchWithHostLimit } from "../http";
-import { Link } from "../types";
-import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
-import { getJSONReport, saveReport } from "../report/report";
+import { extractLinksFromMarkdown } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
-import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
-import { getRepoCached } from "./gh_cache";
+import { getJSONReport, saveReport } from "../report/report";
 import { withRun } from "../run";
 import { timePhase } from "../run_context";
+import type { Link } from "../types";
+import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { getRepoCached } from "./gh_cache";
+import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
 
 export interface MdFile {
   sourcePath: string;
@@ -27,7 +27,7 @@ async function getOrgRepos(orgName: string) {
     .filter((repo) => repo.archived === false)
     .map((repo) => ({
       full_name: repo.full_name,
-      owner: { login: repo.owner!.login },
+      owner: { login: repo.owner?.login ?? orgName },
       name: repo.name,
     }));
 }

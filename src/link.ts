@@ -1,24 +1,24 @@
-import { Page } from "playwright";
 import { PromisePoolError } from "@supercharge/promise-pool";
+import type { Page } from "playwright";
+import { HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
+import { checkLinkWithGithubApi } from "./github/gh_check_link";
+import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
+import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
+import { fetchWithHostLimit } from "./http";
+import { withTimeout } from "./limiter";
+import { withRun } from "./run";
+import { incrementMetric, timePhase } from "./run_context";
+import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import {
   CONCURRENCY_LIMIT,
   FORBIDDEN_STATUS_CODES,
-  OKAY_STATUS_CODES,
-  PLAYWRIGHT_CONCURRENCY_LIMIT,
-  TASK_TIMEOUT,
   getRandomUserAgent,
   log,
+  OKAY_STATUS_CODES,
+  PLAYWRIGHT_CONCURRENCY_LIMIT,
   parallelProcess,
+  TASK_TIMEOUT,
 } from "./utils";
-import { Link, LinkCheckResult, LinkWithResult } from "./types";
-import { checkLinkWithGithubApi } from "./github/gh_check_link";
-import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
-import { AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
-import { HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
-import { withTimeout } from "./limiter";
-import { fetchWithHostLimit } from "./http";
-import { incrementMetric, timePhase } from "./run_context";
-import { withRun } from "./run";
 
 export { closeBrowser } from "./browser";
 
@@ -274,7 +274,7 @@ const checkLinksInRun = async ({ links, verbose, fetchConcurrencyLimit = CONCURR
         processFn: async (group): Promise<LinkWithResult[]> => {
           const hrefs = [...new Set(group.links.map((link) => link.href))];
           const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
-          return group.links.map((link) => ({ ...link, result: resultsByHref.get(link.href)! }));
+          return group.links.map((link) => ({ ...link, result: resultFor(resultsByHref, link.href) }));
         },
       })
   );
@@ -539,6 +539,10 @@ const getPlaywrightHashResult = async (
   return { ok: true, status };
 };
 
+/** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
+const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkCheckResult =>
+  results.get(url) ?? { ok: false, error: "unexpected error", errorDetail: `No result for ${url}` };
+
 /**
  * Checks URLs pointing to the same page (same URL without hash) with a single Playwright navigation:
  * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
@@ -562,7 +566,7 @@ export async function checkUrlsOnPageWithPlaywright(
     notFound.map(async (url) => {
       incrementMetric("playwrightHashFallbacks");
       const fallback = await checkUrlsInOneNavigation([url], verbose, headless);
-      results.set(url, fallback.get(url)!);
+      results.set(url, resultFor(fallback, url));
     })
   );
   return results;
@@ -630,5 +634,5 @@ async function checkUrlsInOneNavigation(
  */
 export async function checkLinkWithPlaywright(url: string, verbose = false, headless = true): Promise<LinkCheckResult> {
   const results = await checkUrlsOnPageWithPlaywright([url], verbose, headless);
-  return results.get(url)!;
+  return resultFor(results, url);
 }

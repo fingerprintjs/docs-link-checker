@@ -1,13 +1,13 @@
-import { LinkCheckResult } from "../types";
 import { checkLinkWithFetch, checkLinkWithPlaywright } from "../link";
+import type { LinkCheckResult } from "../types";
 import { checkGitHubBlobLink } from "./checks/gh_blob";
+import { checkGitHubCommitLink } from "./checks/gh_commit";
 import { checkGitHubDiscussionLink } from "./checks/gh_discussion";
 import { checkGitHubIssueLink } from "./checks/gh_issue";
 import { checkGitHubPullRequestLink } from "./checks/gh_pr";
 import { checkGitHubReleaseLink } from "./checks/gh_release";
 import { checkIfRepositoryExists } from "./checks/gh_repo";
 import { checkGitHubTreeLink } from "./checks/gh_tree";
-import { checkGitHubCommitLink } from "./checks/gh_commit";
 import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./gh_url";
 
 export { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink };

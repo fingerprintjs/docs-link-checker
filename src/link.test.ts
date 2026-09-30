@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as cheerio from "cheerio";
-import { LinkCheckResult } from "./types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LinkCheckResult } from "./types";
 
 /**
  * Offline tests for `link.ts`: `fetch`, the GitHub API check and Playwright are all mocked.

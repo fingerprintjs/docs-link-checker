@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
  * State of a single link-check run (`checkWebsite`, `checkReadmesInGithubOrg` or a standalone `checkLinks`):

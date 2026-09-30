@@ -1,5 +1,4 @@
-import { checkGitHubRateLimit } from "../src/github/github_client";
-import { getMyOctokit } from "../src/github/github_client";
+import { checkGitHubRateLimit, getMyOctokit } from "../src/github/github_client";
 
 (async () => {
   const result = await checkGitHubRateLimit(getMyOctokit());

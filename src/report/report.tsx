@@ -1,7 +1,7 @@
-import { PromisePoolError } from "@supercharge/promise-pool";
-import { Link, LinkWithResult } from "../types";
+import { writeFileSync } from "node:fs";
+import type { PromisePoolError } from "@supercharge/promise-pool";
 import { renderToStaticMarkup } from "react-dom/server";
-import { writeFileSync } from "fs";
+import type { Link, LinkWithResult } from "../types";
 
 type LinkCheckReport = ReturnType<typeof getJSONReport>;
 
@@ -108,16 +108,17 @@ const JSONReportRenderer = ({ report }: { report: LinkCheckReport }) => {
         </thead>
         <tbody>
           {allBrokenLinks.map((link, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: rendered once to static HTML, rows are never reordered, and the same link can appear twice
             <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
               <td className="py-2 px-4 border-b break-all sm:break-words">
                 {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}
                 📄{" "}
-                <a href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)} target="_blank">
+                <a href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)} target="_blank" rel="noopener">
                   {link.page}
                 </a>
               </td>
               <td className="py-2 px-4 border-b break-all sm:break-words">
-                <a href={safeHref(link.href)} target="_blank">
+                <a href={safeHref(link.href)} target="_blank" rel="noopener">
                   🔗"{link.text}" ➡️ <HrefRenderer link={link} />
                 </a>
                 {/* Copied by the script in `renderReportToHTML`, no inline JS so any URL is safe */}

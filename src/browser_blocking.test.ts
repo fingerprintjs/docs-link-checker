@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { Route } from "playwright";
+import type { Route } from "playwright";
+import { describe, expect, it, vi } from "vitest";
 import { blockHeavyResources, createResourceBlocker, shouldBlockRequest } from "./browser";
 
 const request = (resourceType: string, url: string, isMainFrameNavigation = false) => ({

@@ -1,7 +1,8 @@
-import { LinkCheckResult } from "../../types";
+import type { RequestError } from "@octokit/types";
+import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { getMyOctokit } from "../github_client";
 import { getContentCached } from "../gh_cache";
+import { getMyOctokit } from "../github_client";
 
 /**
  * Check if a GitHub branch/tree exists
@@ -72,7 +73,7 @@ export const checkGitHubTreeLink = async (
   }
 
   // Check if it was a 404 error
-  const error = contentResult.error as any;
+  const error = contentResult.error as Partial<RequestError> | null;
   if (error?.status === 404) {
     return {
       ok: false,

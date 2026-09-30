@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getReadmeLinks } from "./github/gh_get_links";
 import { fetchWithHostLimit, getRedirectMethod, MAX_RATE_LIMIT_RETRIES, MAX_REDIRECTS } from "./http";
 import { HostLimiter } from "./limiter";
-import { setHostLimiter } from "./utils";
-import { getLinksFromPages, parseLinksFromPage } from "./page";
 import { checkLinks, checkLinkWithFetch } from "./link";
+import { getLinksFromPages, parseLinksFromPage } from "./page";
+import { setHostLimiter } from "./utils";
 import { checkWebsite } from "./website";
-import { getReadmeLinks } from "./github/gh_get_links";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});

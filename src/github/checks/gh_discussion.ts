@@ -1,7 +1,7 @@
-import { LinkCheckResult } from "../../types";
-import { getMyOctokit } from "../github_client";
+import type { RequestError } from "@octokit/types";
+import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { RequestError } from "@octokit/types";
+import { getMyOctokit } from "../github_client";
 
 /**
  * Check if a GitHub discussion exists

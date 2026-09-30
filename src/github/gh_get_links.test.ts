@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { octokit, checkGitHubRateLimit } = vi.hoisted(() => ({
   octokit: {
@@ -14,9 +14,9 @@ vi.mock("./github_client", () => ({
   checkGitHubRateLimit,
 }));
 
-import { checkReadmesInGithubOrg, getReadmeLinks, getReadmesFromOrg } from "./gh_get_links";
 import { HostLimiter } from "../limiter";
 import { setHostLimiter } from "../utils";
+import { checkReadmesInGithubOrg, getReadmeLinks, getReadmesFromOrg } from "./gh_get_links";
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
   full_name: `org/${name}`,

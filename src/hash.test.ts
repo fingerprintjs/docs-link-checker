@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as cheerio from "cheerio";
+import { describe, expect, it } from "vitest";
 import { cssString, decodeHash, getHashSelectors, isHashPresentInHtml } from "./hash";
 
 const html = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");

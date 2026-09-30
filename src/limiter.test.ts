@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { HostLimiter, Semaphore, parseRetryAfter, withTimeout } from "./limiter";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostLimiter, parseRetryAfter, Semaphore, withTimeout } from "./limiter";
 import { getHostConcurrencyLimit, setHostLimiter } from "./utils";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { octokit } = vi.hoisted(() => ({
   octokit: { repos: { get: vi.fn(), getContent: vi.fn() } },
@@ -6,11 +6,11 @@ const { octokit } = vi.hoisted(() => ({
 
 vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 
-import { getContentCached, getRepoCached } from "./gh_cache";
-import { checkGitHubBlobLink } from "./checks/gh_blob";
-import { checkIfRepositoryExists } from "./checks/gh_repo";
 import { withRun } from "../run";
 import { getRunContext } from "../run_context";
+import { checkGitHubBlobLink } from "./checks/gh_blob";
+import { checkIfRepositoryExists } from "./checks/gh_repo";
+import { getContentCached, getRepoCached } from "./gh_cache";
 
 const delayed = <T>(value: T, ms = 10) => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
 const content = (markdown: string) => ({ data: { type: "file", content: Buffer.from(markdown).toString("base64") } });

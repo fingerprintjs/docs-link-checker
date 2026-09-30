@@ -1,6 +1,6 @@
-import { describe, it, expect, afterAll } from "vitest";
-import { checkLinkWithGithubApi } from "./gh_check_link";
+import { afterAll, describe, expect, it } from "vitest";
 import { closeBrowser } from "../browser";
+import { checkLinkWithGithubApi } from "./gh_check_link";
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeBrowser);

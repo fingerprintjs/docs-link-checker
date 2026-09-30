@@ -1,7 +1,7 @@
-import { LinkCheckResult } from "../../types";
-import { getMyOctokit } from "../github_client";
+import type { RequestError } from "@octokit/types";
+import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { RequestError } from "@octokit/types";
+import { getMyOctokit } from "../github_client";
 
 /**
  * Check if a GitHub release exists
@@ -126,7 +126,7 @@ export const checkGitHubReleaseLink = async (
 
   // If pathParts[1] is a number, check if the specific release exists
   const releaseId = parseInt(pathParts[1], 10);
-  if (!isNaN(releaseId)) {
+  if (!Number.isNaN(releaseId)) {
     const { error } = await tryCatch(
       octokit.repos.getRelease({
         owner,

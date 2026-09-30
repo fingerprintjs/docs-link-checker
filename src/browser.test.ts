@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Offline tests for the shared browser (`browser.ts`) with a fake Playwright.
@@ -35,7 +35,7 @@ vi.mock("playwright", () => {
       close: async () => {
         state.closes++;
         connected = false;
-        disconnectedHandlers.forEach((handler) => handler());
+        for (const handler of disconnectedHandlers) handler();
       },
       newContext: async () => {
         if (state.crashNextContext) {
@@ -86,8 +86,8 @@ vi.mock("playwright", () => {
 
 import { closeBrowser, getBrowser, withPage } from "./browser";
 import { checkLinks, checkLinkWithPlaywright } from "./link";
-import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 import { withRun } from "./run";
+import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 

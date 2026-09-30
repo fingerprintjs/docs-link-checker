@@ -12,6 +12,10 @@
     "checkLinks:github": "tsx ./checks/github.ts",
     "checkLinks:web": "tsx ./checks/web.ts",
     "tsc": "tsc --noEmit",
+    "lint": "biome lint",
+    "format": "biome format --write",
+    "check": "biome check",
+    "check:fix": "biome check --write",
     "gh-limit": "tsx ./checks/gh_rate_limit.ts"
   },
   "keywords": [],
@@ -37,6 +41,7 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.14",
     "@octokit/types": "^18.0.0",
     "@types/cli-progress": "^3.11.6",
     "@types/node": "^24.19.0",

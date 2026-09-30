@@ -1,4 +1,4 @@
-import { chromium, Browser, Page, Route } from "playwright";
+import { type Browser, chromium, type Page, type Route } from "playwright";
 import { Semaphore } from "./limiter";
 import { incrementMetric } from "./run_context";
 import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";

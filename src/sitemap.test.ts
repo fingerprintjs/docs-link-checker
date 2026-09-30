@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getPagesFromSitemap, getWebsitePages, MAX_SITEMAP_DEPTH, SITEMAP_FETCH_CONCURRENCY } from "./sitemap";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostLimiter } from "./limiter";
+import { getPagesFromSitemap, getWebsitePages, MAX_SITEMAP_DEPTH, SITEMAP_FETCH_CONCURRENCY } from "./sitemap";
 import { setHostLimiter } from "./utils";
 
 const sitemapIndex = (locs: string[]) =>

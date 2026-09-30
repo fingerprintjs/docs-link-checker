@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { checkLinkWithGithubApi, isGithubUrl, isGithubCodeLineLink } from "./gh_check_link";
+import { describe, expect, it } from "vitest";
+import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./gh_check_link";
 
 describe("isGithubUrl", () => {
   it("should return true for github.com URLs", () => {

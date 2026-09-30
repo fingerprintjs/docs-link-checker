@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { formatRunMetrics, getRunContext, incrementMetric, runCached, timePhase } from "./run_context";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withRun } from "./run";
+import { formatRunMetrics, getRunContext, incrementMetric, runCached, timePhase } from "./run_context";
 
 afterEach(() => {
   vi.restoreAllMocks();

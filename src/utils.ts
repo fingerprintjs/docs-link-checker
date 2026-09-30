@@ -1,8 +1,8 @@
-import { PromisePool, PromisePoolError, ProcessHandler } from "@supercharge/promise-pool";
+import { type ProcessHandler, PromisePool, type PromisePoolError } from "@supercharge/promise-pool";
 import * as cliProgress from "cli-progress";
 import { HostLimiter } from "./limiter";
 
-export const log = (message: any, verbose = false) => {
+export const log = (message: unknown, verbose = false) => {
   if (verbose) {
     console.log(message);
   }

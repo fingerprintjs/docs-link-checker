@@ -1,5 +1,5 @@
-import { getMyOctokit } from "./github_client";
 import { incrementMetric, runCached } from "../run_context";
+import { getMyOctokit } from "./github_client";
 
 /**
  * GitHub API responses cached in memory for the current run (see `withRun`), concurrent calls share one request.

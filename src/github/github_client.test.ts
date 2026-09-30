@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { checkGitHubRateLimit, getMyOctokit, resetMyOctokit, throttleOptions } from "./github_client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withRun } from "../run";
 import { getRunContext } from "../run_context";
+import { checkGitHubRateLimit, getMyOctokit, resetMyOctokit, throttleOptions } from "./github_client";
 
 beforeEach(() => {
   resetMyOctokit();

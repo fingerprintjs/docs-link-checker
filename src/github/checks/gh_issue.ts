@@ -1,7 +1,7 @@
-import { LinkCheckResult } from "../../types";
-import { getMyOctokit } from "../github_client";
+import type { RequestError } from "@octokit/types";
+import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { RequestError } from "@octokit/types";
+import { getMyOctokit } from "../github_client";
 
 /**
  * Check if a GitHub issue exists
@@ -23,7 +23,7 @@ export const checkGitHubIssueLink = async (
   }
 
   const issueNumber = parseInt(issueNumberPart, 10);
-  if (isNaN(issueNumber)) {
+  if (Number.isNaN(issueNumber)) {
     return {
       ok: false,
       error: "broken link",

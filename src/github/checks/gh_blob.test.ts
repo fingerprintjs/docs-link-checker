@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getContent } = vi.hoisted(() => ({ getContent: vi.fn() }));
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { bars } = vi.hoisted(() => ({
   bars: [] as Array<{ start: ReturnType<typeof vi.fn>; increment: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }>,

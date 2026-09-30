@@ -1,12 +1,11 @@
-import { getLinksFromPages } from "./page";
-
 import { checkLinks } from "./link";
+import { getLinksFromPages } from "./page";
 import { getJSONReport, saveReport } from "./report/report";
-import { getWebsitePages } from "./sitemap";
-import { Link } from "./types";
-import { sampleItems } from "./utils";
 import { withRun } from "./run";
 import { timePhase } from "./run_context";
+import { getWebsitePages } from "./sitemap";
+import type { Link } from "./types";
+import { sampleItems } from "./utils";
 
 type CheckWebsiteArgs = {
   websiteUrl: string;

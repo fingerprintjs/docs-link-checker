@@ -1,4 +1,4 @@
-import { expect, describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { checkGitHubCommitLink } from "./gh_commit";
 
 describe("checkGitHubCommitLink", () => {
