@@ -349,10 +349,12 @@ const runCommand = (
 
 /** Local, compiler-like list of links to fix: `docs/a.md:7: broken link: docs/missing.md (File not found...)` */
 export const formatFileProblems = (report: LinkCheckReport): string[] =>
-  getLinksToFix(report).map(
-    (link) =>
-      `${link.line ? `${link.page}:${link.line}` : link.page}: ${link.href}: ${describeResult(link)}`,
-  );
+  getLinksToFix(report).map((link) => {
+    // One line per problem: collapse multi-line error details (HTTP bodies, Playwright messages)
+    const result = describeResult(link).replace(/\s+/g, " ");
+    const shortResult = result.length > 200 ? `${result.slice(0, 199)}…` : result;
+    return `${link.line ? `${link.page}:${link.line}` : link.page}: ${link.href}: ${shortResult}`;
+  });
 
 /**
  * Runs the CLI. Never throws: errors are printed and turned into the exit code.

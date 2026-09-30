@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getHelp, parseCliArgs, runCli, UsageError } from "./cli";
+import { formatFileProblems, getHelp, parseCliArgs, runCli, UsageError } from "./cli";
+import { getJSONReport } from "./report/report";
 
 const mocks = vi.hoisted(() => ({
   checkWebsite: vi.fn(),
@@ -163,6 +164,31 @@ describe("parseCliArgs()", () => {
     expect(() => parse(["files", "a.md"], { LINK_CHECK_HOST_CONCURRENCY: "-1" })).toThrow(
       'Invalid LINK_CHECK_HOST_CONCURRENCY "-1"',
     );
+  });
+});
+
+describe("formatFileProblems()", () => {
+  it("prints one line per link to fix, collapsing and shortening error details", () => {
+    const report = getJSONReport({
+      siteName: "local files",
+      errors: [],
+      links: [
+        {
+          page: "a.md",
+          line: 3,
+          href: "https://x.com",
+          text: "",
+          result: { ok: false, error: "unexpected error", errorDetail: `boom\n${"x".repeat(300)}` },
+        },
+        { page: "b.md", href: "c.md", text: "", result: { ok: false, error: "broken link" } },
+      ],
+    });
+    // Report order: broken links first, then unexpected errors
+    const [first, second] = formatFileProblems(report);
+    expect(first).toBe("b.md: c.md: broken link");
+    expect(second.startsWith("a.md:3: https://x.com: unexpected error: boom xxx")).toBe(true);
+    expect(second).not.toContain("\n");
+    expect(second.endsWith("…")).toBe(true);
   });
 });
 
