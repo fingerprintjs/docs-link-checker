@@ -2,6 +2,8 @@ export type Link = {
   page: string;
   href: string;
   text: string;
+  /** Line of the link in the page (local files only) */
+  line?: number;
 };
 
 export type LinkWithResult = Link & { result: LinkCheckResult };

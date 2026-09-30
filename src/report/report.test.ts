@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { describe, expect, it } from "vitest";
+import { createBaseline } from "../baseline";
 import type { LinkWithResult } from "../types";
 import { getJSONReport, renderReportToHTML } from "./report";
 
@@ -62,5 +63,33 @@ describe("renderReportToHTML()", () => {
       .get();
     expect(hrefs.some((href) => href.startsWith("javascript:"))).toBe(false);
     expect(hrefs).toContain(EVIL_HREF);
+  });
+});
+
+describe("renderReportToHTML() with ignored links", () => {
+  const report = getJSONReport({
+    links: [
+      { ...links[0], href: "https://broken.com/" },
+      { ...links[0], href: "https://ignored.com/", page: "docs/a.md", line: 7 },
+    ],
+    errors: [],
+    siteName: "site",
+    baseline: createBaseline([{ href: "https://ignored.com/", reason: "<i>known</i>" }]),
+  });
+  const $ignored = cheerio.load(renderReportToHTML(report));
+
+  it("renders ignored links in a separate section with the reason and line", () => {
+    const section = $ignored("[data-section=ignored]");
+    expect(section.length).toBe(1);
+    expect(section.find("tbody tr").length).toBe(1);
+    expect(section.text()).toContain("docs/a.md:7");
+    expect(section.text()).toContain("Ignored: <i>known</i>");
+    expect(section.find("i").length).toBe(0);
+    expect($ignored("table").first().text()).toContain("https://broken.com/");
+    expect($ignored("table").first().text()).not.toContain("https://ignored.com/");
+  });
+
+  it("has no ignored section without ignored links", () => {
+    expect($("[data-section=ignored]").length).toBe(0);
   });
 });

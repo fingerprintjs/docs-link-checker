@@ -1,0 +1,223 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  BaselineError,
+  createBaseline,
+  globToRegExp,
+  loadBaseline,
+  updateBaseline,
+  validateBaseline,
+  writeBaseline,
+} from "./baseline";
+import { getJSONReport } from "./report/report";
+import type { LinkWithResult } from "./types";
+
+const broken = (href: string, page = "https://example.com/page"): LinkWithResult => ({
+  href,
+  page,
+  text: "text",
+  result: { ok: false, error: "broken link", status: 404 },
+});
+
+const tempDir = () => mkdtempSync(join(tmpdir(), "baseline-test-"));
+
+describe("globToRegExp()", () => {
+  it("matches literally without wildcards, including `?` and regex characters", () => {
+    const regExp = globToRegExp("https://example.com/a?b=(1)+[2]");
+    expect(regExp.test("https://example.com/a?b=(1)+[2]")).toBe(true);
+    expect(regExp.test("https://example.com/aXb=(1)+[2]")).toBe(false);
+    expect(regExp.test("https://example.com/a?b=(1)+[2]/more")).toBe(false);
+  });
+
+  it("`*` does not match `/`, `**` matches anything", () => {
+    expect(globToRegExp("https://x.com/*").test("https://x.com/user")).toBe(true);
+    expect(globToRegExp("https://x.com/*").test("https://x.com/user/status/1")).toBe(false);
+    expect(globToRegExp("https://x.com/**").test("https://x.com/user/status/1")).toBe(true);
+    expect(globToRegExp("docs/**/*.md").test("docs/a/b/c.md")).toBe(true);
+    expect(globToRegExp("**.linkedin.com/**").test("https://www.linkedin.com/company/x")).toBe(
+      true,
+    );
+  });
+});
+
+describe("validateBaseline()", () => {
+  it("accepts an object with `ignore`, a bare array and string shorthands", () => {
+    expect(validateBaseline({ ignore: [{ href: "https://a.com" }] })).toEqual({
+      ignore: [{ href: "https://a.com" }],
+    });
+    expect(validateBaseline(["https://a.com/**", { regex: "^https://b" }])).toEqual({
+      ignore: [{ pattern: "https://a.com/**" }, { regex: "^https://b" }],
+    });
+    expect(validateBaseline({ $schema: "x", ignore: [] })).toEqual({ ignore: [] });
+  });
+
+  it.each([
+    [null, /expected an object/],
+    [42, /expected an object/],
+    [{}, /expected an "ignore" array/],
+    [{ ignore: "x" }, /"ignore" must be an array/],
+    [{ ignore: [], extra: 1 }, /unknown top-level key\(s\): extra/],
+    [[42], /ignore\[0\]: expected a string pattern or an object/],
+    [[""], /ignore\[0\]: pattern must not be empty/],
+    [[{ href: "a" }, { herf: "b" }], /ignore\[1\]: unknown key "herf"/],
+    [[{ page: "a" }], /ignore\[0\]: expected exactly one of "href", "pattern" or "regex"/],
+    [[{ href: "a", pattern: "b" }], /exactly one of/],
+    [[{ href: 1 }], /ignore\[0\]: "href" must be a non-empty string/],
+    [[{ href: "a", reason: "" }], /"reason" must be a non-empty string/],
+    [[{ regex: "(" }], /ignore\[0\]: invalid regular expression "\("/],
+  ])("rejects %j", (data, message) => {
+    expect(() => validateBaseline(data)).toThrow(BaselineError);
+    expect(() => validateBaseline(data)).toThrow(message);
+  });
+});
+
+describe("createBaseline().match()", () => {
+  const baseline = createBaseline([
+    { href: "https://exact.com/a", reason: "exact" },
+    { href: "https://on-page.com/a", page: "docs/guide.md", reason: "on page" },
+    { pattern: "https://glob.com/**", reason: "glob" },
+    { regex: "^https://(www\\.)?regex\\.com/", reason: "regex" },
+    { pattern: "https://page-glob.com/*", page: "docs/**" },
+  ]);
+
+  it("matches exact hrefs only", () => {
+    expect(baseline.match(broken("https://exact.com/a"))?.reason).toBe("exact");
+    expect(baseline.match(broken("https://exact.com/a/b"))).toBeUndefined();
+    expect(baseline.match(broken("https://exact.com/"))).toBeUndefined();
+  });
+
+  it("restricts entries with `page` to that page", () => {
+    expect(baseline.match(broken("https://on-page.com/a", "docs/guide.md"))?.reason).toBe(
+      "on page",
+    );
+    expect(baseline.match(broken("https://on-page.com/a", "docs/other.md"))).toBeUndefined();
+    expect(baseline.match(broken("https://page-glob.com/x", "docs/a/b.md"))).toBeDefined();
+    expect(baseline.match(broken("https://page-glob.com/x", "README.md"))).toBeUndefined();
+  });
+
+  it("matches globs and regular expressions", () => {
+    expect(baseline.match(broken("https://glob.com/any/path?q=1"))?.reason).toBe("glob");
+    expect(baseline.match(broken("https://www.regex.com/x"))?.reason).toBe("regex");
+    expect(baseline.match(broken("https://regex.com/x"))?.reason).toBe("regex");
+    expect(baseline.match(broken("https://other.com/regex.com/"))).toBeUndefined();
+  });
+});
+
+describe("getJSONReport() with a baseline", () => {
+  const baseline = createBaseline([
+    { href: "https://ignored.com/", reason: "known issue" },
+    { pattern: "https://ok.com/**" },
+    { pattern: "https://error.com/**" },
+  ]);
+  const report = getJSONReport({
+    siteName: "test",
+    baseline,
+    links: [
+      broken("https://ignored.com/"),
+      broken("https://broken.com/"),
+      { href: "https://ok.com/", page: "p", text: "t", result: { ok: true, status: 200 } },
+      {
+        href: "https://ok.com/hash#x",
+        page: "p",
+        text: "t",
+        result: { ok: false, error: "could not check", status: 403 },
+      },
+    ],
+    errors: [
+      // A pool error (like `PromisePoolError`, only `item` and `message` are used)
+      {
+        item: { href: "https://error.com/x", page: "p", text: "t" },
+        message: "boom",
+      } as never,
+    ],
+  });
+
+  it("moves matching failures to `ignored` with the reason, they don't count towards links to fix", () => {
+    expect(report.summary).toEqual({
+      linksChecked: 4,
+      totalLinksToFix: 1,
+      brokenLinks: 1,
+      hashNotFound: 0,
+      networkErrors: 0,
+      couldNotCheck: 0,
+      ignored: 3,
+    });
+    expect(report.brokenLinks.map((link) => link.href)).toEqual(["https://broken.com/"]);
+    expect(report.ignored.map((link) => [link.href, link.ignoreReason])).toEqual([
+      ["https://ignored.com/", "known issue"],
+      ["https://ok.com/hash#x", undefined],
+      ["https://error.com/x", undefined],
+    ]);
+  });
+
+  it("never ignores successful links", () => {
+    expect(report.ignored.some((link) => link.result.ok)).toBe(false);
+  });
+});
+
+describe("loadBaseline()", () => {
+  it("loads a valid file", () => {
+    const path = join(tempDir(), "baseline.json");
+    writeFileSync(path, JSON.stringify({ ignore: [{ href: "https://a.com", reason: "r" }] }));
+    expect(loadBaseline(path).match(broken("https://a.com"))?.reason).toBe("r");
+  });
+
+  it("reports missing files, unless allowed", () => {
+    const path = join(tempDir(), "missing.json");
+    expect(() => loadBaseline(path)).toThrow(`Baseline file not found: ${path}`);
+    expect(loadBaseline(path, { allowMissing: true }).entries).toEqual([]);
+  });
+
+  it("reports invalid JSON and invalid entries with the file name", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "bad.json"), "{ not json");
+    expect(() => loadBaseline(join(dir, "bad.json"))).toThrow(/Invalid baseline file .*bad\.json/);
+    writeFileSync(join(dir, "invalid.json"), JSON.stringify({ ignore: [{ reason: "x" }] }));
+    expect(() => loadBaseline(join(dir, "invalid.json"))).toThrow(
+      /Invalid baseline file .*invalid\.json: ignore\[0\]: expected exactly one of/,
+    );
+  });
+});
+
+describe("updateBaseline()", () => {
+  const baseline = createBaseline([
+    { href: "https://still-broken.com/", reason: "keep my reason" },
+    { href: "https://fixed.com/" },
+    { pattern: "https://unused-pattern.com/**" },
+  ]);
+  const failures = [
+    broken("https://still-broken.com/"),
+    broken("https://new-b.com/", "b.md"),
+    broken("https://new-a.com/", "a.md"),
+    broken("https://new-a.com/", "a.md"),
+  ];
+
+  it("keeps matching entries and patterns, drops stale hrefs, adds new failures (sorted, deduplicated)", () => {
+    expect(updateBaseline({ baseline, failures })).toEqual({
+      ignore: [
+        { href: "https://still-broken.com/", reason: "keep my reason" },
+        { pattern: "https://unused-pattern.com/**" },
+        { href: "https://new-a.com/", page: "a.md" },
+        { href: "https://new-b.com/", page: "b.md" },
+      ],
+    });
+  });
+
+  it("keeps unmatched entries with `keepUnmatched` (sampled runs) and adds a reason", () => {
+    const { ignore } = updateBaseline({ baseline, failures, keepUnmatched: true, reason: "why" });
+    expect(ignore).toContainEqual({ href: "https://fixed.com/" });
+    expect(ignore).toContainEqual({ href: "https://new-a.com/", page: "a.md", reason: "why" });
+  });
+
+  it("writes a file that loads back", () => {
+    const path = join(tempDir(), "baseline.json");
+    writeBaseline(path, updateBaseline({ baseline, failures }));
+    expect(readFileSync(path, "utf8").endsWith("}\n")).toBe(true);
+    const loaded = loadBaseline(path);
+    for (const failure of failures) {
+      expect(loaded.match(failure)).toBeDefined();
+    }
+  });
+});
