@@ -93,13 +93,15 @@ export const renderJobSummary = (
 };
 
 /**
- * Appends the job summary when running in GitHub Actions (`GITHUB_STEP_SUMMARY` is set).
+ * Appends the job summary to `summaryFile` (the value of `GITHUB_STEP_SUMMARY`, pass `env.GITHUB_STEP_SUMMARY`).
+ * The file is an explicit argument without a default: an `undefined` value must never fall back to the
+ * real `process.env` (tests running in GitHub Actions would write to the job summary of the CI run).
  * @returns `true` if the summary was written
  */
 export const writeJobSummary = (
   report: LinkCheckReport,
-  options: SummaryOptions = {},
-  summaryFile = process.env.GITHUB_STEP_SUMMARY,
+  options: SummaryOptions,
+  summaryFile: string | undefined,
 ): boolean => {
   if (!summaryFile) {
     return false;
@@ -156,10 +158,13 @@ export const getFileAnnotations = (report: LinkCheckReport): string[] => {
   ];
 };
 
-/** Writes `name=value` outputs to `GITHUB_OUTPUT` (if set) */
+/**
+ * Writes `name=value` outputs to `outputFile` (the value of `GITHUB_OUTPUT`, pass `env.GITHUB_OUTPUT`), if set.
+ * No default for the same reason as `writeJobSummary`.
+ */
 export const writeGithubOutputs = (
   outputs: Record<string, string | number>,
-  outputFile = process.env.GITHUB_OUTPUT,
+  outputFile: string | undefined,
 ): boolean => {
   if (!outputFile) {
     return false;

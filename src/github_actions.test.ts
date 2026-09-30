@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBaseline } from "./baseline";
 import {
   escapeTableCell,
@@ -116,6 +116,17 @@ describe("writeJobSummary()", () => {
     expect(content.startsWith("previous step\n## ❌")).toBe(true);
     expect(writeJobSummary(report([]), {}, undefined)).toBe(false);
     expect(writeJobSummary(report([]), {}, "")).toBe(false);
+  });
+
+  it("never falls back to the real GITHUB_STEP_SUMMARY / GITHUB_OUTPUT (like in CI)", () => {
+    const summary = tempFile("ci-summary.md");
+    const output = tempFile("ci-output");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
+    vi.stubEnv("GITHUB_OUTPUT", output);
+    expect(writeJobSummary(report([broken("x.md")]), {}, undefined)).toBe(false);
+    expect(writeGithubOutputs({ a: 1 }, undefined)).toBe(false);
+    expect(readFileSync(summary, "utf8")).toBe("");
+    expect(readFileSync(output, "utf8")).toBe("");
   });
 });
 
