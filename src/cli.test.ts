@@ -65,8 +65,10 @@ describe("parseCliArgs()", () => {
       command: "files",
       patterns: ["docs/**/*.md", "README.md"],
       dryRun: true,
+      annotations: true,
       options: defaults,
     });
+    expect(parse(["files", "a.md", "--no-annotations"])).toMatchObject({ annotations: false });
   });
 
   it("parses common options", () => {
@@ -143,6 +145,7 @@ describe("parseCliArgs()", () => {
     [["github-org", "../x"], 'Invalid GitHub organization "../x".'],
     [["files", "a.md", "--include", "x"], "--include can only be used with the site command."],
     [["site", "https://a.com", "--dry-run"], "--dry-run can only be used with the files command."],
+    [["github-org", "x", "--no-annotations"], "--annotations can only be used with the files"],
     [["files", "a.md", "--sample-rate", "2"], 'Invalid --sample-rate "2"'],
     [["files", "a.md", "--sample-rate="], "--sample-rate must not be empty."],
     [["files", "a.md", "--host-concurrency", "0"], 'Invalid --host-concurrency "0"'],
@@ -230,6 +233,13 @@ describe("runCli()", () => {
     expect(stdout).toBe(
       "::error file=docs/guide.md,line=8,title=Broken link::../nope.md: broken link: File not found: nope.md\n",
     );
+
+    stdout = "";
+    await runCli(
+      ["files", "docs/*.md", "--output-dir", tempDir(), "--no-fail-on-broken", "--no-annotations"],
+      io({ GITHUB_ACTIONS: "true" }),
+    );
+    expect(stdout).toBe("");
   });
 
   it("files --json: prints only the JSON report to stdout", async () => {

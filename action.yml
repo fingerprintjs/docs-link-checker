@@ -1,0 +1,171 @@
+name: 'Docs link checker'
+description: 'Checks links in markdown files, including #anchors: relative links on disk, absolute links over the network'
+author: 'Fingerprint'
+branding:
+  icon: 'link'
+  color: 'orange'
+# https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action
+
+inputs:
+  files:
+    description: 'Glob patterns (or paths) of markdown files to check, relative to the repository root, separated by spaces or new lines. node_modules and .git are skipped.'
+    required: false
+    default: '**/*.md'
+  github-token:
+    description: 'Token used to check GitHub links with the GitHub API (rate limits, private repositories).'
+    required: false
+    default: ${{ github.token }}
+  fail-on-broken:
+    description: 'Fail the step when links need fixing ("true" or "false").'
+    required: false
+    default: 'true'
+  baseline:
+    description: 'Path of a baseline (ignore) file relative to the repository root. Matching links are reported as ignored.'
+    required: false
+    default: ''
+  sample-rate:
+    description: 'Check only a deterministic share of the files (a number between 0 and 1).'
+    required: false
+    default: '1'
+  annotations:
+    description: 'Report links to fix as annotations on the files ("true" or "false").'
+    required: false
+    default: 'true'
+  output-dir:
+    description: 'Where to save the JSON and HTML reports. Defaults to a directory in RUNNER_TEMP.'
+    required: false
+    default: ''
+
+outputs:
+  links-to-fix:
+    description: 'Number of links to fix (broken links, missing anchors, errors), not counting ignored links'
+    value: ${{ steps.check.outputs.links-to-fix }}
+  report-path:
+    description: 'Path of the JSON report'
+    value: ${{ steps.check.outputs.report-path }}
+  report-html-path:
+    description: 'Path of the HTML report'
+    value: ${{ steps.check.outputs.report-html-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Read Node.js and pnpm versions of the link checker
+      id: versions
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      # `node-version-file` of setup-node is relative to the workspace, the action lives outside of it
+      run: |
+        {
+          echo "node=$(tr -d '[:space:]' < .nvmrc)"
+          echo "pnpm=$(sed -n 's/.*"packageManager": *"pnpm@\([^"+]*\).*/\1/p' package.json)"
+          echo "lock=$(sha256sum pnpm-lock.yaml | cut -c1-16)"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ steps.versions.outputs.node }}
+
+    - name: Get pnpm store path
+      id: pnpm-store
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        PNPM_VERSION: ${{ steps.versions.outputs.pnpm }}
+      # pnpm runs with npx, so the action doesn't change the pnpm (or corepack) setup of the calling workflow
+      run: echo "path=$(npx --yes "pnpm@${PNPM_VERSION}" store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache pnpm store
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-docs-link-checker-pnpm-${{ steps.versions.outputs.lock }}
+
+    - name: Install link checker dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        PNPM_VERSION: ${{ steps.versions.outputs.pnpm }}
+      run: npx --yes "pnpm@${PNPM_VERSION}" install --frozen-lockfile
+
+    - name: Validate inputs and find links
+      id: links
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        INPUT_FILES: ${{ inputs.files }}
+        INPUT_SAMPLE_RATE: ${{ inputs.sample-rate }}
+        INPUT_FAIL_ON_BROKEN: ${{ inputs.fail-on-broken }}
+        INPUT_ANNOTATIONS: ${{ inputs.annotations }}
+        LINK_CHECK_SAMPLE_RATE: ''
+        LINK_CHECK_BASELINE: ''
+      run: |
+        for input in "fail-on-broken=${INPUT_FAIL_ON_BROKEN}" "annotations=${INPUT_ANNOTATIONS}"; do
+          case "${input#*=}" in
+            true|false) ;;
+            *) echo "::error::Input ${input%%=*} must be \"true\" or \"false\", got \"${input#*=}\"."; exit 2 ;;
+          esac
+        done
+        # Split on whitespace without expanding the globs in the shell (the CLI expands them)
+        set -f
+        # shellcheck disable=SC2086
+        set -- $INPUT_FILES
+        set +f
+        if [ "$#" -eq 0 ]; then
+          echo "::error::Input files must contain at least one glob pattern."
+          exit 2
+        fi
+        # Lists the links without checking them, writes `external-links` to GITHUB_OUTPUT
+        node "$ACTION_PATH/bin/docs-link-checker.js" files "$@" --dry-run --sample-rate "$INPUT_SAMPLE_RATE" > /dev/null
+
+    # Playwright is only needed to re-check external links, local links are checked on disk
+    - name: Get installed Playwright version (used in cache key)
+      id: playwright
+      if: steps.links.outputs.external-links != '0'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: echo "version=$(node -p "require('node:module').createRequire(process.cwd() + '/package.json')('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Chromium browser binary
+      id: playwright-cache
+      if: steps.links.outputs.external-links != '0'
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-chrome-${{ steps.playwright.outputs.version }}
+
+    - name: Install Chromium browser binary if cache missed
+      if: steps.links.outputs.external-links != '0' && steps.playwright-cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: node_modules/.bin/playwright install --with-deps chromium
+
+    - name: Check links
+      id: check
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        INPUT_FILES: ${{ inputs.files }}
+        INPUT_SAMPLE_RATE: ${{ inputs.sample-rate }}
+        INPUT_FAIL_ON_BROKEN: ${{ inputs.fail-on-broken }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_ANNOTATIONS: ${{ inputs.annotations }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
+        # The calling workflow's env must not change the action's behavior, inputs do
+        FAIL_ON_BROKEN_LINKS: ''
+        LINK_CHECK_SAMPLE_RATE: ''
+        LINK_CHECK_BASELINE: ''
+      run: |
+        set -f
+        # shellcheck disable=SC2086
+        set -- $INPUT_FILES
+        set +f
+        args=(files "$@" --sample-rate "$INPUT_SAMPLE_RATE" --output-dir "${INPUT_OUTPUT_DIR:-$RUNNER_TEMP/docs-link-checker}")
+        if [ "$INPUT_FAIL_ON_BROKEN" = "true" ]; then args+=(--fail-on-broken); else args+=(--no-fail-on-broken); fi
+        if [ "$INPUT_ANNOTATIONS" = "false" ]; then args+=(--no-annotations); fi
+        if [ -n "$INPUT_BASELINE" ]; then args+=(--baseline "$INPUT_BASELINE"); fi
+        node "$ACTION_PATH/bin/docs-link-checker.js" "${args[@]}"

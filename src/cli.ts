@@ -52,7 +52,14 @@ export type CliCommand =
       options: CommonOptions;
     }
   | { command: "github-org"; org: string; options: CommonOptions }
-  | { command: "files"; patterns: string[]; dryRun: boolean; options: CommonOptions };
+  | {
+      command: "files";
+      patterns: string[];
+      dryRun: boolean;
+      /** Print GitHub annotations (in GitHub Actions) or `file:line` problems */
+      annotations: boolean;
+      options: CommonOptions;
+    };
 
 /** Invalid command line arguments or environment variables (exit code 2) */
 export class UsageError extends Error {
@@ -124,10 +131,11 @@ Example:
 In GitHub Actions, links to fix are reported as annotations on the files.
 
 Usage:
-  ${BIN} files <glob...> [--dry-run] [options]
+  ${BIN} files <glob...> [--dry-run] [--no-annotations] [options]
 
 Options:
   --dry-run                  Only list the links found, don't check anything
+  --no-annotations           Don't print links to fix as GitHub annotations (or file:line lines locally)
 
 ${COMMON_HELP}
 
@@ -143,6 +151,7 @@ const OPTIONS = {
   include: { type: "string", multiple: true },
   "use-playwright": { type: "boolean" },
   "dry-run": { type: "boolean" },
+  annotations: { type: "boolean" },
   "sample-rate": { type: "string" },
   "fail-on-broken": { type: "boolean" },
   baseline: { type: "string" },
@@ -157,6 +166,7 @@ const COMMAND_OPTIONS: Partial<Record<keyof typeof OPTIONS, CommandName>> = {
   include: "site",
   "use-playwright": "site",
   "dry-run": "files",
+  annotations: "files",
 };
 
 const isCommand = (value: string | undefined): value is CommandName =>
@@ -296,7 +306,13 @@ export const parseCliArgs = (
       if (args.length === 0) {
         throw new UsageError("files expects at least one glob pattern or file.");
       }
-      return { command, patterns: args, dryRun: values["dry-run"] ?? false, options };
+      return {
+        command,
+        patterns: args,
+        dryRun: values["dry-run"] ?? false,
+        annotations: values.annotations ?? true,
+        options,
+      };
     }
   }
 };
@@ -430,7 +446,7 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
     const reportPaths = getReportPaths(report.siteName, options.outputDir);
     const linksToFix = report.summary.totalLinksToFix;
 
-    if (command.command === "files") {
+    if (command.command === "files" && command.annotations) {
       const problems =
         env.GITHUB_ACTIONS === "true" ? getFileAnnotations(report) : formatFileProblems(report);
       for (const line of problems) {
