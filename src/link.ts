@@ -7,7 +7,6 @@ import {
   OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
   TASK_TIMEOUT,
-  getHostLimiter,
   getRandomUserAgent,
   log,
   parallelProcess,
@@ -17,7 +16,8 @@ import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
 import { AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
 import { withPage } from "./browser";
-import { parseRetryAfter, withTimeout } from "./limiter";
+import { withTimeout } from "./limiter";
+import { fetchWithHostLimit } from "./http";
 import { incrementMetric, timePhase } from "./run_context";
 import { withRun } from "./run";
 
@@ -300,8 +300,6 @@ function shouldSpoofUserAgent(url: string) {
 
 // When a HEAD request returns one of these, retry once with GET before failing
 const HEAD_FALLBACK_STATUS_CODES = [403, 405, 501];
-// How many times a request is retried after a 429 with `Retry-After`
-const MAX_RATE_LIMIT_RETRIES = 2;
 
 /**
  * Result of fetching a page (URL without hash): either a final failure, or the status and the anchors of the page.
@@ -329,8 +327,7 @@ const lazyAnchorIndex = (html: string) => {
  */
 export const fetchPage = async (
   url: string,
-  { needBody, verbose = false }: { needBody: boolean; verbose?: boolean },
-  attempt = 0
+  { needBody, verbose = false }: { needBody: boolean; verbose?: boolean }
 ): Promise<FetchedPage> => {
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {
@@ -345,37 +342,33 @@ export const fetchPage = async (
       signal: AbortSignal.timeout(FETCH_TIMEOUT),
     });
 
-  const hostLimiter = getHostLimiter();
   try {
-    const response = await hostLimiter.run(url, async () => {
-      incrementMetric("pagesFetched");
-      let response = await request(needBody ? "GET" : "HEAD");
-      // Some servers don't support (or block) HEAD requests, retry once with GET
-      if (!needBody && HEAD_FALLBACK_STATUS_CODES.includes(response.status)) {
-        log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-        await response.body?.cancel();
-        response = await request("GET");
-      }
-      let body = "";
-      if (needBody || !OKAY_STATUS_CODES.includes(response.status)) {
-        body = await response.text();
-      } else {
+    // Limited per host, a 429 with Retry-After pauses the host and is retried (see `fetchWithHostLimit`)
+    const response = await fetchWithHostLimit(
+      url,
+      async () => {
+        const response = await request(needBody ? "GET" : "HEAD");
+        // Some servers don't support (or block) HEAD requests, retry once with GET
+        if (!needBody && HEAD_FALLBACK_STATUS_CODES.includes(response.status)) {
+          log(`HEAD returned ${response.status}, retrying with GET`, verbose);
+          await response.body?.cancel();
+          return request("GET");
+        }
+        return response;
+      },
+      async (response) => {
+        if (needBody || !OKAY_STATUS_CODES.includes(response.status)) {
+          return response.text();
+        }
         // Don't download the body when it's not needed (it might be a large file)
         await response.body?.cancel();
+        return "";
       }
-      return { status: response.status, statusText: response.statusText, headers: response.headers, body };
-    });
+    );
 
-    // GitHub web rate limit makes you wait 60 seconds after 500 requests
+    // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
     const retryAfter = response.headers.get("Retry-After");
     if (response.status === 429 && retryAfter) {
-      const retryAfterMs = parseRetryAfter(retryAfter);
-      if (retryAfterMs !== undefined && retryAfterMs < TASK_TIMEOUT && attempt < MAX_RATE_LIMIT_RETRIES) {
-        console.log(`Rate limited, retrying after ${retryAfter} seconds...`);
-        // Pause the whole host, not just this request
-        hostLimiter.pause(url, retryAfterMs);
-        return await fetchPage(url, { needBody, verbose }, attempt + 1);
-      }
       return {
         ok: false,
         result: {
@@ -394,12 +387,12 @@ export const fetchPage = async (
           ok: false,
           error: "broken link",
           status: response.status,
-          errorDetail: `${response.statusText} ${response.body}`,
+          errorDetail: `${response.statusText} ${response.data}`,
         },
       };
     }
 
-    return { ok: true, status: response.status, getAnchors: needBody ? lazyAnchorIndex(response.body) : undefined };
+    return { ok: true, status: response.status, getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined };
   } catch (error) {
     log(`Something went wrong: ${error}`, verbose);
     return {

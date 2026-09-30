@@ -1,7 +1,8 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
-import { FETCH_TIMEOUT, getHostLimiter, getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
+import { FETCH_TIMEOUT, getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 import { withPage } from "./browser";
+import { fetchWithHostLimit } from "./http";
 import { incrementMetric } from "./run_context";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
@@ -54,23 +55,21 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   if (pageHTML) {
     pageContent = pageHTML;
   } else {
-    // Limited per host (like link checks), with a request timeout
-    const content = await getHostLimiter().run(pageUrl, async () => {
-      incrementMetric("pagesFetched");
-      const response = await fetch(pageUrl, {
-        headers: { "User-Agent": getRandomUserAgent() },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT),
-      });
-      if (!response.ok) {
-        console.error(`Could not fetch ${pageUrl}! status: ${response.status}`);
-        return undefined;
-      }
-      return response.text();
-    });
-    if (content === undefined) {
-      return [];
+    // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
+    const response = await fetchWithHostLimit(
+      pageUrl,
+      () =>
+        fetch(pageUrl, {
+          headers: { "User-Agent": getRandomUserAgent() },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT),
+        }),
+      async (response) => (response.ok ? response.text() : "")
+    );
+    if (response.status < 200 || response.status >= 300) {
+      // Thrown (not an empty list), so the page shows up in the extraction errors instead of silently having no links
+      throw new Error(`Could not fetch ${pageUrl}, status: ${response.status}`);
     }
-    pageContent = content;
+    pageContent = response.data;
   }
 
   // Parse links from page HTML

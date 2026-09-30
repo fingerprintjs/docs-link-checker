@@ -154,6 +154,22 @@ export const closeBrowser = async (): Promise<void> => {
   }
 };
 
+// Outer runs currently active (see `withRun`). The shared browser is closed only when the last one ends.
+let activeRuns = 0;
+
+/** Marks the start of an outer run that may use the shared browser, pair it with `endBrowserRun` */
+export const beginBrowserRun = () => {
+  activeRuns++;
+};
+
+/** Ends an outer run: closes the shared browser if no other run is still active (concurrent runs share it) */
+export const endBrowserRun = async () => {
+  activeRuns = Math.max(0, activeRuns - 1);
+  if (activeRuns === 0) {
+    await closeBrowser();
+  }
+};
+
 type WithPageOptions = {
   userAgent?: string;
   /** `false` launches a separate visible browser that is left open for debugging */

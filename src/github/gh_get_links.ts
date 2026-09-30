@@ -1,4 +1,5 @@
-import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { FETCH_TIMEOUT, formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { fetchWithHostLimit } from "../http";
 import { Link } from "../types";
 import { extractLinksFromMarkdown } from "../markdown";
 import { checkLinks } from "../link";
@@ -89,17 +90,24 @@ export async function getReadmesFromOrg(orgName: string): Promise<MdFile[]> {
   return sampleItems({ items: readmes, key: (readme) => readme.sourcePath, label: "README files" });
 }
 
-async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
+/** Downloads README files (limited per host) and extracts their links */
+export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
   const { results, errors } = await parallelProcess({
     items: files,
+    // Downloads wait for a per-host slot (all files are on raw.githubusercontent.com),
+    // every request has its own timeout instead of the task timeout
+    taskTimeout: null,
     processFn: async (file) => {
-      const response = await fetch(file.downloadUrl);
-      if (!response.ok) {
+      const response = await fetchWithHostLimit(
+        file.downloadUrl,
+        () => fetch(file.downloadUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) }),
+        async (response) => (response.ok ? response.text() : "")
+      );
+      if (response.status < 200 || response.status >= 300) {
         throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);
       }
-      const markdown = await response.text();
-      const links = extractLinksFromMarkdown(markdown, file.sourcePath);
+      const links = extractLinksFromMarkdown(response.data, file.sourcePath);
       return links;
     },
   });

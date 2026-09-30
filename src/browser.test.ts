@@ -222,3 +222,38 @@ describe("shared browser", () => {
     expect(errors[0].message).toContain("Executable doesn't exist");
   });
 });
+
+describe("shared browser across concurrent runs", () => {
+  it("keeps the browser open until the last concurrent run ends", async () => {
+    state.gotoDelayMs = 50;
+    const playwrightRun = withRun(() => checkLinkWithPlaywright("https://example.com/slow"));
+    // Let the Playwright run launch the browser and start navigating
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.launches).toBe(1);
+
+    // A fetch-only run that finishes while the other run still uses the browser
+    await withRun(async () => {});
+    expect(state.closes).toBe(0);
+
+    expect(await playwrightRun).toEqual({ ok: true, status: 200 });
+    expect(state.closes).toBe(1);
+    expect(state.launches).toBe(1);
+  });
+
+  it("closes the browser when concurrent runs end in any order", async () => {
+    let finishFirst!: () => void;
+    const first = withRun(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        })
+    );
+    const second = withRun(() => checkLinkWithPlaywright("https://example.com/a"));
+
+    await second;
+    expect(state.closes).toBe(0);
+    finishFirst();
+    await first;
+    expect(state.closes).toBe(1);
+  });
+});
