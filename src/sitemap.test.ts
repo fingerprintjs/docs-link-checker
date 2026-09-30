@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getPagesFromSitemap, getWebsitePages, MAX_SITEMAP_DEPTH } from "./sitemap";
+import { getPagesFromSitemap, getWebsitePages, MAX_SITEMAP_DEPTH, SITEMAP_FETCH_CONCURRENCY } from "./sitemap";
 
 const sitemapIndex = (locs: string[]) =>
   `<?xml version="1.0" encoding="UTF-8"?>
@@ -90,6 +90,29 @@ describe("getPagesFromSitemap()", () => {
 
     expect(pages).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(MAX_SITEMAP_DEPTH + 1);
+  });
+
+  it(`fetches at most ${SITEMAP_FETCH_CONCURRENCY} sitemaps at the same time`, async () => {
+    const children = Array.from({ length: 30 }, (_, i) => `${SITE}/child-${i}.xml`);
+    let active = 0;
+    let maxActive = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active--;
+        const body = url.endsWith("index.xml") ? sitemapIndex(children) : urlSet([url.replace(".xml", "")]);
+        return new Response(body, { status: 200 });
+      })
+    );
+
+    const pages = await getPagesFromSitemap(`${SITE}/index.xml`);
+
+    expect(pages).toHaveLength(children.length);
+    expect(maxActive).toBe(SITEMAP_FETCH_CONCURRENCY);
   });
 
   it("re-processes a sitemap index reached at a shallower depth than an earlier visit", async () => {

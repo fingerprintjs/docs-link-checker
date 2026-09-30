@@ -3,6 +3,36 @@ import { getRandomUserAgent, log } from "./utils";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;
+// How many sitemaps are fetched at the same time (sitemap indexes can list thousands of sitemaps)
+export const SITEMAP_FETCH_CONCURRENCY = 5;
+
+/**
+ * Limits how many calls of `fn` run at the same time. A finished call hands its slot directly to the next
+ * queued call, so the limit is never exceeded.
+ */
+const createConcurrencyLimiter = (max: number) => {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (active < max) {
+      active++;
+    } else {
+      await new Promise<void>((resolve) => queue.push(resolve));
+    }
+    try {
+      return await fn();
+    } finally {
+      const next = queue.shift();
+      if (next) {
+        next();
+      } else {
+        active--;
+      }
+    }
+  };
+};
+
+const limitSitemapFetch = createConcurrencyLimiter(SITEMAP_FETCH_CONCURRENCY);
 
 /**
  * Retrieves all the pages from a website by fetching the sitemap and parsing it.
@@ -101,12 +131,15 @@ export const getPagesFromSitemap = async (
   }
   visitedSitemaps.set(sitemapUrl, depth);
 
-  const sitemapResponse = await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } });
-  // Fail loudly, silently skipping a sitemap would skip all of its pages
-  if (!sitemapResponse.ok) {
-    throw new Error(`Could not fetch sitemap ${sitemapUrl}: status ${sitemapResponse.status}`);
-  }
-  const response = await sitemapResponse.text();
+  // Only the fetch is limited (not the recursion), so nested sitemaps can't deadlock waiting for their parents
+  const response = await limitSitemapFetch(async () => {
+    const sitemapResponse = await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } });
+    // Fail loudly, silently skipping a sitemap would skip all of its pages
+    if (!sitemapResponse.ok) {
+      throw new Error(`Could not fetch sitemap ${sitemapUrl}: status ${sitemapResponse.status}`);
+    }
+    return sitemapResponse.text();
+  });
   const $ = cheerio.load(response, { xmlMode: true });
 
   if ($("sitemapindex").length > 0) {

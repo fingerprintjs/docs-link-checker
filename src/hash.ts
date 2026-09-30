@@ -23,9 +23,9 @@ export const cssString = (value: string): string =>
     .replace(/\0/g, "�")
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\a ")
-    .replace(/\r/g, "\\d ")
-    .replace(/\f/g, "\\c ")}"`;
+    // Every other non-printable character (U+0001-U+001F, U+007F) as a hex escape, like `\a ` for a newline
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+    .replace(/[\u0001-\u001f\u007f]/g, (char) => `\\${char.charCodeAt(0).toString(16)} `)}"`;
 
 /**
  * All the forms of the hash (without `#`) an anchor could use: the raw (possibly percent-encoded) form and the decoded form.

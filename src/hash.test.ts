@@ -42,6 +42,12 @@ describe("cssString", () => {
   it("escapes quotes, backslashes and newlines", () => {
     expect(cssString('a"b\\c\nd')).toBe('"a\\"b\\\\c\\a d"');
   });
+
+  it("escapes every non-printable character, so any hash gives a valid selector", () => {
+    expect(cssString("a\u0001b\u001fc\u007fd")).toBe('"a\\1 b\\1f c\\7f d"');
+    // A control character in a hash (`#%01section`) must not break the selector
+    expect(isHashPresentInHtml('<h2 id="\u0001section">A</h2>', "#%01section", PAGE)).toBe(true);
+  });
 });
 
 describe("isHashPresentInHtml()", () => {
