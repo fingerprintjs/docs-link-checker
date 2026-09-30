@@ -182,6 +182,14 @@ describe("fetchWithHostLimit() redirects", () => {
 
     expect((await fetchWithHostLimit("https://example.com/", {}, text)).status).toBe(301);
   });
+
+  it("follows an empty Location (resolves to the current URL), so a self-redirect loop fails", async () => {
+    setHostLimiter(new HostLimiter(2));
+    const fetchMock = stubFetch(() => redirect("", 302));
+
+    await expect(fetchWithHostLimit("https://self.example.com/", {}, text)).rejects.toThrow("Too many redirects");
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_REDIRECTS + 1);
+  });
 });
 
 /**

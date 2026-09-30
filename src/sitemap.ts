@@ -50,7 +50,8 @@ const fetchSitemap = (sitemapUrl: string, readBody = true) =>
     fetchWithHostLimit(
       sitemapUrl,
       { headers: { "User-Agent": getRandomUserAgent() }, timeoutMs: SITEMAP_FETCH_TIMEOUT },
-      async (response) => (readBody ? response.text() : "")
+      // Failed responses are not read, fetchWithHostLimit cancels their body
+      async (response) => (readBody && response.ok ? response.text() : "")
     )
   );
 

@@ -46,6 +46,30 @@ describe("getWebsitePages()", () => {
     await expect(getWebsitePages(SITE)).rejects.toThrow(`Could not fetch sitemap ${SITE}/sitemap-missing.xml: status 404`);
   });
 
+  it("does not read the body of a failed sitemap response", async () => {
+    let failedBodyCancelled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        if (String(input) === `${SITE}/sitemap.xml`) {
+          return new Response(sitemapIndex([`${SITE}/sitemap-broken.xml`]), { status: 200 });
+        }
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new TextEncoder().encode("large error page"));
+          },
+          cancel() {
+            failedBodyCancelled = true;
+          },
+        });
+        return new Response(body, { status: 500 });
+      })
+    );
+
+    await expect(getWebsitePages(SITE)).rejects.toThrow("status 500");
+    expect(failedBodyCancelled).toBe(true);
+  });
+
   it("follows nested sitemap indexes recursively and dedupes pages and sitemaps", async () => {
     const fetchMock = stubSitemaps({
       [`${SITE}/sitemap.xml`]: sitemapIndex([`${SITE}/sitemap-docs.xml`, `${SITE}/sitemap-nested-index.xml`]),

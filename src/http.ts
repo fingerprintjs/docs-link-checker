@@ -93,7 +93,8 @@ export const fetchWithHostLimit = async <T>(
       });
       try {
         const location = response.headers.get("Location");
-        if (REDIRECT_STATUS_CODES.includes(response.status) && location) {
+        // An empty Location is a valid (relative) target, it resolves to the current URL
+        if (REDIRECT_STATUS_CODES.includes(response.status) && location !== null) {
           return { type: "redirect", location, status: response.status };
         }
         if (response.status === 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
