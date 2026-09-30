@@ -78,7 +78,7 @@ export const checkGitHubBlobLink = async (
   fullUrl: URL,
   owner: string,
   repo: string,
-  pathParts: string[]
+  pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const [, branch, ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
@@ -91,7 +91,7 @@ export const checkGitHubBlobLink = async (
       repo,
       ref: branch,
       path,
-    })
+    }),
   );
 
   if (error) {

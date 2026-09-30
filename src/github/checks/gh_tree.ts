@@ -14,7 +14,7 @@ import { getMyOctokit } from "../github_client";
 export const checkGitHubTreeLink = async (
   owner: string,
   repo: string,
-  pathParts: string[]
+  pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
   const [, branch, ...restOfPath] = pathParts;
@@ -28,7 +28,7 @@ export const checkGitHubTreeLink = async (
         owner,
         repo,
         ref: `heads/${branch}`,
-      })
+      }),
     );
 
     if (branchResult.data) {
@@ -41,7 +41,7 @@ export const checkGitHubTreeLink = async (
         owner,
         repo,
         commit_sha: branch,
-      })
+      }),
     );
 
     if (commitResult.data) {
@@ -65,7 +65,7 @@ export const checkGitHubTreeLink = async (
       repo,
       ref: branch,
       path,
-    })
+    }),
   );
 
   if (contentResult.data) {

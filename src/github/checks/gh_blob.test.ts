@@ -10,7 +10,10 @@ vi.mock("../github_client", () => ({
 
 import { checkGitHubBlobLink, getMarkdownAnchors } from "./gh_blob";
 
-const readme = readFileSync(join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"), "utf8");
+const readme = readFileSync(
+  join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"),
+  "utf8",
+);
 
 const checkHash = (hash: string) => {
   const url = new URL(`https://github.com/owner/repo/blob/main/README.md${hash}`);
@@ -62,12 +65,16 @@ describe("getMarkdownAnchors()", () => {
 });
 
 describe("checkGitHubBlobLink() (mocked GitHub API)", () => {
-  it.each(["", "#installation", "#usage-1", "#custom-anchor", "#InStAlLaTiOn", "#user-content-installation"])(
-    "returns OK for %s",
-    async (hash) => {
-      expect(await checkHash(hash)).toEqual({ ok: true, status: 200 });
-    }
-  );
+  it.each([
+    "",
+    "#installation",
+    "#usage-1",
+    "#custom-anchor",
+    "#InStAlLaTiOn",
+    "#user-content-installation",
+  ])("returns OK for %s", async (hash) => {
+    expect(await checkHash(hash)).toEqual({ ok: true, status: 200 });
+  });
 
   it("returns 'hash not found' for code block comments", async () => {
     expect(await checkHash("#not-a-heading")).toEqual({

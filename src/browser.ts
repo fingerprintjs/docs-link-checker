@@ -44,7 +44,8 @@ export const BLOCKED_HOSTS = [
   "plausible.io",
 ];
 
-const matchesHost = (hostname: string, host: string) => hostname === host || hostname.endsWith(`.${host}`);
+const matchesHost = (hostname: string, host: string) =>
+  hostname === host || hostname.endsWith(`.${host}`);
 
 const getHostname = (url: string | undefined): string | undefined => {
   if (!url) {
@@ -72,7 +73,12 @@ export type RequestInfo = {
 /**
  * Decides if a request made by a page should be aborted (pure function, used by the Playwright route handler).
  */
-export const shouldBlockRequest = ({ resourceType, url, isMainFrameNavigation, pageUrl }: RequestInfo): boolean => {
+export const shouldBlockRequest = ({
+  resourceType,
+  url,
+  isMainFrameNavigation,
+  pageUrl,
+}: RequestInfo): boolean => {
   if (isMainFrameNavigation) {
     return false;
   }
@@ -86,7 +92,9 @@ export const shouldBlockRequest = ({ resourceType, url, isMainFrameNavigation, p
   }
   const pageHostname = getHostname(pageUrl);
   return BLOCKED_HOSTS.some(
-    (host) => matchesHost(hostname, host) && !(pageHostname !== undefined && matchesHost(pageHostname, host)),
+    (host) =>
+      matchesHost(hostname, host) &&
+      !(pageHostname !== undefined && matchesHost(pageHostname, host)),
   );
 };
 
@@ -190,7 +198,10 @@ const debugBrowsers = new Set<Browser>();
 export const closeBrowser = async (): Promise<void> => {
   const debug = [...debugBrowsers];
   debugBrowsers.clear();
-  await Promise.all([closeSharedBrowser(), ...debug.map((browser) => browser.close().catch(() => {}))]);
+  await Promise.all([
+    closeSharedBrowser(),
+    ...debug.map((browser) => browser.close().catch(() => {})),
+  ]);
 };
 
 /** Closes the shared (headless) browser, if it was launched */
@@ -298,7 +309,10 @@ export const withPage = async <T>(
   }
 };
 
-const withSharedBrowserPage = async <T>(fn: (page: Page) => Promise<T>, userAgent?: string): Promise<T> => {
+const withSharedBrowserPage = async <T>(
+  fn: (page: Page) => Promise<T>,
+  userAgent?: string,
+): Promise<T> => {
   for (let attempt = 0; ; attempt++) {
     const browser = await getBrowser();
     try {

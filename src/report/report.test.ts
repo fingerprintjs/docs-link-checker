@@ -10,7 +10,12 @@ const links: LinkWithResult[] = [
     href: EVIL_HREF,
     page: "https://example.com/page",
     text: `</a><script>alert("text")</script>`,
-    result: { ok: false, error: "broken link", status: 404, errorDetail: "<img src=x onerror=alert(1)>" },
+    result: {
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "<img src=x onerror=alert(1)>",
+    },
   },
   {
     href: "javascript:alert(1)",

@@ -14,7 +14,7 @@ import { getMyOctokit } from "../github_client";
 export const checkGitHubIssueLink = async (
   owner: string,
   repo: string,
-  pathParts: string[]
+  pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
   const [, issueNumberPart] = pathParts;
@@ -36,7 +36,7 @@ export const checkGitHubIssueLink = async (
       owner,
       repo,
       issue_number: issueNumber,
-    })
+    }),
   );
 
   if (error) {

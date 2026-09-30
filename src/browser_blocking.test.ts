@@ -13,9 +13,12 @@ describe("shouldBlockRequest()", () => {
     expect(shouldBlockRequest(request(resourceType, "https://example.com/asset"))).toBe(true);
   });
 
-  it.each(["script", "stylesheet", "xhr", "fetch", "document"])("allows %s resources from regular hosts", (type) => {
-    expect(shouldBlockRequest(request(type, "https://example.com/app"))).toBe(false);
-  });
+  it.each(["script", "stylesheet", "xhr", "fetch", "document"])(
+    "allows %s resources from regular hosts",
+    (type) => {
+      expect(shouldBlockRequest(request(type, "https://example.com/app"))).toBe(false);
+    },
+  );
 
   it.each([
     "https://www.googletagmanager.com/gtm.js?id=GTM-123",
@@ -31,17 +34,25 @@ describe("shouldBlockRequest()", () => {
   });
 
   it("matches blocked hosts exactly or as a subdomain, not as a substring", () => {
-    expect(shouldBlockRequest(request("script", "https://notgoogletagmanager.com/x.js"))).toBe(false);
-    expect(shouldBlockRequest(request("script", "https://example.com/googletagmanager.com.js"))).toBe(false);
+    expect(shouldBlockRequest(request("script", "https://notgoogletagmanager.com/x.js"))).toBe(
+      false,
+    );
+    expect(
+      shouldBlockRequest(request("script", "https://example.com/googletagmanager.com.js")),
+    ).toBe(false);
   });
 
   it("never blocks the main frame navigation (the link being checked), even for images or blocked hosts", () => {
-    expect(shouldBlockRequest(request("document", "https://www.googletagmanager.com/", true))).toBe(false);
+    expect(shouldBlockRequest(request("document", "https://www.googletagmanager.com/", true))).toBe(
+      false,
+    );
     expect(shouldBlockRequest(request("image", "https://example.com/logo.png", true))).toBe(false);
   });
 
   it("blocks iframes from analytics hosts (not the main frame)", () => {
-    expect(shouldBlockRequest(request("document", "https://www.googletagmanager.com/ns.html"))).toBe(true);
+    expect(
+      shouldBlockRequest(request("document", "https://www.googletagmanager.com/ns.html")),
+    ).toBe(true);
   });
 
   it("does not throw on invalid URLs", () => {
@@ -89,7 +100,11 @@ describe("blockHeavyResources() route handler", () => {
   });
 
   it("continues the main frame navigation", async () => {
-    const route = fakeRoute({ resourceType: "document", url: "https://www.googletagmanager.com/", navigation: true });
+    const route = fakeRoute({
+      resourceType: "document",
+      url: "https://www.googletagmanager.com/",
+      navigation: true,
+    });
     await blockHeavyResources(route as unknown as Route);
     expect(route.continue).toHaveBeenCalled();
   });
@@ -113,9 +128,16 @@ describe("blockHeavyResources() route handler", () => {
 
   it("createResourceBlocker() allows the vendor's own resources when the checked page is hosted by it", async () => {
     const blocker = createResourceBlocker();
-    const navigation = fakeRoute({ resourceType: "document", url: "https://segment.com/docs/", navigation: true });
+    const navigation = fakeRoute({
+      resourceType: "document",
+      url: "https://segment.com/docs/",
+      navigation: true,
+    });
     const ownScript = fakeRoute({ resourceType: "script", url: "https://cdn.segment.com/app.js" });
-    const tagManager = fakeRoute({ resourceType: "script", url: "https://www.googletagmanager.com/gtm.js" });
+    const tagManager = fakeRoute({
+      resourceType: "script",
+      url: "https://www.googletagmanager.com/gtm.js",
+    });
     const image = fakeRoute({ resourceType: "image", url: "https://segment.com/logo.png" });
 
     for (const route of [navigation, ownScript, tagManager, image]) {
@@ -131,10 +153,25 @@ describe("blockHeavyResources() route handler", () => {
   it("createResourceBlocker() tracks the page URL of its own context only", async () => {
     const segmentPage = createResourceBlocker();
     const otherPage = createResourceBlocker();
-    await segmentPage(fakeRoute({ resourceType: "document", url: "https://segment.com/", navigation: true }) as never);
-    await otherPage(fakeRoute({ resourceType: "document", url: "https://example.com/", navigation: true }) as never);
+    await segmentPage(
+      fakeRoute({
+        resourceType: "document",
+        url: "https://segment.com/",
+        navigation: true,
+      }) as never,
+    );
+    await otherPage(
+      fakeRoute({
+        resourceType: "document",
+        url: "https://example.com/",
+        navigation: true,
+      }) as never,
+    );
 
-    const script = fakeRoute({ resourceType: "script", url: "https://cdn.segment.com/analytics.js" });
+    const script = fakeRoute({
+      resourceType: "script",
+      url: "https://cdn.segment.com/analytics.js",
+    });
     await otherPage(script as unknown as Route);
     expect(script.abort).toHaveBeenCalled();
   });
@@ -143,28 +180,50 @@ describe("blockHeavyResources() route handler", () => {
 describe("shouldBlockRequest() with the checked page URL", () => {
   it("does not block requests to the checked page's own vendor host (and its subdomains)", () => {
     const pageUrl = "https://segment.com/docs/connections/";
-    expect(shouldBlockRequest({ ...request("script", "https://segment.com/app.js"), pageUrl })).toBe(false);
-    expect(shouldBlockRequest({ ...request("xhr", "https://api.segment.com/v1/docs"), pageUrl })).toBe(false);
-    expect(shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl })).toBe(false);
+    expect(
+      shouldBlockRequest({ ...request("script", "https://segment.com/app.js"), pageUrl }),
+    ).toBe(false);
+    expect(
+      shouldBlockRequest({ ...request("xhr", "https://api.segment.com/v1/docs"), pageUrl }),
+    ).toBe(false);
+    expect(
+      shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl }),
+    ).toBe(false);
   });
 
   it("works when the page is on a subdomain of the vendor", () => {
     const pageUrl = "https://help.hotjar.com/hc/en-us";
-    expect(shouldBlockRequest({ ...request("script", "https://static.hotjar.com/c/hotjar.js"), pageUrl })).toBe(false);
+    expect(
+      shouldBlockRequest({
+        ...request("script", "https://static.hotjar.com/c/hotjar.js"),
+        pageUrl,
+      }),
+    ).toBe(false);
   });
 
   it("still blocks other vendors and heavy resource types on a vendor-hosted page", () => {
     const pageUrl = "https://segment.com/docs/";
-    expect(shouldBlockRequest({ ...request("script", "https://www.googletagmanager.com/gtm.js"), pageUrl })).toBe(true);
-    expect(shouldBlockRequest({ ...request("font", "https://segment.com/font.woff2"), pageUrl })).toBe(true);
+    expect(
+      shouldBlockRequest({
+        ...request("script", "https://www.googletagmanager.com/gtm.js"),
+        pageUrl,
+      }),
+    ).toBe(true);
+    expect(
+      shouldBlockRequest({ ...request("font", "https://segment.com/font.woff2"), pageUrl }),
+    ).toBe(true);
   });
 
   it("blocks vendor hosts on regular pages", () => {
     const pageUrl = "https://docs.example.com/";
-    expect(shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl })).toBe(true);
+    expect(
+      shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl }),
+    ).toBe(true);
   });
 
   it("ignores an invalid page URL", () => {
-    expect(shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl: "nope" })).toBe(true);
+    expect(
+      shouldBlockRequest({ ...request("script", "https://cdn.segment.com/x.js"), pageUrl: "nope" }),
+    ).toBe(true);
   });
 });

@@ -68,7 +68,7 @@ export async function getReadmesFromOrg(orgName: string): Promise<MdFile[]> {
     repos = await getOrgRepos(orgName);
   } catch (error) {
     throw new Error(
-      `Failed to list repositories of GitHub organization ${orgName}: ${(error as Error).message}`
+      `Failed to list repositories of GitHub organization ${orgName}: ${(error as Error).message}`,
     );
   }
   console.log(`\nFound ${repos.length} public repositories in ${orgName} organization.`);
@@ -81,11 +81,13 @@ export async function getReadmesFromOrg(orgName: string): Promise<MdFile[]> {
   });
   if (errors.length > 0) {
     // Already logged by parallelProcess, make it clear that the README list is incomplete
-    console.warn(`Could not list README files in ${errors.length} repositories, their links will not be checked.`);
+    console.warn(
+      `Could not list README files in ${errors.length} repositories, their links will not be checked.`,
+    );
   }
   const readmes = results.flat();
   console.log(
-    `\nFound ${readmes.length} public Readmes files in ${repos.length} repositories of ${orgName} organization.`
+    `\nFound ${readmes.length} public Readmes files in ${repos.length} repositories of ${orgName} organization.`,
   );
   return sampleItems({ items: readmes, key: (readme) => readme.sourcePath, label: "README files" });
 }
@@ -100,7 +102,7 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
     taskTimeout: null,
     processFn: async (file) => {
       const response = await fetchWithHostLimit(file.downloadUrl, {}, async (response) =>
-        response.ok ? response.text() : ""
+        response.ok ? response.text() : "",
       );
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);
@@ -112,7 +114,7 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
 
   if (errors.length > 0) {
     console.error(
-      `Errors fetching files and extracting links: ${errors.length}\n${formatPoolErrors(errors)}`
+      `Errors fetching files and extracting links: ${errors.length}\n${formatPoolErrors(errors)}`,
     );
   }
   const links = results.flat();
@@ -129,7 +131,9 @@ export const checkReadmesInGithubOrg = (org: string) =>
     const startTime = performance.now();
     await checkGitHubRateLimit(getMyOctokit());
 
-    const fingerprintPublicReadmes = await timePhase("List README files", () => getReadmesFromOrg(org));
+    const fingerprintPublicReadmes = await timePhase("List README files", () =>
+      getReadmesFromOrg(org),
+    );
 
     const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
     const filteredLinks = filterOutIrrelevantLinks(links);

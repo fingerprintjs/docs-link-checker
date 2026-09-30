@@ -24,7 +24,14 @@ const existingHashes = [
   "#InStAlLaTiOn",
 ];
 
-const missingHashes = ["#does-not-exist", "#not-an-anchor", "#version-1-2-3", "#%E0%A4%A", "#]", '#"]'];
+const missingHashes = [
+  "#does-not-exist",
+  "#not-an-anchor",
+  "#version-1-2-3",
+  "#%E0%A4%A",
+  "#]",
+  '#"]',
+];
 
 describe("decodeHash", () => {
   it("removes the # and decodes percent-encoding", () => {
@@ -60,18 +67,23 @@ describe("isHashPresentInHtml()", () => {
   });
 
   it("finds GitHub line numbers only for GitHub code line links", () => {
-    expect(isHashPresentInHtml(html, "#L12", "https://github.com/o/r/blob/main/a.js#L12")).toBe(true);
-    expect(isHashPresentInHtml(html, "#L12-L20", "https://github.com/o/r/blob/main/a.js#L12-L20")).toBe(
-      true
+    expect(isHashPresentInHtml(html, "#L12", "https://github.com/o/r/blob/main/a.js#L12")).toBe(
+      true,
     );
-    expect(isHashPresentInHtml(html, "#L13", "https://github.com/o/r/blob/main/a.js#L13")).toBe(false);
+    expect(
+      isHashPresentInHtml(html, "#L12-L20", "https://github.com/o/r/blob/main/a.js#L12-L20"),
+    ).toBe(true);
+    expect(isHashPresentInHtml(html, "#L13", "https://github.com/o/r/blob/main/a.js#L13")).toBe(
+      false,
+    );
     expect(isHashPresentInHtml(html, "#L12", `${PAGE}#L12`)).toBe(false);
   });
 });
 
 describe("getHashSelectors() (used by Playwright)", () => {
   const $ = cheerio.load(html);
-  const matches = (hash: string, url = PAGE) => $(getHashSelectors(hash, url).join(", ")).length > 0;
+  const matches = (hash: string, url = PAGE) =>
+    $(getHashSelectors(hash, url).join(", ")).length > 0;
 
   it.each(existingHashes)("builds a valid selector that matches %s", (hash) => {
     // Playwright gets the hash without the leading `#`

@@ -24,12 +24,18 @@ export const checkWebsite = ({ websiteUrl, linkFilter, usePlaywright }: CheckWeb
     const allPages = await timePhase("Read sitemap", () => getWebsitePages(websiteUrl, true));
     const pages = sampleItems({ items: allPages, key: (page) => page, label: "pages" });
 
-    const { links } = await timePhase("Extract links", () => getLinksFromPages({ pages, linkFilter, usePlaywright }));
+    const { links } = await timePhase("Extract links", () =>
+      getLinksFromPages({ pages, linkFilter, usePlaywright }),
+    );
     console.log(`Fetched ${links.length} links.`);
 
     const { results, errors } = await checkLinks({ links });
 
-    const report = getJSONReport({ links: results, errors, siteName: new URL(websiteUrl).hostname });
+    const report = getJSONReport({
+      links: results,
+      errors,
+      siteName: new URL(websiteUrl).hostname,
+    });
     saveReport(report);
     console.log(report.summary);
 

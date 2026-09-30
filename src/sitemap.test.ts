@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostLimiter } from "./limiter";
-import { getPagesFromSitemap, getWebsitePages, MAX_SITEMAP_DEPTH, SITEMAP_FETCH_CONCURRENCY } from "./sitemap";
+import {
+  getPagesFromSitemap,
+  getWebsitePages,
+  MAX_SITEMAP_DEPTH,
+  SITEMAP_FETCH_CONCURRENCY,
+} from "./sitemap";
 import { setHostLimiter } from "./utils";
 
 const sitemapIndex = (locs: string[]) =>
@@ -18,7 +23,9 @@ ${locs.map((loc) => `  <url><loc>${loc}</loc></url>`).join("\n")}
 const stubSitemaps = (files: Record<string, string>) => {
   const fetchMock = vi.fn(async (input: string | URL | Request) => {
     const url = String(input);
-    return url in files ? new Response(files[url], { status: 200 }) : new Response("", { status: 404 });
+    return url in files
+      ? new Response(files[url], { status: 200 })
+      : new Response("", { status: 404 });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -43,7 +50,9 @@ describe("getWebsitePages()", () => {
 
   it("fails loudly when a nested sitemap cannot be fetched", async () => {
     stubSitemaps({ [`${SITE}/sitemap.xml`]: sitemapIndex([`${SITE}/sitemap-missing.xml`]) });
-    await expect(getWebsitePages(SITE)).rejects.toThrow(`Could not fetch sitemap ${SITE}/sitemap-missing.xml: status 404`);
+    await expect(getWebsitePages(SITE)).rejects.toThrow(
+      `Could not fetch sitemap ${SITE}/sitemap-missing.xml: status 404`,
+    );
   });
 
   it("does not read the body of a failed sitemap response", async () => {
@@ -63,7 +72,7 @@ describe("getWebsitePages()", () => {
           },
         });
         return new Response(body, { status: 500 });
-      })
+      }),
     );
 
     await expect(getWebsitePages(SITE)).rejects.toThrow("status 500");
@@ -72,7 +81,10 @@ describe("getWebsitePages()", () => {
 
   it("follows nested sitemap indexes recursively and dedupes pages and sitemaps", async () => {
     const fetchMock = stubSitemaps({
-      [`${SITE}/sitemap.xml`]: sitemapIndex([`${SITE}/sitemap-docs.xml`, `${SITE}/sitemap-nested-index.xml`]),
+      [`${SITE}/sitemap.xml`]: sitemapIndex([
+        `${SITE}/sitemap-docs.xml`,
+        `${SITE}/sitemap-nested-index.xml`,
+      ]),
       [`${SITE}/sitemap-nested-index.xml`]: sitemapIndex([
         `${SITE}/sitemap-blog.xml`,
         // Already listed in the parent index
@@ -130,9 +142,11 @@ describe("getPagesFromSitemap()", () => {
         maxActive = Math.max(maxActive, active);
         await new Promise((resolve) => setTimeout(resolve, 5));
         active--;
-        const body = url.endsWith("index.xml") ? sitemapIndex(children) : urlSet([url.replace(".xml", "")]);
+        const body = url.endsWith("index.xml")
+          ? sitemapIndex(children)
+          : urlSet([url.replace(".xml", "")]);
         return new Response(body, { status: 200 });
-      })
+      }),
     );
 
     const pages = await getPagesFromSitemap(`${SITE}/index.xml`);
@@ -155,9 +169,11 @@ describe("getPagesFromSitemap()", () => {
           maxActive = Math.max(maxActive, active);
           await new Promise((resolve) => setTimeout(resolve, 5));
           active--;
-          const body = url.endsWith("index.xml") ? sitemapIndex(children) : urlSet([url.replace(".xml", "")]);
+          const body = url.endsWith("index.xml")
+            ? sitemapIndex(children)
+            : urlSet([url.replace(".xml", "")]);
           return new Response(body, { status: 200 });
-        })
+        }),
       );
 
       const pages = await getPagesFromSitemap(`${SITE}/index.xml`);
@@ -176,8 +192,8 @@ describe("getPagesFromSitemap()", () => {
       vi.fn(async () =>
         ++calls === 1
           ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
-          : new Response(urlSet([`${SITE}/page`]), { status: 200 })
-      )
+          : new Response(urlSet([`${SITE}/page`]), { status: 200 }),
+      ),
     );
 
     expect(await getPagesFromSitemap(`${SITE}/pages.xml`)).toEqual([`${SITE}/page`]);
@@ -192,9 +208,13 @@ describe("getPagesFromSitemap()", () => {
     const visited = new Map<string, number>();
 
     // First reached at the max depth: its nested sitemaps are too deep to follow
-    expect(await getPagesFromSitemap(`${SITE}/index.xml`, false, MAX_SITEMAP_DEPTH, visited)).toEqual([]);
+    expect(
+      await getPagesFromSitemap(`${SITE}/index.xml`, false, MAX_SITEMAP_DEPTH, visited),
+    ).toEqual([]);
     // Then reached at depth 0: must not be skipped as already visited
-    expect(await getPagesFromSitemap(`${SITE}/index.xml`, false, 0, visited)).toEqual([`${SITE}/page`]);
+    expect(await getPagesFromSitemap(`${SITE}/index.xml`, false, 0, visited)).toEqual([
+      `${SITE}/page`,
+    ]);
     // Same or deeper visits are still skipped
     expect(await getPagesFromSitemap(`${SITE}/index.xml`, false, 1, visited)).toEqual([]);
   });

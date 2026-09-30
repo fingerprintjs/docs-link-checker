@@ -10,7 +10,9 @@ dotenv.config({ quiet: true });
 const MyOctokit = Octokit.plugin(retry, throttling);
 
 type MyOctokitInstance = InstanceType<typeof MyOctokit>;
-type ThrottleOptions = NonNullable<NonNullable<ConstructorParameters<typeof MyOctokit>[0]>["throttle"]>;
+type ThrottleOptions = NonNullable<
+  NonNullable<ConstructorParameters<typeof MyOctokit>[0]>["throttle"]
+>;
 
 /**
  * Retry once on both the primary and the secondary rate limit, then give up.
@@ -77,7 +79,9 @@ function readableMilliseconds(milliseconds: number) {
   return `${days}d ${hours}h ${minutes}m ${seconds}s`;
 }
 
-export async function checkGitHubRateLimit(octokit: ReturnType<typeof getMyOctokit> = getMyOctokit()) {
+export async function checkGitHubRateLimit(
+  octokit: ReturnType<typeof getMyOctokit> = getMyOctokit(),
+) {
   const response = await octokit.rest.rateLimit.get();
   const resetTime = new Date(response.data.rate.reset * 1000);
   const millisecondsUntilReset = resetTime.getTime() - Date.now();

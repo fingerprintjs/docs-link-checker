@@ -9,7 +9,7 @@ import { getRepoCached } from "../gh_cache";
  */
 export const checkIfRepositoryExists = async (
   owner: string,
-  repo: string
+  repo: string,
 ): Promise<LinkCheckResult> => {
   try {
     await getRepoCached(owner, repo);

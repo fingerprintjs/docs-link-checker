@@ -11,7 +11,7 @@ describe("isGithubUrl", () => {
     expect(isGithubUrl("https://gitlab.com/owner/repo")).toBe(false);
     expect(isGithubUrl("https://docs.github.com/en/codespaces")).toBe(false);
     expect(isGithubUrl("https://gist.github.com/t3dotgg/a486c4ae66d32bf17c09c73609dacc5b")).toBe(
-      false
+      false,
     );
   });
 });
@@ -20,25 +20,31 @@ describe("isGithubCodeLineLink", () => {
   it("should return true for valid code line links", () => {
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5")).toBe(true);
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-L10")).toBe(
-      true
+      true,
     );
   });
 
   it("should recognize percent-encoded code line links", () => {
-    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#%4C12")).toBe(true);
-    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L12%2DL20")).toBe(true);
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#%4C12")).toBe(
+      true,
+    );
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L12%2DL20")).toBe(
+      true,
+    );
     // Malformed percent-encoding is not a line link (and does not throw)
-    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L12%")).toBe(false);
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L12%")).toBe(
+      false,
+    );
   });
 
   it("should return false for invalid code line links", () => {
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L")).toBe(false);
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-")).toBe(false);
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L-L10")).toBe(
-      false
+      false,
     );
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-L10-L15")).toBe(
-      false
+      false,
     );
   });
 });

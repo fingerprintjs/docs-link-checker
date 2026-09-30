@@ -39,7 +39,9 @@ const getHashVariants = (rawHash: string): string[] => {
  * GitHub uses `data-line-number` attribute to handle line links like `#L12` and `#L12-L15` (check just the first one for simplicity)
  */
 const getGithubLineNumber = (hash: string, url: string): string | undefined =>
-  isGithubCodeLineLink(url) ? decodeUrlHash(hash).replace(/^#/, "").split("-")[0].slice(1) : undefined;
+  isGithubCodeLineLink(url)
+    ? decodeUrlHash(hash).replace(/^#/, "").split("-")[0].slice(1)
+    : undefined;
 
 /**
  * CSS selectors matching elements the hash can point to (all values properly escaped).
@@ -78,7 +80,12 @@ export type AnchorIndex = {
 };
 
 export const buildAnchorIndex = (html: string): AnchorIndex => {
-  const index: AnchorIndex = { ids: new Set(), names: new Set(), hrefs: new Set(), lineNumbers: new Set() };
+  const index: AnchorIndex = {
+    ids: new Set(),
+    names: new Set(),
+    hrefs: new Set(),
+    lineNumbers: new Set(),
+  };
   const $ = cheerio.load(html);
   $("[id], a[name], [href], [data-line-number]").each((_, element) => {
     const { id, name, href } = element.attribs;
@@ -103,7 +110,11 @@ export const isHashInAnchorIndex = (index: AnchorIndex, hash: string, url: strin
   if (variants.some((variant) => index.ids.has(variant) || index.names.has(variant))) {
     return true;
   }
-  if (variants.some((variant) => index.hrefs.has(`#${variant}`) || index.hrefs.has(`#${variant.toLowerCase()}`))) {
+  if (
+    variants.some(
+      (variant) => index.hrefs.has(`#${variant}`) || index.hrefs.has(`#${variant.toLowerCase()}`),
+    )
+  ) {
     return true;
   }
   const lineNumber = getGithubLineNumber(hash, url);

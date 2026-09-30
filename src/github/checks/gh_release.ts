@@ -13,7 +13,7 @@ import { getMyOctokit } from "../github_client";
 export const checkGitHubReleaseLink = async (
   owner: string,
   repo: string,
-  pathParts: string[]
+  pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
   // If pathParts[1] is "download", check if the release asset exists
@@ -26,7 +26,7 @@ export const checkGitHubReleaseLink = async (
         owner,
         repo,
         tag,
-      })
+      }),
     );
 
     if (releaseError) {
@@ -68,7 +68,7 @@ export const checkGitHubReleaseLink = async (
         owner,
         repo,
         per_page: 1,
-      })
+      }),
     );
 
     if (error) {
@@ -100,7 +100,7 @@ export const checkGitHubReleaseLink = async (
         owner,
         repo,
         tag,
-      })
+      }),
     );
 
     if (error) {
@@ -132,7 +132,7 @@ export const checkGitHubReleaseLink = async (
         owner,
         repo,
         release_id: releaseId,
-      })
+      }),
     );
 
     if (error) {

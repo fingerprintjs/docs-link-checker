@@ -6,7 +6,7 @@ import { getMyOctokit } from "../github_client";
 export const checkGitHubCommitLink = async (
   owner: string,
   repo: string,
-  pathParts: string[]
+  pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
   const [, commit] = pathParts;

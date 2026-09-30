@@ -47,7 +47,8 @@ vi.mock("playwright", () => ({
           return {
             isClosed: () => false,
             setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
-            setDefaultNavigationTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
+            setDefaultNavigationTimeout: (timeout: number) =>
+              playwrightState.pageTimeouts.push(timeout),
             goto: async (url: string, options?: { timeout?: number }) => {
               currentUrl = url;
               playwrightState.visited.push(url);
@@ -98,7 +99,7 @@ type FetchHandler = (url: string, init: RequestInit) => Response | Promise<Respo
 
 const stubFetch = (handler: FetchHandler) => {
   const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) =>
-    handler(String(input), init ?? {})
+    handler(String(input), init ?? {}),
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -130,7 +131,9 @@ describe("checkLinks() deduplication", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       return new Response(null, { status: 200 });
     });
-    const links = Array.from({ length: 10 }, (_, i) => link("https://example.com/same", `https://example.com/p${i}`));
+    const links = Array.from({ length: 10 }, (_, i) =>
+      link("https://example.com/same", `https://example.com/p${i}`),
+    );
 
     const { results, errors } = await checkLinks({ links });
 
@@ -168,24 +171,31 @@ describe("checkLinks() deduplication", () => {
 
 describe("checkLinks() Playwright escalation", () => {
   const githubApiCases: Array<[string, LinkCheckResult, boolean]> = [
-    ["404 from the API", { ok: false, error: "broken link", status: 404, errorDetail: "Issue not found" }, false],
+    [
+      "404 from the API",
+      { ok: false, error: "broken link", status: 404, errorDetail: "Issue not found" },
+      false,
+    ],
     ["hash not found from the API", { ok: false, error: "hash not found", status: 200 }, false],
     ["unexpected API error", { ok: false, error: "unexpected error", status: 400 }, true],
   ];
 
-  it.each(githubApiCases)("GitHub API result: %s -> re-checked with Playwright: %s", async (_name, apiResult, escalate) => {
-    checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
-    const href = "https://github.com/owner/repo/issues/999";
+  it.each(githubApiCases)(
+    "GitHub API result: %s -> re-checked with Playwright: %s",
+    async (_name, apiResult, escalate) => {
+      checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
+      const href = "https://github.com/owner/repo/issues/999";
 
-    const { results } = await checkLinks({ links: [link(href)] });
+      const { results } = await checkLinks({ links: [link(href)] });
 
-    expect(playwrightState.visited).toEqual(escalate ? [href] : []);
-    expect(results).toHaveLength(1);
-    if (!escalate) {
-      // The definitive API result is reported as-is
-      expect(results[0].result).toEqual(apiResult);
-    }
-  });
+      expect(playwrightState.visited).toEqual(escalate ? [href] : []);
+      expect(results).toHaveLength(1);
+      if (!escalate) {
+        // The definitive API result is reported as-is
+        expect(results[0].result).toEqual(apiResult);
+      }
+    },
+  );
 
   it("checks GitHub code line links only in the Playwright pass (respects its concurrency limit)", async () => {
     const href = "https://github.com/owner/repo/blob/main/a.js#L999";
@@ -216,7 +226,7 @@ describe("checkLinks() Playwright escalation", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(playwrightState.visited).toEqual([]);
       expect(results[0].result).toMatchObject({ ok: false, error: "broken link" });
-    }
+    },
   );
 
   const fetchCases: Array<[string, FetchHandler, boolean]> = [
@@ -235,15 +245,18 @@ describe("checkLinks() Playwright escalation", () => {
     ],
   ];
 
-  it.each(fetchCases)("fetch result: %s -> re-checked with Playwright: %s", async (_name, handler, escalate) => {
-    stubFetch(handler);
-    const href = "https://example.com/some/page";
+  it.each(fetchCases)(
+    "fetch result: %s -> re-checked with Playwright: %s",
+    async (_name, handler, escalate) => {
+      stubFetch(handler);
+      const href = "https://example.com/some/page";
 
-    const { results } = await checkLinks({ links: [link(href)] });
+      const { results } = await checkLinks({ links: [link(href)] });
 
-    expect(playwrightState.visited).toEqual(escalate ? [href] : []);
-    expect(results).toHaveLength(1);
-  });
+      expect(playwrightState.visited).toEqual(escalate ? [href] : []);
+      expect(results).toHaveLength(1);
+    },
+  );
 
   it("re-checks 'hash not found' from fetch with Playwright (client-side rendered page)", async () => {
     stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
@@ -305,7 +318,7 @@ describe("checkLinkWithFetch()", () => {
 
   it.each([405, 403, 501])("retries once with GET when HEAD returns %s", async (status) => {
     const fetchMock = stubFetch((_url, init) =>
-      init.method === "HEAD" ? new Response(null, { status }) : new Response("ok", { status: 200 })
+      init.method === "HEAD" ? new Response(null, { status }) : new Response("ok", { status: 200 }),
     );
 
     const result = await checkLinkWithFetch("https://example.com/no-head");
@@ -344,13 +357,16 @@ describe("checkLinkWithFetch()", () => {
     "#InStAlLaTiOn",
   ];
 
-  it.each(existingHashes)("finds hash %s with special characters in server-rendered HTML", async (hash) => {
-    stubFetch(() => new Response(hashesHtml, { status: 200 }));
+  it.each(existingHashes)(
+    "finds hash %s with special characters in server-rendered HTML",
+    async (hash) => {
+      stubFetch(() => new Response(hashesHtml, { status: 200 }));
 
-    const result = await checkLinkWithFetch(`https://example.com/docs${hash}`);
+      const result = await checkLinkWithFetch(`https://example.com/docs${hash}`);
 
-    expect(result).toEqual({ ok: true, status: 200 });
-  });
+      expect(result).toEqual({ ok: true, status: 200 });
+    },
+  );
 
   it("reports missing hashes as 'hash not found' (not 'broken link')", async () => {
     stubFetch(() => new Response(hashesHtml, { status: 200 }));
@@ -362,16 +378,19 @@ describe("checkLinkWithFetch()", () => {
 });
 
 describe("checkLinkWithPlaywright() hash check", () => {
-  it.each(["#version-1.2.3", "#1-create-an-account", "#say-%22hi%22", "#caf%C3%A9", "#legacy-anchor"])(
-    "builds a valid selector for %s",
-    async (hash) => {
-      playwrightState.html = hashesHtml;
+  it.each([
+    "#version-1.2.3",
+    "#1-create-an-account",
+    "#say-%22hi%22",
+    "#caf%C3%A9",
+    "#legacy-anchor",
+  ])("builds a valid selector for %s", async (hash) => {
+    playwrightState.html = hashesHtml;
 
-      const result = await checkLinkWithPlaywright(`https://example.com/docs${hash}`);
+    const result = await checkLinkWithPlaywright(`https://example.com/docs${hash}`);
 
-      expect(result).toEqual({ ok: true, status: 200 });
-    }
-  );
+    expect(result).toEqual({ ok: true, status: 200 });
+  });
 
   it("reports missing hashes as 'hash not found'", async () => {
     playwrightState.html = hashesHtml;
@@ -389,10 +408,12 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
       return new Response(hashesHtml, { status: 200 });
     });
     const hrefs = ["#version-1.2.3", "#legacy-anchor", "#caf%C3%A9", "#does-not-exist", ""].map(
-      (hash) => `https://example.com/docs${hash}`
+      (hash) => `https://example.com/docs${hash}`,
     );
     // Every href appears twice (on different source pages)
-    const links = [...hrefs, ...hrefs].map((href, i) => link(href, `https://example.com/source-${i}`));
+    const links = [...hrefs, ...hrefs].map((href, i) =>
+      link(href, `https://example.com/source-${i}`),
+    );
 
     const { results, errors } = await checkLinks({ links });
 
@@ -402,8 +423,14 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     expect(fetchMock.mock.calls[0][1]?.method).toBe("GET");
     expect(results).toHaveLength(10);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
-    expect(resultByHref.get("https://example.com/docs#version-1.2.3")).toEqual({ ok: true, status: 200 });
-    expect(resultByHref.get("https://example.com/docs#caf%C3%A9")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/docs#version-1.2.3")).toEqual({
+      ok: true,
+      status: 200,
+    });
+    expect(resultByHref.get("https://example.com/docs#caf%C3%A9")).toEqual({
+      ok: true,
+      status: 200,
+    });
     expect(resultByHref.get("https://example.com/docs")).toEqual({ ok: true, status: 200 });
     // Re-checked with Playwright (empty page), still not found
     expect(resultByHref.get("https://example.com/docs#does-not-exist")).toEqual({
@@ -431,7 +458,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(results.map((r) => r.result)).toEqual(
-      Array(3).fill(expect.objectContaining({ ok: false, error: "broken link", status: 404 }))
+      Array(3).fill(expect.objectContaining({ ok: false, error: "broken link", status: 404 })),
     );
   });
 
@@ -444,7 +471,10 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     const { results } = await checkLinks({ links });
 
     // One shared navigation, plus a dedicated one for the hash missing in the shared DOM
-    expect(playwrightState.visited).toEqual(["https://example.com/spa#one", "https://example.com/spa#three"]);
+    expect(playwrightState.visited).toEqual([
+      "https://example.com/spa#one",
+      "https://example.com/spa#three",
+    ]);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     expect(resultByHref.get("https://example.com/spa#one")).toEqual({ ok: true, status: 200 });
     expect(resultByHref.get("https://example.com/spa#two")).toEqual({ ok: true, status: 200 });
@@ -456,7 +486,8 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
   });
 
   it("checks GitHub code line links to the same file with one navigation", async () => {
-    playwrightState.html = '<html><body><div data-line-number="5"></div><div data-line-number="6"></div></body></html>';
+    playwrightState.html =
+      '<html><body><div data-line-number="5"></div><div data-line-number="6"></div></body></html>';
     const file = "https://github.com/owner/repo/blob/main/a.js";
     const links = ["#L5", "#L6", "#L5-L6", "#L99"].map((hash) => link(`${file}${hash}`));
 
@@ -470,7 +501,9 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
       `${file}#L6`,
       `${file}#L5-L6`,
     ]);
-    expect(results.find((r) => r.href === `${file}#L99`)?.result).toMatchObject({ error: "hash not found" });
+    expect(results.find((r) => r.href === `${file}#L99`)?.result).toMatchObject({
+      error: "hash not found",
+    });
   });
 
   it("navigates once per page with Playwright", async () => {
@@ -501,11 +534,16 @@ describe("checkLinks() Playwright hash fallback", () => {
       "https://example.com/app#tab-a": '<div id="tab-a"></div>',
       "https://example.com/app#tab-b": '<div id="tab-b"></div>',
     };
-    const links = ["#tab-a", "#tab-b", "#missing"].map((hash) => link(`https://example.com/app${hash}`));
+    const links = ["#tab-a", "#tab-b", "#missing"].map((hash) =>
+      link(`https://example.com/app${hash}`),
+    );
 
     const { results, errors } = await withRun(async () => {
       const checked = await checkLinks({ links });
-      expect(getRunContext()!.metrics.counters).toMatchObject({ playwrightNavigations: 3, playwrightHashFallbacks: 2 });
+      expect(getRunContext()!.metrics.counters).toMatchObject({
+        playwrightNavigations: 3,
+        playwrightHashFallbacks: 2,
+      });
       return checked;
     });
 
@@ -533,7 +571,9 @@ describe("checkLinks() Playwright hash fallback", () => {
       // 25s per navigation (each within its own 30s timeout) -> about 100s in total, more than TASK_TIMEOUT (80s)
       playwrightState.gotoDelayMs = 25_000;
       const hrefs = Array.from({ length: 12 }, (_, i) => `https://example.com/app#tab-${i}`);
-      playwrightState.htmlByUrl = Object.fromEntries(hrefs.map((href, i) => [href, `<div id="tab-${i}"></div>`]));
+      playwrightState.htmlByUrl = Object.fromEntries(
+        hrefs.map((href, i) => [href, `<div id="tab-${i}"></div>`]),
+      );
 
       const promise = checkLinks({ links: hrefs.map((href) => link(href)) });
       await vi.advanceTimersByTimeAsync(300_000);
@@ -606,9 +646,13 @@ describe("interleaveByHost() with uneven hosts", () => {
 
 describe("interleaveByHost()", () => {
   it("orders items round-robin by host, keeping the order within a host", () => {
-    const items = ["https://a.com/1", "https://a.com/2", "https://a.com/3", "https://b.com/1", "https://c.com/1"].map(
-      (href) => ({ href })
-    );
+    const items = [
+      "https://a.com/1",
+      "https://a.com/2",
+      "https://a.com/3",
+      "https://b.com/1",
+      "https://c.com/1",
+    ].map((href) => ({ href }));
     expect(interleaveByHost(items).map((item) => item.href)).toEqual([
       "https://a.com/1",
       "https://b.com/1",

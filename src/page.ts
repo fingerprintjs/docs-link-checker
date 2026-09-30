@@ -39,7 +39,8 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
     /^https:\/\/dev\.fingerprint\.com\/discuss/,
   ];
   return links.filter(
-    (link) => isHttpUrl(link.href) && !patternsToFilterOut.some((pattern) => pattern.test(link.href))
+    (link) =>
+      isHttpUrl(link.href) && !patternsToFilterOut.some((pattern) => pattern.test(link.href)),
   );
 }
 
@@ -57,8 +58,10 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   } else {
     // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
     // Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL, as before
-    const response = await fetchWithHostLimit(pageUrl, { headers: { "User-Agent": getRandomUserAgent() } }, async (response) =>
-      response.ok ? response.text() : ""
+    const response = await fetchWithHostLimit(
+      pageUrl,
+      { headers: { "User-Agent": getRandomUserAgent() } },
+      async (response) => (response.ok ? response.text() : ""),
     );
     if (response.status < 200 || response.status >= 300) {
       // Thrown (not an empty list), so the page shows up in the extraction errors instead of silently having no links
@@ -130,7 +133,7 @@ export const getLinksFromPages = async ({
     console.log(
       `Filtered away ${flatResults.length - links.length} links using the provided links filter. Continuing with ${
         links.length
-      } links...`
+      } links...`,
     );
   }
 
@@ -171,7 +174,9 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
       const links = await page.evaluate(
         ([pageUrl]) => {
           // Get all 'a' elements (but not anchor icons) inside article content
-          const anchors = document.querySelectorAll<HTMLAnchorElement>(".markdown-body a:not(.fa-anchor)");
+          const anchors = document.querySelectorAll<HTMLAnchorElement>(
+            ".markdown-body a:not(.fa-anchor)",
+          );
 
           // Convert NodeList to array and map to desired format
           return Array.from(anchors).map((anchor) => ({
@@ -180,7 +185,7 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
             text: anchor.textContent?.trim() ?? "",
           }));
         },
-        [pageUrl]
+        [pageUrl],
       );
 
       return filterOutIrrelevantLinks(links);

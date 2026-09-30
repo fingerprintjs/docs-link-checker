@@ -73,7 +73,10 @@ export const parallelProcess = async <T, R>({
   progressBar?.start(items.length, 0);
   try {
     const pool = PromisePool.withConcurrency(concurrencyLimit);
-    const { results, errors } = await (taskTimeout === null ? pool : pool.withTaskTimeout(taskTimeout))
+    const { results, errors } = await (taskTimeout === null
+      ? pool
+      : pool.withTaskTimeout(taskTimeout)
+    )
       .for(items)
       .onTaskFinished(() => {
         progressBar?.increment();
@@ -100,7 +103,9 @@ export const getSampleRate = (value = process.env.LINK_CHECK_SAMPLE_RATE): numbe
   }
   const rate = Number(value);
   if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
-    throw new Error(`Invalid LINK_CHECK_SAMPLE_RATE "${value}", expected a number between 0 and 1.`);
+    throw new Error(
+      `Invalid LINK_CHECK_SAMPLE_RATE "${value}", expected a number between 0 and 1.`,
+    );
   }
   return rate;
 };
@@ -118,7 +123,12 @@ type SampleArgs<T> = {
  * Deterministically picks a sample of `items`: sorts them by `key` and takes evenly spaced items.
  * Always returns at least one item (unless `items` is empty). Rate 1 returns all items unchanged.
  */
-export const sampleItems = <T>({ items, key, rate = getSampleRate(), label = "pages" }: SampleArgs<T>): T[] => {
+export const sampleItems = <T>({
+  items,
+  key,
+  rate = getSampleRate(),
+  label = "pages",
+}: SampleArgs<T>): T[] => {
   if (rate >= 1 || items.length === 0) {
     return items;
   }
@@ -131,7 +141,9 @@ export const sampleItems = <T>({ items, key, rate = getSampleRate(), label = "pa
   for (let i = 0; i < count; i++) {
     sample.push(sorted[Math.floor((i * sorted.length) / count)]);
   }
-  console.log(`Sampling ${sample.length} of ${items.length} ${label} (LINK_CHECK_SAMPLE_RATE=${rate}).`);
+  console.log(
+    `Sampling ${sample.length} of ${items.length} ${label} (LINK_CHECK_SAMPLE_RATE=${rate}).`,
+  );
   return sample;
 };
 
@@ -144,7 +156,9 @@ export const DEFAULT_HOST_CONCURRENCY_LIMIT = 8;
  * the maximum number of concurrent `fetch` requests to a single host.
  * @throws {Error} if the value is not a positive integer
  */
-export const getHostConcurrencyLimit = (value = process.env.LINK_CHECK_HOST_CONCURRENCY): number => {
+export const getHostConcurrencyLimit = (
+  value = process.env.LINK_CHECK_HOST_CONCURRENCY,
+): number => {
   if (value === undefined || value.trim() === "") {
     return DEFAULT_HOST_CONCURRENCY_LIMIT;
   }

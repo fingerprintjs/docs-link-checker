@@ -71,7 +71,7 @@ type HopResult<T> =
 export const fetchWithHostLimit = async <T>(
   url: string,
   { method = "GET", headers, timeoutMs = FETCH_TIMEOUT }: LimitedRequestOptions,
-  read: (response: Response) => Promise<T>
+  read: (response: Response) => Promise<T>,
 ): Promise<LimitedResponse<T>> => {
   const hostLimiter = getHostLimiter();
   let currentUrl = url;

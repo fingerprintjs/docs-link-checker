@@ -18,7 +18,7 @@ describe("checkGitHubBlobLink", () => {
 
   it("should return success for an existing file with valid hash", async () => {
     const url = new URL(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/readme.md#demo"
+      "https://github.com/fingerprintjs/fingerprintjs/blob/master/readme.md#demo",
     );
     const result = await checkGitHubBlobLink(url, "fingerprintjs", "fingerprintjs", [
       "blob",
@@ -34,7 +34,7 @@ describe("checkGitHubBlobLink", () => {
 
   it("should return error for an existing file with invalid hash", async () => {
     const url = new URL(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/readme.md#nonexistent-heading"
+      "https://github.com/fingerprintjs/fingerprintjs/blob/master/readme.md#nonexistent-heading",
     );
     const result = await checkGitHubBlobLink(url, "fingerprintjs", "fingerprintjs", [
       "blob",
@@ -52,7 +52,7 @@ describe("checkGitHubBlobLink", () => {
 
   it("should return error for a non-existent file", async () => {
     const url = new URL(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/nonexistent.md"
+      "https://github.com/fingerprintjs/fingerprintjs/blob/master/nonexistent.md",
     );
     const result = await checkGitHubBlobLink(url, "fingerprintjs", "fingerprintjs", [
       "blob",

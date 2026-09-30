@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withRun } from "../run";
 import { getRunContext } from "../run_context";
-import { checkGitHubRateLimit, getMyOctokit, resetMyOctokit, throttleOptions } from "./github_client";
+import {
+  checkGitHubRateLimit,
+  getMyOctokit,
+  resetMyOctokit,
+  throttleOptions,
+} from "./github_client";
 
 beforeEach(() => {
   resetMyOctokit();
@@ -38,13 +43,20 @@ describe("throttle options", () => {
   });
 
   it("onSecondaryRateLimit retries once", () => {
-    expect(throttleOptions.onSecondaryRateLimit(10, options as never, fakeOctokit as never, 0)).toBe(true);
-    expect(throttleOptions.onSecondaryRateLimit(10, options as never, fakeOctokit as never, 1)).toBe(false);
+    expect(
+      throttleOptions.onSecondaryRateLimit(10, options as never, fakeOctokit as never, 0),
+    ).toBe(true);
+    expect(
+      throttleOptions.onSecondaryRateLimit(10, options as never, fakeOctokit as never, 1),
+    ).toBe(false);
   });
 });
 
 const jsonResponse = (body: unknown) =>
-  new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 
 describe("GitHub API request metrics", () => {
   it("counts every request sent by the shared client, whatever the operation", async () => {
@@ -76,7 +88,10 @@ describe("GitHub API request metrics", () => {
 
   it("does not count (or fail) outside of a run", async () => {
     vi.stubEnv("GH_TOKEN", "test-token");
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ id: 1 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ id: 1 })),
+    );
     await expect(getMyOctokit().rest.repos.get({ owner: "o", repo: "r" })).resolves.toBeDefined();
   });
 });

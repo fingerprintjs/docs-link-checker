@@ -13,7 +13,7 @@ import { getMyOctokit } from "../github_client";
 export const checkGitHubDiscussionLink = async (
   owner: string,
   repo: string,
-  discussionNumber: number
+  discussionNumber: number,
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
   const { data, error } = await tryCatch(
@@ -25,7 +25,7 @@ export const checkGitHubDiscussionLink = async (
           }
         }
       }
-    `)
+    `),
   );
 
   if (data) {
