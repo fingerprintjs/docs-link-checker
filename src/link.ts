@@ -180,14 +180,15 @@ export const interleaveByHost = <T extends { href: string }>(items: T[]): T[] =>
       byHost.set(host, [item]);
     }
   }
-  const queues = [...byHost.values()];
+  // Round-robin over the hosts that still have items: exhausted hosts are dropped, so every item is visited once
+  // (O(items), not O(hosts x largest host))
+  let queues = [...byHost.values()];
   const result: T[] = [];
-  for (let i = 0; result.length < items.length; i++) {
+  for (let i = 0; queues.length > 0; i++) {
     for (const queue of queues) {
-      if (i < queue.length) {
-        result.push(queue[i]);
-      }
+      result.push(queue[i]);
     }
+    queues = queues.filter((queue) => queue.length > i + 1);
   }
   return result;
 };
@@ -362,7 +363,8 @@ export const fetchPage = async (
           ok: false,
           error: "unexpected error",
           status: response.status,
-          errorDetail: `\n Rate limited and gave up, retry-after: ${retryAfter} seconds for link ${url}`,
+          // Raw header without a unit: it can be seconds or an HTTP date
+          errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
         },
       };
     }

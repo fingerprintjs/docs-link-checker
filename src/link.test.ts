@@ -561,6 +561,48 @@ describe("checkLinks() Playwright hash fallback", () => {
   });
 });
 
+describe("interleaveByHost() with uneven hosts", () => {
+  it("keeps the round-robin order when hosts run out at different times", () => {
+    const hrefs = [
+      "https://a.com/1",
+      "https://b.com/1",
+      "https://a.com/2",
+      "https://c.com/1",
+      "https://a.com/3",
+      "https://c.com/2",
+      "https://a.com/4",
+    ];
+    expect(interleaveByHost(hrefs.map((href) => ({ href }))).map((item) => item.href)).toEqual([
+      "https://a.com/1",
+      "https://b.com/1",
+      "https://c.com/1",
+      "https://a.com/2",
+      "https://c.com/2",
+      "https://a.com/3",
+      "https://a.com/4",
+    ]);
+  });
+
+  it("visits every item once (many single-link hosts and one big host)", () => {
+    // Scanning exhausted hosts would be 10k hosts x 100k rounds = 1e9 steps
+    const items = [
+      ...Array.from({ length: 100_000 }, (_, i) => ({ href: `https://big.example.com/${i}` })),
+      ...Array.from({ length: 10_000 }, (_, i) => ({ href: `https://host-${i}.example.com/` })),
+    ];
+    const start = performance.now();
+    const result = interleaveByHost(items);
+    expect(performance.now() - start).toBeLessThan(1000);
+
+    expect(result).toHaveLength(items.length);
+    expect(new Set(result).size).toBe(items.length);
+    // First round: one item of every host, then only the big host is left
+    expect(result[0].href).toBe("https://big.example.com/0");
+    expect(result[1].href).toBe("https://host-0.example.com/");
+    expect(result[10_001].href).toBe("https://big.example.com/1");
+    expect(result.at(-1)!.href).toBe("https://big.example.com/99999");
+  });
+});
+
 describe("interleaveByHost()", () => {
   it("orders items round-robin by host, keeping the order within a host", () => {
     const items = ["https://a.com/1", "https://a.com/2", "https://a.com/3", "https://b.com/1", "https://c.com/1"].map(

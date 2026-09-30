@@ -259,3 +259,36 @@ describe("shared browser across concurrent runs", () => {
     expect(state.closes).toBe(1);
   });
 });
+
+describe("headed debug mode (headless: false)", () => {
+  it("keeps the page open after the check, closeBrowser() closes the debug browser", async () => {
+    const result = await checkLinkWithPlaywright("https://example.com/debug", false, false);
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    // A separate browser, its page (context) is still open for inspection
+    expect(state.launches).toBe(1);
+    expect(state.openPages).toBe(1);
+    expect(state.closes).toBe(0);
+
+    await closeBrowser();
+    expect(state.closes).toBe(1);
+    // Closing again does not close it twice
+    await closeBrowser();
+    expect(state.closes).toBe(1);
+  });
+
+  it("is not closed at the end of a run (only the shared browser is)", async () => {
+    await withRun(async () => {
+      await checkLinkWithPlaywright("https://example.com/shared");
+      await checkLinkWithPlaywright("https://example.com/debug", false, false);
+    });
+
+    // Shared browser closed by the run, debug browser still open
+    expect(state.launches).toBe(2);
+    expect(state.closes).toBe(1);
+    expect(state.openPages).toBe(1);
+
+    await closeBrowser();
+    expect(state.closes).toBe(2);
+  });
+});

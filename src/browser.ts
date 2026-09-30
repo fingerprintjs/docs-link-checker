@@ -178,11 +178,23 @@ export const getBrowser = (): Promise<Browser> => {
   return browserPromise;
 };
 
+// Visible browsers launched for debugging (`headless: false`), left open for inspection until `closeBrowser()`
+const debugBrowsers = new Set<Browser>();
+
 /**
- * Closes the shared browser (if it was launched). Safe to call multiple times.
- * Called at the end of every run, call it yourself if you use `checkLinkWithPlaywright` outside of a run.
+ * Closes the shared browser and any visible debug browsers (`headless: false`). Safe to call multiple times.
+ * Call it yourself if you use `checkLinkWithPlaywright` outside of a run. Runs only close the shared browser
+ * (see `endBrowserRun`), debug browsers stay open until this is called or the process exits
+ * (Playwright closes the browsers it launched when the process exits).
  */
 export const closeBrowser = async (): Promise<void> => {
+  const debug = [...debugBrowsers];
+  debugBrowsers.clear();
+  await Promise.all([closeSharedBrowser(), ...debug.map((browser) => browser.close().catch(() => {}))]);
+};
+
+/** Closes the shared (headless) browser, if it was launched */
+const closeSharedBrowser = async (): Promise<void> => {
   const promise = browserPromise;
   browserPromise = undefined;
   currentBrowser = undefined;
@@ -205,21 +217,32 @@ export const beginBrowserRun = () => {
   activeRuns++;
 };
 
-/** Ends an outer run: closes the shared browser if no other run is still active (concurrent runs share it) */
+/**
+ * Ends an outer run: closes the shared browser if no other run is still active (concurrent runs share it).
+ * Visible debug browsers are kept open for inspection (see `closeBrowser`).
+ */
 export const endBrowserRun = async () => {
   activeRuns = Math.max(0, activeRuns - 1);
   if (activeRuns === 0) {
-    await closeBrowser();
+    await closeSharedBrowser();
   }
 };
 
 type WithPageOptions = {
   userAgent?: string;
-  /** `false` launches a separate visible browser that is left open for debugging */
+  /**
+   * `false` launches a separate visible browser for debugging: its page is left open for inspection after the check,
+   * until `closeBrowser()` is called or the process exits
+   */
   headless?: boolean;
 };
 
-const runWithNewPage = async <T>(browser: Browser, fn: (page: Page) => Promise<T>, userAgent?: string) => {
+const runWithNewPage = async <T>(
+  browser: Browser,
+  fn: (page: Page) => Promise<T>,
+  userAgent?: string,
+  keepOpen = false
+) => {
   const context = await browser.newContext({ userAgent });
   try {
     // One blocker per context: it tracks the URL of this context's page
@@ -231,7 +254,9 @@ const runWithNewPage = async <T>(browser: Browser, fn: (page: Page) => Promise<T
     page.setDefaultNavigationTimeout(PAGE_OPERATION_TIMEOUT);
     return await fn(page);
   } finally {
-    await context.close().catch(() => {});
+    if (!keepOpen) {
+      await context.close().catch(() => {});
+    }
   }
 };
 
@@ -245,7 +270,10 @@ export const withPage = <T>(fn: (page: Page) => Promise<T>, { userAgent, headles
   pageSlots.run(async () => {
     if (!headless) {
       const browser = await chromium.launch({ headless: false, ...LAUNCH_OPTIONS });
-      return runWithNewPage(browser, fn, userAgent);
+      // Tracked so `closeBrowser()` closes it, the page stays open for inspection until then
+      debugBrowsers.add(browser);
+      browser.on("disconnected", () => debugBrowsers.delete(browser));
+      return runWithNewPage(browser, fn, userAgent, true);
     }
 
     for (let attempt = 0; ; attempt++) {

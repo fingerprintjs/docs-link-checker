@@ -27,6 +27,10 @@ export type LimitedRequestOptions = {
   timeoutMs?: number;
 };
 
+/** Log message for a rate-limited request that is retried (the header can be seconds or an HTTP date) */
+export const formatRateLimitRetry = (url: string, delayMs: number, retryAfter: string | null) =>
+  `Rate limited (${url}), retrying after ${Math.ceil(delayMs / 1000)}s (Retry-After: ${retryAfter})...`;
+
 /** Cancels the response body if it was not consumed (frees the connection) */
 export const discardBody = async (response: Response) => {
   if (!response.bodyUsed) {
@@ -96,7 +100,8 @@ export const fetchWithHostLimit = async <T>(
           const retryAfter = response.headers.get("Retry-After");
           const retryAfterMs = parseRetryAfter(retryAfter);
           if (retryAfterMs !== undefined && retryAfterMs < TASK_TIMEOUT) {
-            console.log(`Rate limited, retrying after ${retryAfter} seconds...`);
+            // Retry-After is either a number of seconds or an HTTP date, log the parsed delay
+            console.log(formatRateLimitRetry(requestUrl, retryAfterMs, retryAfter));
             // Pause the whole host while still holding the slot
             hostLimiter.pause(requestUrl, retryAfterMs);
             return { type: "retry" };
