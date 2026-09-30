@@ -113,6 +113,7 @@ describe("parallelProcess() error logging", () => {
     expect(describeItem({ href: "https://a.com" })).toBe("https://a.com");
     expect(describeItem({ name: "repo" })).toBe('{"name":"repo"}');
     expect(describeItem(42)).toBe("42");
+    expect(describeItem({ toJSON: () => undefined })).toBe("[object Object]");
   });
 });
 

@@ -38,7 +38,8 @@ export const describeItem = (item: unknown): string => {
         : item.href;
     }
     try {
-      return JSON.stringify(item);
+      // JSON.stringify returns undefined when toJSON() returns undefined
+      return JSON.stringify(item) ?? String(item);
     } catch {
       return String(item);
     }

@@ -214,6 +214,16 @@ describe("checkLinks() Playwright escalation", () => {
 });
 
 describe("checkLinkWithFetch()", () => {
+  it("reports an unparsable URL as broken link instead of throwing", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+
+    const result = await checkLinkWithFetch("not a url");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link" });
+    expect(result.ok === false && result.errorDetail).toContain("Invalid URL");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("sets a request timeout", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const fetchMock = stubFetch(() => new Response(null, { status: 200 }));

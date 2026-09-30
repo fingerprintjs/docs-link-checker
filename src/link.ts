@@ -160,11 +160,15 @@ const HEAD_FALLBACK_STATUS_CODES = [403, 405, 501];
 /**
  * Check a link with fetch, assuming page is server-side rendered
  * @param url link URL
- * @returns LinkCheckResult
- * @throws {Error} - if the URL cannot be parsed
+ * @returns LinkCheckResult, a URL that cannot be parsed is reported as a broken link
  */
 export const checkLinkWithFetch = async (url: string, verbose = false): Promise<LinkCheckResult> => {
-  const hash = new URL(url).hash;
+  let hash: string;
+  try {
+    hash = new URL(url).hash;
+  } catch (error) {
+    return { ok: false, error: "broken link", errorDetail: `Invalid URL: ${String(error)}` };
+  }
 
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {
