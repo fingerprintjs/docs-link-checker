@@ -1,5 +1,5 @@
 import { LinkCheckResult } from "../../types";
-import { getMyOctokit } from "../github_client";
+import { getContentCached } from "../gh_cache";
 import GithubSlugger from "github-slugger";
 import * as cheerio from "cheerio";
 import { marked, Parser, Token } from "marked";
@@ -50,6 +50,18 @@ export const getMarkdownAnchors = (markdown: string): Set<string> => {
   return anchors;
 };
 
+// Anchors per file response: the response is cached for the run, so each file is parsed once for all its hashes
+const anchorsByFile = new WeakMap<object, Set<string>>();
+
+const getFileAnchors = (fileData: { content: string }): Set<string> => {
+  let anchors = anchorsByFile.get(fileData);
+  if (!anchors) {
+    anchors = getMarkdownAnchors(Buffer.from(fileData.content, "base64").toString());
+    anchorsByFile.set(fileData, anchors);
+  }
+  return anchors;
+};
+
 /**
  * Check if a GitHub blob exists
  * @param fullUrl - The full URL of the blob
@@ -64,14 +76,13 @@ export const checkGitHubBlobLink = async (
   repo: string,
   pathParts: string[]
 ): Promise<LinkCheckResult> => {
-  const octokit = getMyOctokit();
   const [, branch, ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
   // Remove the # character, decode percent-encoding and make it lowercase
   const hash = decodeHash(fullUrl.hash).toLowerCase();
 
   const { data: response, error } = await tryCatch(
-    octokit.repos.getContent({
+    getContentCached({
       owner,
       repo,
       ref: branch,
@@ -111,8 +122,7 @@ export const checkGitHubBlobLink = async (
     };
   }
 
-  const content = Buffer.from(fileData.content as string, "base64").toString();
-  const anchors = getMarkdownAnchors(content);
+  const anchors = getFileAnchors(fileData);
 
   const hashWithoutPrefix = hash.startsWith(USER_CONTENT_PREFIX)
     ? hash.slice(USER_CONTENT_PREFIX.length)

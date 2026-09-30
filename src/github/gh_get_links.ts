@@ -5,6 +5,9 @@ import { checkLinks } from "../link";
 import { getJSONReport, saveReport } from "../report/report";
 import { filterOutIrrelevantLinks } from "../page";
 import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
+import { getRepoCached } from "./gh_cache";
+import { withRun } from "../run";
+import { timePhase } from "../run_context";
 
 export interface MdFile {
   sourcePath: string;
@@ -30,11 +33,8 @@ async function getOrgRepos(orgName: string) {
 
 async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFile[]> {
   const octokit = getMyOctokit();
-  // Get the default branch
-  const { data: repoData } = await octokit.repos.get({
-    owner,
-    repo,
-  });
+  // Get the default branch (cached, links to the repository reuse the response)
+  const { data: repoData } = await getRepoCached(owner, repo);
   const defaultBranch = repoData.default_branch;
 
   // Get the complete tree with all files
@@ -114,27 +114,32 @@ async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   return links;
 }
 
-export async function checkReadmesInGithubOrg(org: string) {
-  const startTime = performance.now();
-  await checkGitHubRateLimit(getMyOctokit());
+/**
+ * Checks links in README files of all public repositories of a GitHub organization.
+ * Runs as a single run (see `withRun`): GitHub API responses are cached, the browser is closed at the end.
+ */
+export const checkReadmesInGithubOrg = (org: string) =>
+  withRun(async () => {
+    const startTime = performance.now();
+    await checkGitHubRateLimit(getMyOctokit());
 
-  const fingerprintPublicReadmes = await getReadmesFromOrg(org);
+    const fingerprintPublicReadmes = await timePhase("List README files", () => getReadmesFromOrg(org));
 
-  const links = await getReadmeLinks(fingerprintPublicReadmes);
-  const filteredLinks = filterOutIrrelevantLinks(links);
+    const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
+    const filteredLinks = filterOutIrrelevantLinks(links);
 
-  const { results, errors } = await checkLinks({
-    links: filteredLinks,
-    verbose: true,
-    fetchConcurrencyLimit: 20,
+    const { results, errors } = await checkLinks({
+      links: filteredLinks,
+      verbose: true,
+      fetchConcurrencyLimit: 20,
+    });
+
+    const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
+
+    saveReport(report);
+    console.log(report.summary);
+
+    console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
+
+    return report;
   });
-
-  const report = getJSONReport({ links: results, errors, siteName: `${org} GitHub readmes` });
-
-  saveReport(report);
-  console.log(report.summary);
-
-  console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
-
-  return report;
-}

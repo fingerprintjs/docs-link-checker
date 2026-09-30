@@ -30,7 +30,11 @@ vi.mock("playwright", () => ({
   chromium: {
     launch: async () => ({
       close: async () => {},
+      on: () => {},
+      isConnected: () => true,
       newContext: async () => ({
+        route: async () => {},
+        close: async () => {},
         newPage: async () => ({
           goto: async (url: string) => {
             playwrightState.visited.push(url);
@@ -59,7 +63,13 @@ vi.mock("playwright", () => ({
   },
 }));
 
-import { checkLinks, checkLinkWithFetch, checkLinkWithPlaywright, shouldRecheckWithPlaywright } from "./link";
+import {
+  checkLinks,
+  checkLinkWithFetch,
+  checkLinkWithPlaywright,
+  interleaveByHost,
+  shouldRecheckWithPlaywright,
+} from "./link";
 
 const hashesHtml = readFileSync(join(__dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -344,5 +354,124 @@ describe("checkLinkWithPlaywright() hash check", () => {
     const result = await checkLinkWithPlaywright("https://example.com/docs#it's-%22missing%22");
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+});
+
+describe("checkLinks() grouping by page (URL without hash)", () => {
+  it("fetches a page once for all its hashes and checks every hash against the same HTML", async () => {
+    const fetchMock = stubFetch(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return new Response(hashesHtml, { status: 200 });
+    });
+    const hrefs = ["#version-1.2.3", "#legacy-anchor", "#caf%C3%A9", "#does-not-exist", ""].map(
+      (hash) => `https://example.com/docs${hash}`
+    );
+    // Every href appears twice (on different source pages)
+    const links = [...hrefs, ...hrefs].map((href, i) => link(href, `https://example.com/source-${i}`));
+
+    const { results, errors } = await checkLinks({ links });
+
+    expect(errors).toHaveLength(0);
+    // One GET for the page, also used by the link without a hash (no extra HEAD request)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("GET");
+    expect(results).toHaveLength(10);
+    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
+    expect(resultByHref.get("https://example.com/docs#version-1.2.3")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/docs#caf%C3%A9")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/docs")).toEqual({ ok: true, status: 200 });
+    // Re-checked with Playwright (empty page), still not found
+    expect(resultByHref.get("https://example.com/docs#does-not-exist")).toEqual({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+    // Every link keeps its own source page
+    expect(new Set(results.map((r) => r.page)).size).toBe(10);
+  });
+
+  it("uses HEAD for pages that are never linked with a hash", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+
+    await checkLinks({ links: [link("https://example.com/a"), link("https://example.com/b")] });
+
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "HEAD"]);
+  });
+
+  it("reports a broken page for every hash pointing to it (one request)", async () => {
+    const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
+    const links = ["#a", "#b", "#c"].map((hash) => link(`https://example.com/gone${hash}`));
+
+    const { results } = await checkLinks({ links });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => r.result)).toEqual(
+      Array(3).fill(expect.objectContaining({ ok: false, error: "broken link", status: 404 }))
+    );
+  });
+
+  it("navigates once with Playwright for all hashes of a page and checks each hash in the same DOM", async () => {
+    // Client-side rendered page: the server HTML has no anchors
+    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+    playwrightState.html = '<html><body><h2 id="one">One</h2><a name="two"></a></body></html>';
+    const links = ["#one", "#two", "#three"].map((hash) => link(`https://example.com/spa${hash}`));
+
+    const { results } = await checkLinks({ links });
+
+    expect(playwrightState.visited).toEqual(["https://example.com/spa#one"]);
+    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
+    expect(resultByHref.get("https://example.com/spa#one")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/spa#two")).toEqual({ ok: true, status: 200 });
+    expect(resultByHref.get("https://example.com/spa#three")).toEqual({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+  });
+
+  it("checks GitHub code line links to the same file with one navigation", async () => {
+    playwrightState.html = '<html><body><div data-line-number="5"></div><div data-line-number="6"></div></body></html>';
+    const file = "https://github.com/owner/repo/blob/main/a.js";
+    const links = ["#L5", "#L6", "#L5-L6", "#L99"].map((hash) => link(`${file}${hash}`));
+
+    const { results } = await checkLinks({ links });
+
+    expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
+    expect(playwrightState.visited).toEqual([`${file}#L5`]);
+    expect(results.filter((r) => r.result.ok).map((r) => r.href)).toEqual([
+      `${file}#L5`,
+      `${file}#L6`,
+      `${file}#L5-L6`,
+    ]);
+    expect(results.find((r) => r.href === `${file}#L99`)?.result).toMatchObject({ error: "hash not found" });
+  });
+
+  it("navigates once per page with Playwright", async () => {
+    stubFetch(() => new Response(null, { status: 403 }));
+    const links = [
+      link("https://blocked.example.com/a"),
+      link("https://blocked.example.com/a#x"),
+      link("https://blocked.example.com/b"),
+    ];
+
+    const { results } = await checkLinks({ links });
+
+    expect(playwrightState.visited).toHaveLength(2);
+    expect(results).toHaveLength(3);
+  });
+});
+
+describe("interleaveByHost()", () => {
+  it("orders items round-robin by host, keeping the order within a host", () => {
+    const items = ["https://a.com/1", "https://a.com/2", "https://a.com/3", "https://b.com/1", "https://c.com/1"].map(
+      (href) => ({ href })
+    );
+    expect(interleaveByHost(items).map((item) => item.href)).toEqual([
+      "https://a.com/1",
+      "https://b.com/1",
+      "https://c.com/1",
+      "https://a.com/2",
+      "https://a.com/3",
+    ]);
   });
 });
