@@ -38,7 +38,7 @@ export const getJSONReport = ({
   const ignored: IgnoredLink[] = [];
   const notIgnored: LinkWithResult[] = [];
   for (const link of allResults) {
-    const entry = link.result.ok ? undefined : baseline.match(link);
+    const entry = link.result.ok ? undefined : baseline.findEntry(link);
     if (entry) {
       ignored.push(entry.reason ? { ...link, ignoreReason: entry.reason } : link);
     } else {

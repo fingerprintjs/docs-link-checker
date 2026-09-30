@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createGlobMatcher, MAX_GLOB_LENGTH } from "./glob";
 import type { LinkWithResult } from "./types";
 
 /**
@@ -10,24 +11,22 @@ import type { LinkWithResult } from "./types";
  *   "ignore": [
  *     { "href": "https://example.com/flaky", "page": "docs/guide.md", "reason": "Blocks bots" },
  *     { "pattern": "https://twitter.com/**", "reason": "Always asks for a login" },
- *     { "regex": "^https://(www\\.)?x\\.com/" },
  *     "https://www.linkedin.com/**"
  *   ]
  * }
  * ```
  *
  * - `href`: exact link URL (as reported, e.g. the resolved URL on websites, the link as written in local files).
- * - `pattern`: a glob (`**` matches anything, `*` anything except `/`, everything else is literal, including `?`).
- *   A plain string entry is a shorthand for `{ "pattern": ... }`.
- * - `regex`: a JavaScript regular expression (not anchored, use `^` and `$`).
- * Every entry has exactly one of `href`, `pattern` or `regex`.
+ * - `pattern`: a glob (`**` matches anything, `*` anything except `/`, everything else is literal, including `?`),
+ *   see `src/glob.ts`. A plain string entry is a shorthand for `{ "pattern": ... }`.
+ * Every entry has exactly one of `href` or `pattern`. Regular expressions are not supported on purpose: patterns come
+ * from files, and a regular expression like `(a+)+$` could make the check hang (ReDoS). Globs never use `RegExp`.
  * - `page` (optional): only ignore the link on this page (same glob syntax, a value without `*` is an exact match).
  * - `reason` (optional): shown in the report.
  */
 export type BaselineEntry = {
   href?: string;
   pattern?: string;
-  regex?: string;
   page?: string;
   reason?: string;
 };
@@ -43,46 +42,15 @@ type Matcher = (value: string) => boolean;
 export type Baseline = {
   entries: BaselineEntry[];
   /** The first entry matching the (failing) link, if any */
-  match: (link: { href: string; page: string }) => BaselineEntry | undefined;
+  findEntry: (link: { href: string; page: string }) => BaselineEntry | undefined;
 };
 
 export class BaselineError extends Error {
   override name = "BaselineError";
 }
 
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-
-/**
- * Converts a glob to a regular expression: `**` matches anything, `*` anything except `/`.
- * `?` and other characters are literal (URLs are full of `?`).
- */
-export const globToRegExp = (glob: string): RegExp => {
-  const source = glob
-    .split("**")
-    .map((part) => part.split("*").map(escapeRegExp).join("[^/]*"))
-    .join(".*");
-  return new RegExp(`^${source}$`);
-};
-
-/**
- * Compiles a regular expression from a baseline file.
- * @throws {BaselineError} for an invalid regular expression
- */
-export const parseRegex = (source: string): RegExp => {
-  try {
-    return new RegExp(source);
-  } catch (error) {
-    throw new BaselineError(`invalid regular expression "${source}": ${(error as Error).message}`);
-  }
-};
-
-const toMatcher =
-  (regExp: RegExp): Matcher =>
-  (value) =>
-    regExp.test(value);
-
-const ALLOWED_KEYS = new Set(["href", "pattern", "regex", "page", "reason"]);
-const URL_KEYS = ["href", "pattern", "regex"] as const;
+const ALLOWED_KEYS = new Set(["href", "pattern", "page", "reason"]);
+const URL_KEYS = ["href", "pattern"] as const;
 
 /**
  * Validates the parsed JSON of a baseline file. Accepts `{ "ignore": [...] }` or a bare array of entries.
@@ -114,12 +82,20 @@ export const validateBaseline = (data: unknown): BaselineFile => {
       if (item === "") {
         throw new BaselineError(`${where}: pattern must not be empty`);
       }
+      if (item.length > MAX_GLOB_LENGTH) {
+        throw new BaselineError(`${where}: pattern is longer than ${MAX_GLOB_LENGTH} characters`);
+      }
       return { pattern: item };
     }
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new BaselineError(`${where}: expected a string pattern or an object`);
     }
     for (const key of Object.keys(item)) {
+      if (key === "regex") {
+        throw new BaselineError(
+          `${where}: "regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`,
+        );
+      }
       if (!ALLOWED_KEYS.has(key)) {
         throw new BaselineError(
           `${where}: unknown key "${key}" (allowed: ${[...ALLOWED_KEYS].join(", ")})`,
@@ -133,13 +109,12 @@ export const validateBaseline = (data: unknown): BaselineFile => {
       }
     }
     if (URL_KEYS.filter((key) => entry[key] !== undefined).length !== 1) {
-      throw new BaselineError(`${where}: expected exactly one of "href", "pattern" or "regex"`);
+      throw new BaselineError(`${where}: expected exactly one of "href" or "pattern"`);
     }
-    if (typeof entry.regex === "string") {
-      try {
-        parseRegex(entry.regex);
-      } catch (error) {
-        throw new BaselineError(`${where}: ${(error as Error).message}`);
+    for (const key of ["pattern", "page"] as const) {
+      const value = entry[key];
+      if (typeof value === "string" && value.length > MAX_GLOB_LENGTH) {
+        throw new BaselineError(`${where}: "${key}" is longer than ${MAX_GLOB_LENGTH} characters`);
       }
     }
     return item as BaselineEntry;
@@ -150,19 +125,18 @@ export const validateBaseline = (data: unknown): BaselineFile => {
 /** Builds a matcher for validated baseline entries */
 export const createBaseline = (entries: BaselineEntry[]): Baseline => {
   const compiled = entries.map((entry) => {
+    // Plain string comparisons and the regex-free glob matcher only, never `RegExp` from user input
     const hrefMatches: Matcher =
       entry.href !== undefined
         ? (href) => href === entry.href
-        : entry.regex !== undefined
-          ? toMatcher(parseRegex(entry.regex))
-          : toMatcher(globToRegExp(entry.pattern ?? ""));
+        : createGlobMatcher(entry.pattern ?? "");
     const pageMatches: Matcher | undefined =
-      entry.page !== undefined ? toMatcher(globToRegExp(entry.page)) : undefined;
+      entry.page !== undefined ? createGlobMatcher(entry.page) : undefined;
     return { entry, hrefMatches, pageMatches };
   });
   return {
     entries,
-    match: (link) =>
+    findEntry: (link) =>
       compiled.find(
         ({ hrefMatches, pageMatches }) =>
           hrefMatches(link.href) && (!pageMatches || pageMatches(link.page)),
@@ -211,7 +185,7 @@ type UpdateBaselineArgs = {
 
 /**
  * Computes the new baseline after a run:
- * - `pattern` and `regex` entries are always kept (they are hand-written).
+ * - `pattern` entries are always kept (they are hand-written).
  * - Existing `href` entries are kept if they still match a failure (or with `keepUnmatched`), with their reason.
  * - Failures not matched by any entry are added as `{ href, page, reason }`.
  */
@@ -224,7 +198,7 @@ export const updateBaseline = ({
   const matched = new Set<BaselineEntry>();
   const added = new Map<string, BaselineEntry>();
   for (const failure of failures) {
-    const entry = baseline.match(failure);
+    const entry = baseline.findEntry(failure);
     if (entry) {
       matched.add(entry);
       continue;

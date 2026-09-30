@@ -196,7 +196,7 @@ export const checkLocalLink = (
 
   if (!markdownFile) {
     // GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines
-    const lineMatch = hash.match(GITHUB_LINE_HASH);
+    const lineMatch = GITHUB_LINE_HASH.exec(hash);
     if (lineMatch) {
       const lastLine = Math.max(Number(lineMatch[1]), Number(lineMatch[2] ?? 0));
       const lineCount = readFileSync(target, "utf8").replace(/\n$/, "").split("\n").length;

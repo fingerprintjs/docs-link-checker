@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   BaselineError,
   createBaseline,
-  globToRegExp,
   loadBaseline,
   updateBaseline,
   validateBaseline,
@@ -23,32 +22,13 @@ const broken = (href: string, page = "https://example.com/page"): LinkWithResult
 
 const tempDir = () => mkdtempSync(join(tmpdir(), "baseline-test-"));
 
-describe("globToRegExp()", () => {
-  it("matches literally without wildcards, including `?` and regex characters", () => {
-    const regExp = globToRegExp("https://example.com/a?b=(1)+[2]");
-    expect(regExp.test("https://example.com/a?b=(1)+[2]")).toBe(true);
-    expect(regExp.test("https://example.com/aXb=(1)+[2]")).toBe(false);
-    expect(regExp.test("https://example.com/a?b=(1)+[2]/more")).toBe(false);
-  });
-
-  it("`*` does not match `/`, `**` matches anything", () => {
-    expect(globToRegExp("https://x.com/*").test("https://x.com/user")).toBe(true);
-    expect(globToRegExp("https://x.com/*").test("https://x.com/user/status/1")).toBe(false);
-    expect(globToRegExp("https://x.com/**").test("https://x.com/user/status/1")).toBe(true);
-    expect(globToRegExp("docs/**/*.md").test("docs/a/b/c.md")).toBe(true);
-    expect(globToRegExp("**.linkedin.com/**").test("https://www.linkedin.com/company/x")).toBe(
-      true,
-    );
-  });
-});
-
 describe("validateBaseline()", () => {
   it("accepts an object with `ignore`, a bare array and string shorthands", () => {
     expect(validateBaseline({ ignore: [{ href: "https://a.com" }] })).toEqual({
       ignore: [{ href: "https://a.com" }],
     });
-    expect(validateBaseline(["https://a.com/**", { regex: "^https://b" }])).toEqual({
-      ignore: [{ pattern: "https://a.com/**" }, { regex: "^https://b" }],
+    expect(validateBaseline(["https://a.com/**", { pattern: "https://b/*" }])).toEqual({
+      ignore: [{ pattern: "https://a.com/**" }, { pattern: "https://b/*" }],
     });
     expect(validateBaseline({ $schema: "x", ignore: [] })).toEqual({ ignore: [] });
   });
@@ -62,46 +42,51 @@ describe("validateBaseline()", () => {
     [[42], /ignore\[0\]: expected a string pattern or an object/],
     [[""], /ignore\[0\]: pattern must not be empty/],
     [[{ href: "a" }, { herf: "b" }], /ignore\[1\]: unknown key "herf"/],
-    [[{ page: "a" }], /ignore\[0\]: expected exactly one of "href", "pattern" or "regex"/],
+    [[{ page: "a" }], /ignore\[0\]: expected exactly one of "href" or "pattern"/],
     [[{ href: "a", pattern: "b" }], /exactly one of/],
     [[{ href: 1 }], /ignore\[0\]: "href" must be a non-empty string/],
     [[{ href: "a", reason: "" }], /"reason" must be a non-empty string/],
-    [[{ regex: "(" }], /ignore\[0\]: invalid regular expression "\("/],
+    // Regular expressions are not supported (ReDoS), with a message pointing to globs
+    [[{ regex: "(a+)+$" }], /ignore\[0\]: "regex" is not supported .* use a "pattern" glob/],
+    [[{ regex: "^https://x" }], /"regex" is not supported/],
+    [["x".repeat(2049)], /ignore\[0\]: pattern is longer than 2048 characters/],
+    [[{ pattern: "x".repeat(2049) }], /"pattern" is longer than 2048 characters/],
+    [[{ href: "a", page: "x".repeat(2049) }], /"page" is longer than 2048 characters/],
   ])("rejects %j", (data, message) => {
     expect(() => validateBaseline(data)).toThrow(BaselineError);
     expect(() => validateBaseline(data)).toThrow(message);
   });
 });
 
-describe("createBaseline().match()", () => {
+describe("createBaseline().findEntry()", () => {
   const baseline = createBaseline([
     { href: "https://exact.com/a", reason: "exact" },
     { href: "https://on-page.com/a", page: "docs/guide.md", reason: "on page" },
     { pattern: "https://glob.com/**", reason: "glob" },
-    { regex: "^https://(www\\.)?regex\\.com/", reason: "regex" },
+    { pattern: "https://(a+)+$.com/*", reason: "metacharacters" },
     { pattern: "https://page-glob.com/*", page: "docs/**" },
   ]);
 
   it("matches exact hrefs only", () => {
-    expect(baseline.match(broken("https://exact.com/a"))?.reason).toBe("exact");
-    expect(baseline.match(broken("https://exact.com/a/b"))).toBeUndefined();
-    expect(baseline.match(broken("https://exact.com/"))).toBeUndefined();
+    expect(baseline.findEntry(broken("https://exact.com/a"))?.reason).toBe("exact");
+    expect(baseline.findEntry(broken("https://exact.com/a/b"))).toBeUndefined();
+    expect(baseline.findEntry(broken("https://exact.com/"))).toBeUndefined();
   });
 
   it("restricts entries with `page` to that page", () => {
-    expect(baseline.match(broken("https://on-page.com/a", "docs/guide.md"))?.reason).toBe(
+    expect(baseline.findEntry(broken("https://on-page.com/a", "docs/guide.md"))?.reason).toBe(
       "on page",
     );
-    expect(baseline.match(broken("https://on-page.com/a", "docs/other.md"))).toBeUndefined();
-    expect(baseline.match(broken("https://page-glob.com/x", "docs/a/b.md"))).toBeDefined();
-    expect(baseline.match(broken("https://page-glob.com/x", "README.md"))).toBeUndefined();
+    expect(baseline.findEntry(broken("https://on-page.com/a", "docs/other.md"))).toBeUndefined();
+    expect(baseline.findEntry(broken("https://page-glob.com/x", "docs/a/b.md"))).toBeDefined();
+    expect(baseline.findEntry(broken("https://page-glob.com/x", "README.md"))).toBeUndefined();
   });
 
-  it("matches globs and regular expressions", () => {
-    expect(baseline.match(broken("https://glob.com/any/path?q=1"))?.reason).toBe("glob");
-    expect(baseline.match(broken("https://www.regex.com/x"))?.reason).toBe("regex");
-    expect(baseline.match(broken("https://regex.com/x"))?.reason).toBe("regex");
-    expect(baseline.match(broken("https://other.com/regex.com/"))).toBeUndefined();
+  it("matches globs, regular expression characters are literal", () => {
+    expect(baseline.findEntry(broken("https://glob.com/any/path?q=1"))?.reason).toBe("glob");
+    expect(baseline.findEntry(broken("https://(a+)+$.com/x"))?.reason).toBe("metacharacters");
+    expect(baseline.findEntry(broken("https://aaa.com/x"))).toBeUndefined();
+    expect(baseline.findEntry(broken("https://other.com/glob.com/"))).toBeUndefined();
   });
 });
 
@@ -161,7 +146,7 @@ describe("loadBaseline()", () => {
   it("loads a valid file", () => {
     const path = join(tempDir(), "baseline.json");
     writeFileSync(path, JSON.stringify({ ignore: [{ href: "https://a.com", reason: "r" }] }));
-    expect(loadBaseline(path).match(broken("https://a.com"))?.reason).toBe("r");
+    expect(loadBaseline(path).findEntry(broken("https://a.com"))?.reason).toBe("r");
   });
 
   it("reports missing files, unless allowed", () => {
@@ -217,7 +202,7 @@ describe("updateBaseline()", () => {
     expect(readFileSync(path, "utf8").endsWith("}\n")).toBe(true);
     const loaded = loadBaseline(path);
     for (const failure of failures) {
-      expect(loaded.match(failure)).toBeDefined();
+      expect(loaded.findEntry(failure)).toBeDefined();
     }
   });
 });
