@@ -38,7 +38,7 @@ Commands:
 * `github-org <org>`: links in README files of the organization's public repositories.
 * `files <glob...> [--dry-run] [--no-annotations]`: links in local markdown files (`.md`, `.markdown`, `node_modules` and `.git` are skipped). Quote the globs so the CLI expands them (`**` works in every shell).
   * Relative links (`docs/a.md`, `../b/`, `a.md?plain=1`) are resolved against the file, root-relative links (`/docs/a.md`) against the current directory. The target file or directory must exist (file names are case-sensitive on Linux, like on GitHub).
-  * `#anchors` (`#install`, `docs/a.md#install`, `docs/#install` for a directory README) must match a heading slug (GitHub semantics, like for GitHub links) or an HTML anchor (`<a name="...">`). `#L10-L20` on code files must be within the file. Other anchors on non-markdown files are not checked.
+  * `#anchors` (`#install`, `docs/a.md#install`, `docs/#install` for the directory's `README.md` or `README.markdown`, in any case, `.md` first) must match a heading slug (GitHub semantics, like for GitHub links) or an HTML anchor (`<a name="...">`). `#L10-L20` on code files must be within the file. Other anchors on non-markdown files are not checked.
   * Absolute links (`https://...`) are checked like in the other commands (fetch, GitHub API, Playwright). `mailto:` and other schemes are skipped.
   * Links to fix are printed as `file:line: link: error`, and as `::error file=...,line=...::` annotations in GitHub Actions.
 

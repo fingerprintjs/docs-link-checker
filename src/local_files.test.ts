@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   collectLinksFromFiles,
   extractMarkdownLinks,
   findMarkdownFiles,
+  findReadme,
   getLinkKind,
 } from "./local_files";
 
@@ -141,7 +142,7 @@ describe("checkLocalLink()", () => {
     });
     expect(check("README.md", "src#anything")).toMatchObject({
       ok: true,
-      note: "Hash not checked (directory without README.md)",
+      note: "Hash not checked (directory without README)",
     });
   });
 
@@ -165,6 +166,55 @@ describe("checkLocalLink()", () => {
     expect(check("README.md", "docs/guide.md#:~:text=Usage")).toMatchObject({
       ok: true,
       note: "Text Fragment",
+    });
+  });
+});
+
+describe("findReadme() and directory anchors", () => {
+  const makeDir = (files: Record<string, string>, dirs: string[] = []) => {
+    const dir = mkdtempSync(join(tmpdir(), "readme-test-"));
+    for (const name of dirs) mkdirSync(join(dir, name));
+    for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+    return dir;
+  };
+  // Case-insensitive filesystems (macOS, Windows) can't have README.md and readme.md side by side
+  const caseSensitive = (() => {
+    const dir = makeDir({ a: "" });
+    return !existsSync(join(dir, "A"));
+  })();
+
+  it("finds README.markdown and lowercase or mixed-case names", () => {
+    expect(findReadme(makeDir({ "README.markdown": "# X" }))).toMatch(/README\.markdown$/);
+    expect(findReadme(makeDir({ "readme.md": "# X" }))).toMatch(/readme\.md$/);
+    expect(findReadme(makeDir({ "Readme.Markdown": "# X" }))).toMatch(/Readme\.Markdown$/);
+    expect(findReadme(makeDir({ "README.txt": "", "notes.md": "" }))).toBeUndefined();
+  });
+
+  it("prefers .md over .markdown and ignores directories named like a README", () => {
+    expect(findReadme(makeDir({ "README.markdown": "", "README.md": "" }))).toMatch(/README\.md$/);
+    expect(findReadme(makeDir({ "README.markdown": "" }, ["README.md"]))).toMatch(
+      /README\.markdown$/,
+    );
+  });
+
+  it.runIf(caseSensitive)("picks README.md before readme.md, whatever the directory order", () => {
+    expect(findReadme(makeDir({ "readme.md": "", "README.md": "", "Readme.md": "" }))).toMatch(
+      /\/README\.md$/,
+    );
+  });
+
+  it("checks anchors on directories with a README.markdown", () => {
+    const root = makeDir({ "index.md": "" }, ["guide"]);
+    writeFileSync(join(root, "guide", "README.markdown"), "# Guide\n\n## Setup\n");
+    const context = { root };
+    expect(checkLocalLink(join(root, "index.md"), "guide#setup", context)).toEqual({
+      ok: true,
+      status: 200,
+    });
+    expect(checkLocalLink(join(root, "index.md"), "guide/#nope", context)).toMatchObject({
+      ok: false,
+      error: "hash not found",
+      errorDetail: "No heading matching #nope in guide/README.markdown",
     });
   });
 });

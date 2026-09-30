@@ -145,9 +145,24 @@ const getAnchorsOfFile = (path: string, cache?: Map<string, Set<string>>): Set<s
   return anchors;
 };
 
-const findReadme = (directory: string): string | undefined => {
-  const readme = readdirSync(directory).find((name) => name.toLowerCase() === "readme.md");
-  return readme ? join(directory, readme) : undefined;
+// Supported README names (compared case-insensitively), in order of preference
+const README_NAMES = ["readme.md", "readme.markdown"];
+
+/**
+ * The README GitHub renders for a directory: `README.md` or `README.markdown` in any case (`readme.md`,
+ * `Readme.markdown`...). Deterministic when there are several: `.md` first, then by name in code point order
+ * (`README.md` before `Readme.md` before `readme.md`). Directories with such names are ignored.
+ */
+export const findReadme = (directory: string): string | undefined => {
+  const candidates = readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && README_NAMES.includes(entry.name.toLowerCase()))
+    .map((entry) => entry.name)
+    .sort((a, b) => {
+      const byExtension =
+        README_NAMES.indexOf(a.toLowerCase()) - README_NAMES.indexOf(b.toLowerCase());
+      return byExtension !== 0 ? byExtension : a < b ? -1 : a > b ? 1 : 0;
+    });
+  return candidates.length > 0 ? join(directory, candidates[0]) : undefined;
 };
 
 /**
@@ -188,7 +203,7 @@ export const checkLocalLink = (
     // GitHub renders the README of a directory, anchors point to its headings
     markdownFile = findReadme(target);
     if (!markdownFile) {
-      return { ok: true, status: 200, note: "Hash not checked (directory without README.md)" };
+      return { ok: true, status: 200, note: "Hash not checked (directory without README)" };
     }
   } else if (isMarkdownFile(target)) {
     markdownFile = target;
