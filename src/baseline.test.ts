@@ -196,6 +196,33 @@ describe("updateBaseline()", () => {
     expect(ignore).toContainEqual({ href: "https://new-a.com/", page: "a.md", reason: "why" });
   });
 
+  it("keeps exact entries that still match even when an earlier broad pattern matches first", () => {
+    const overlapping = createBaseline([
+      { pattern: "https://broad.com/**", reason: "broad" },
+      { href: "https://broad.com/still-broken", page: "a.md", reason: "specific" },
+      { href: "https://broad.com/fixed", page: "a.md" },
+    ]);
+    expect(overlapping.findEntry(broken("https://broad.com/still-broken", "a.md"))?.reason).toBe(
+      "broad",
+    );
+    expect(
+      overlapping
+        .findEntries(broken("https://broad.com/still-broken", "a.md"))
+        .map((e) => e.reason),
+    ).toEqual(["broad", "specific"]);
+    expect(
+      updateBaseline({
+        baseline: overlapping,
+        failures: [broken("https://broad.com/still-broken", "a.md")],
+      }),
+    ).toEqual({
+      ignore: [
+        { pattern: "https://broad.com/**", reason: "broad" },
+        { href: "https://broad.com/still-broken", page: "a.md", reason: "specific" },
+      ],
+    });
+  });
+
   it("writes a file that loads back", () => {
     const path = join(tempDir(), "baseline.json");
     writeBaseline(path, updateBaseline({ baseline, failures }));

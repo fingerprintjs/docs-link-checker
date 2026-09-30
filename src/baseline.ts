@@ -41,8 +41,10 @@ type Matcher = (value: string) => boolean;
 
 export type Baseline = {
   entries: BaselineEntry[];
-  /** The first entry matching the (failing) link, if any */
+  /** The first entry matching the (failing) link, if any (its reason is shown in the report) */
   findEntry: (link: { href: string; page: string }) => BaselineEntry | undefined;
+  /** All entries matching the link, in file order */
+  findEntries: (link: { href: string; page: string }) => BaselineEntry[];
 };
 
 export class BaselineError extends Error {
@@ -134,13 +136,14 @@ export const createBaseline = (entries: BaselineEntry[]): Baseline => {
       entry.page !== undefined ? createGlobMatcher(entry.page) : undefined;
     return { entry, hrefMatches, pageMatches };
   });
+  const matches =
+    (link: { href: string; page: string }) =>
+    ({ hrefMatches, pageMatches }: (typeof compiled)[number]) =>
+      hrefMatches(link.href) && (!pageMatches || pageMatches(link.page));
   return {
     entries,
-    findEntry: (link) =>
-      compiled.find(
-        ({ hrefMatches, pageMatches }) =>
-          hrefMatches(link.href) && (!pageMatches || pageMatches(link.page)),
-      )?.entry,
+    findEntry: (link) => compiled.find(matches(link))?.entry,
+    findEntries: (link) => compiled.filter(matches(link)).map(({ entry }) => entry),
   };
 };
 
@@ -198,9 +201,13 @@ export const updateBaseline = ({
   const matched = new Set<BaselineEntry>();
   const added = new Map<string, BaselineEntry>();
   for (const failure of failures) {
-    const entry = baseline.findEntry(failure);
-    if (entry) {
+    // Every matching entry counts as still in use, not only the first one: an exact `href` entry after a broad
+    // pattern that also matches the failure must not be dropped as stale
+    const entries = baseline.findEntries(failure);
+    for (const entry of entries) {
       matched.add(entry);
+    }
+    if (entries.length > 0) {
       continue;
     }
     const key = JSON.stringify([failure.page, failure.href]);
