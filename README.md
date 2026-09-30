@@ -16,6 +16,7 @@ A GitHub workflow that checks for broken links in our documentation, public GitH
 * Lint and format with [Biome](https://biomejs.dev/) (config in `biome.json`):
   * `pnpm run check` runs the linter, the formatter check and import sorting. CI runs the same checks with `biome ci`.
   * `pnpm run check:fix` applies safe fixes and formats, `pnpm run lint` only lints, `pnpm run format` only formats.
+  * To hide the formatting commit from `git blame`, run `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
   * `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch`, the GitHub API and Playwright, and need no network or `GH_TOKEN`.
   * `pnpm run test:integration` runs integration tests (`*.integration.test.ts`) against real websites and the GitHub API. They need network access, Playwright's Chromium and a `GH_TOKEN` environment variable.
 * Link checks (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) need a `GH_TOKEN` environment variable (can also be set in a `.env` file). They exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them.
