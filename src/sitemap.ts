@@ -97,9 +97,12 @@ export const getPagesFromSitemap = async (
   }
   visitedSitemaps.add(sitemapUrl);
 
-  const response = await (
-    await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } })
-  ).text();
+  const sitemapResponse = await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } });
+  // Fail loudly, silently skipping a sitemap would skip all of its pages
+  if (!sitemapResponse.ok) {
+    throw new Error(`Could not fetch sitemap ${sitemapUrl}: status ${sitemapResponse.status}`);
+  }
+  const response = await sitemapResponse.text();
   const $ = cheerio.load(response, { xmlMode: true });
 
   if ($("sitemapindex").length > 0) {

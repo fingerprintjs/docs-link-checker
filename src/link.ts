@@ -25,11 +25,15 @@ type CheckLinksArgs = {
  * How a link is checked in the first pass:
  * - `github-api`: GitHub links checked with the GitHub API (definitive answers)
  * - `fetch`: plain `fetch`, assumes the page is server-side rendered
- * - `playwright`: already checked with a real browser (GitHub code line links)
+ * - `playwright`: needs a real browser (GitHub code line links), checked in the Playwright pass only
+ * - `invalid`: the URL cannot be parsed, reported as broken link without any request
  */
-export type CheckMethod = "fetch" | "github-api" | "playwright";
+export type CheckMethod = "fetch" | "github-api" | "playwright" | "invalid";
 
 export const getInitialCheckMethod = (href: string): CheckMethod => {
+  if (!URL.canParse(href)) {
+    return "invalid";
+  }
   try {
     if (!isGithubUrl(href)) {
       return "fetch";
@@ -63,6 +67,9 @@ export const shouldRecheckWithPlaywright = (result: LinkCheckResult, method: Che
     case "playwright":
       // Already checked with Playwright
       return false;
+    case "invalid":
+      // A URL that cannot be parsed is definitively broken
+      return false;
     case "github-api":
       // "broken link" and "hash not found" from the API are definitive.
       // Unexpected errors (unknown link type, API errors) might still work in a browser.
@@ -85,7 +92,9 @@ const checkLinkFirstPass = async (
   href: string
 ): Promise<{ result: LinkCheckResult; method: CheckMethod }> => {
   const method = getInitialCheckMethod(href);
-  const result = method === "fetch" ? await checkLinkWithFetch(href) : await checkLinkWithGithubApi(href);
+  // `invalid` URLs are reported by checkLinkWithFetch without any request
+  const result =
+    method === "fetch" || method === "invalid" ? await checkLinkWithFetch(href) : await checkLinkWithGithubApi(href);
   return { result, method };
 };
 
@@ -115,6 +124,11 @@ export const checkLinks = async ({ links, verbose, fetchConcurrencyLimit = CONCU
     items: links,
     concurrencyLimit: fetchConcurrencyLimit,
     processFn: async (link): Promise<LinkWithResult | null> => {
+      // Links that need a browser go straight to the Playwright pass, so they respect its concurrency limit
+      if (getInitialCheckMethod(link.href) === "playwright") {
+        linksToCheckWithPlaywright.push(link);
+        return null;
+      }
       const { result, method } = await checkFirstPass(link.href);
       // Failure possibly caused by the fetch method, add to Playwright queue
       if (shouldRecheckWithPlaywright(result, method)) {

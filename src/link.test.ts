@@ -152,13 +152,23 @@ describe("checkLinks() Playwright escalation", () => {
     }
   });
 
-  it("does not re-check GitHub code line links (already checked with Playwright)", async () => {
-    checkLinkWithGithubApiMock.mockResolvedValue({ ok: false, error: "hash not found", status: 200 });
+  it("checks GitHub code line links only in the Playwright pass (respects its concurrency limit)", async () => {
+    const href = "https://github.com/owner/repo/blob/main/a.js#L999";
 
-    await checkLinks({ links: [link("https://github.com/owner/repo/blob/main/a.js#L999")] });
+    await checkLinks({ links: [link(href), link(href)] });
 
-    expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
+    expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
+    expect(playwrightState.visited).toEqual([href]);
+  });
+
+  it("reports unparsable URLs as broken without any request or Playwright re-check", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+
+    const { results } = await checkLinks({ links: [link("not a url")] });
+
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(playwrightState.visited).toEqual([]);
+    expect(results[0].result).toMatchObject({ ok: false, error: "broken link" });
   });
 
   const fetchCases: Array<[string, FetchHandler, boolean]> = [

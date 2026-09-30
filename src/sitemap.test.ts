@@ -39,6 +39,11 @@ describe("getWebsitePages()", () => {
     expect(await getWebsitePages(SITE)).toEqual([`${SITE}/a`, `${SITE}/b`]);
   });
 
+  it("fails loudly when a nested sitemap cannot be fetched", async () => {
+    stubSitemaps({ [`${SITE}/sitemap.xml`]: sitemapIndex([`${SITE}/sitemap-missing.xml`]) });
+    await expect(getWebsitePages(SITE)).rejects.toThrow(`Could not fetch sitemap ${SITE}/sitemap-missing.xml: status 404`);
+  });
+
   it("follows nested sitemap indexes recursively and dedupes pages and sitemaps", async () => {
     const fetchMock = stubSitemaps({
       [`${SITE}/sitemap.xml`]: sitemapIndex([`${SITE}/sitemap-docs.xml`, `${SITE}/sitemap-nested-index.xml`]),
