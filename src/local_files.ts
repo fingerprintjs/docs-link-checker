@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { glob } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { marked, type Token, type Tokens } from "marked";
@@ -145,17 +145,30 @@ const getAnchorsOfFile = (path: string, cache?: Map<string, Set<string>>): Set<s
   return anchors;
 };
 
+/** Does the symlink point to a file (callers check that it stays inside the repository before reading it) */
+const isFileTarget = (path: string) => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
 // Supported README names (compared case-insensitively), in order of preference
 const README_NAMES = ["readme.md", "readme.markdown"];
 
 /**
  * The README GitHub renders for a directory: `README.md` or `README.markdown` in any case (`readme.md`,
  * `Readme.markdown`...). Deterministic when there are several: `.md` first, then by name in code point order
- * (`README.md` before `Readme.md` before `readme.md`). Directories with such names are ignored.
+ * (`README.md` before `Readme.md` before `readme.md`). Directories with such names are ignored, symlinks to files are followed.
  */
 export const findReadme = (directory: string): string | undefined => {
   const candidates = readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && README_NAMES.includes(entry.name.toLowerCase()))
+    .filter(
+      (entry) =>
+        README_NAMES.includes(entry.name.toLowerCase()) &&
+        (entry.isFile() || (entry.isSymbolicLink() && isFileTarget(join(directory, entry.name)))),
+    )
     .map((entry) => entry.name)
     .sort((a, b) => {
       const byExtension =
@@ -163,6 +176,24 @@ export const findReadme = (directory: string): string | undefined => {
       return byExtension !== 0 ? byExtension : a < b ? -1 : a > b ? 1 : 0;
     });
   return candidates.length > 0 ? join(directory, candidates[0]) : undefined;
+};
+
+/** Is `path` the root or inside it (lexically, `path` and `root` are absolute) */
+export const isInsideRoot = (root: string, path: string): boolean => {
+  const fromRoot = relative(root, path);
+  return (
+    fromRoot === "" ||
+    (fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot))
+  );
+};
+
+/** Is the real path (symlinks resolved) of an existing `path` inside the real path of `root` */
+const isRealPathInsideRoot = (root: string, path: string): boolean => {
+  try {
+    return isInsideRoot(realpathSync(root), realpathSync(path));
+  } catch {
+    return false;
+  }
 };
 
 /**
@@ -182,6 +213,16 @@ export const checkLocalLink = (
 
   const target =
     path === "" ? file : path.startsWith("/") ? join(root, path) : resolve(dirname(file), path);
+  // A link can't point to a file outside the checked repository (`../../../etc/passwd`): reject it before touching
+  // the filesystem, so files of the machine running the check are never read and can't make such a link pass
+  const outside: LinkCheckResult = {
+    ok: false,
+    error: "broken link",
+    errorDetail: `Link points outside the repository: ${path}`,
+  };
+  if (!isInsideRoot(root, target)) {
+    return outside;
+  }
   const displayTarget = toPosixPath(relative(root, target)) || ".";
 
   let stats: ReturnType<typeof statSync>;
@@ -189,6 +230,10 @@ export const checkLocalLink = (
     stats = statSync(target);
   } catch {
     return { ok: false, error: "broken link", errorDetail: `File not found: ${displayTarget}` };
+  }
+  // Symlinks inside the repository must not point outside of it either
+  if (!isRealPathInsideRoot(root, target)) {
+    return outside;
   }
 
   if (!hash || hash === "/") {
@@ -205,6 +250,9 @@ export const checkLocalLink = (
     if (!markdownFile) {
       return { ok: true, status: 200, note: "Hash not checked (directory without README)" };
     }
+    if (!isRealPathInsideRoot(root, markdownFile)) {
+      return outside;
+    }
   } else if (isMarkdownFile(target)) {
     markdownFile = target;
   }
@@ -213,7 +261,17 @@ export const checkLocalLink = (
     // GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines
     const lineMatch = GITHUB_LINE_HASH.exec(hash);
     if (lineMatch) {
-      const lastLine = Math.max(Number(lineMatch[1]), Number(lineMatch[2] ?? 0));
+      // Line numbers are 1-based, a range goes forward (`#L0`, `#L5-L0`, `#L9-L3` are not valid anchors)
+      const firstLine = Number(lineMatch[1]);
+      const lastLine = lineMatch[2] === undefined ? firstLine : Number(lineMatch[2]);
+      if (firstLine < 1 || lastLine < firstLine) {
+        return {
+          ok: false,
+          error: "hash not found",
+          status: 200,
+          errorDetail: `Invalid line anchor #${hash} (lines start at 1, ranges go forward)`,
+        };
+      }
       const lineCount = readFileSync(target, "utf8").replace(/\n$/, "").split("\n").length;
       return lastLine <= lineCount
         ? { ok: true, status: 200 }

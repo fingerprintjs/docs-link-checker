@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -155,11 +155,25 @@ describe("checkLocalLink()", () => {
       errorDetail: "src/code.ts has only 3 lines",
     });
     expect(check("README.md", "src/code.ts#L1-L99").ok).toBe(false);
-    expect(check("README.md", "src/code.ts#something")).toMatchObject({
-      ok: true,
-      note: "Hash not checked (not a markdown file)",
-    });
+    expect(check("README.md", "src/code.ts#L1").ok).toBe(true);
+    expect(check("README.md", "src/code.ts#L2-L2").ok).toBe(true);
   });
+
+  it.each(["#L0", "#L0-L2", "#L2-L0", "#L3-L2", "#L0C1"])(
+    "rejects invalid line anchor %s",
+    (hash) => {
+      expect(check("README.md", `src/code.ts${hash}`)).toEqual({
+        ok: false,
+        error: "hash not found",
+        status: 200,
+        errorDetail: `Invalid line anchor ${hash} (lines start at 1, ranges go forward)`,
+      });
+      expect(check("README.md", "src/code.ts#something")).toMatchObject({
+        ok: true,
+        note: "Hash not checked (not a markdown file)",
+      });
+    },
+  );
 
   it("accepts accidental hashes and text fragments", () => {
     expect(check("README.md", "docs/guide.md#/").ok).toBe(true);
@@ -167,6 +181,57 @@ describe("checkLocalLink()", () => {
       ok: true,
       note: "Text Fragment",
     });
+  });
+});
+
+describe("checkLocalLink() outside the repository", () => {
+  const outside = (path: string) => ({
+    ok: false,
+    error: "broken link",
+    errorDetail: `Link points outside the repository: ${path}`,
+  });
+
+  it("rejects relative and root-relative links leaving the root, even to existing files", () => {
+    // Enough ../ to reach the filesystem root from the fixture, /etc/passwd exists on Linux runners
+    const deep = `${"../".repeat(30)}etc/passwd`;
+    expect(check("README.md", deep)).toEqual(outside(deep));
+    expect(check("README.md", `${deep}#L1`)).toEqual(outside(deep));
+    expect(check("docs/guide.md", "../../x.md")).toEqual(outside("../../x.md"));
+    expect(check("README.md", "/../local.md")).toEqual(outside("/../local.md"));
+    expect(check("README.md", "..")).toEqual(outside(".."));
+  });
+
+  it("accepts links to the root itself and inside it", () => {
+    expect(check("docs/guide.md", "..").ok).toBe(true);
+    expect(check("docs/guide.md", "../docs/../README.md").ok).toBe(true);
+    expect(check("README.md", "/").ok).toBe(true);
+  });
+
+  it("rejects symlinks inside the root that point outside, accepts symlinks within it", () => {
+    const secretDir = mkdtempSync(join(tmpdir(), "secret-"));
+    writeFileSync(join(secretDir, "secret.md"), "# Secret heading\n");
+    mkdirSync(join(secretDir, "dir"));
+    writeFileSync(join(secretDir, "dir", "README.md"), "# Secret readme\n");
+
+    const root = mkdtempSync(join(tmpdir(), "root-"));
+    writeFileSync(join(root, "index.md"), "");
+    writeFileSync(join(root, "real.md"), "# Real\n");
+    symlinkSync(join(secretDir, "secret.md"), join(root, "leak.md"));
+    symlinkSync(join(secretDir, "dir"), join(root, "leak-dir"));
+    symlinkSync(join(root, "real.md"), join(root, "alias.md"));
+    mkdirSync(join(root, "docs"));
+    symlinkSync(join(secretDir, "dir", "README.md"), join(root, "docs", "README.md"));
+
+    const context = { root };
+    const from = join(root, "index.md");
+    expect(checkLocalLink(from, "leak.md", context)).toEqual(outside("leak.md"));
+    expect(checkLocalLink(from, "leak.md#secret-heading", context)).toEqual(outside("leak.md"));
+    expect(checkLocalLink(from, "leak-dir/README.md", context)).toEqual(
+      outside("leak-dir/README.md"),
+    );
+    // The directory is inside, but its README is a symlink to a file outside
+    expect(checkLocalLink(from, "docs#secret-readme", context)).toEqual(outside("docs"));
+    expect(checkLocalLink(from, "alias.md#real", context)).toEqual({ ok: true, status: 200 });
   });
 });
 

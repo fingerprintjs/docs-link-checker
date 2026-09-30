@@ -99,8 +99,10 @@ runs:
         INPUT_SAMPLE_RATE: ${{ inputs.sample-rate }}
         INPUT_FAIL_ON_BROKEN: ${{ inputs.fail-on-broken }}
         INPUT_ANNOTATIONS: ${{ inputs.annotations }}
+        # The calling workflow's env must not change the action's behavior (or abort it with an invalid value)
         LINK_CHECK_SAMPLE_RATE: ''
         LINK_CHECK_BASELINE: ''
+        LINK_CHECK_HOST_CONCURRENCY: ''
       run: |
         for input in "fail-on-broken=${INPUT_FAIL_ON_BROKEN}" "annotations=${INPUT_ANNOTATIONS}"; do
           case "${input#*=}" in
@@ -136,8 +138,10 @@ runs:
         path: ~/.cache/ms-playwright
         key: ${{ runner.os }}-playwright-chrome-${{ steps.playwright.outputs.version }}
 
-    - name: Install Chromium browser binary if cache missed
-      if: steps.links.outputs.external-links != '0' && steps.playwright-cache.outputs.cache-hit != 'true'
+    # Also on a cache hit: the cache only has the browser binary, not the OS packages it needs (fresh or
+    # self-hosted runners). With a cached binary, only the missing OS packages are installed.
+    - name: Install Chromium browser binary and its OS dependencies
+      if: steps.links.outputs.external-links != '0'
       shell: bash
       working-directory: ${{ github.action_path }}
       run: node_modules/.bin/playwright install --with-deps chromium
@@ -159,6 +163,7 @@ runs:
         FAIL_ON_BROKEN_LINKS: ''
         LINK_CHECK_SAMPLE_RATE: ''
         LINK_CHECK_BASELINE: ''
+        LINK_CHECK_HOST_CONCURRENCY: ''
       run: |
         set -f
         # shellcheck disable=SC2086
