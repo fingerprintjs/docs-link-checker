@@ -4,6 +4,7 @@ import { checkLinks } from "./link";
 import { getJSONReport, saveReport } from "./report/report";
 import { getWebsitePages } from "./sitemap";
 import { Link } from "./types";
+import { sampleItems } from "./utils";
 
 type CheckWebsiteArgs = {
   websiteUrl: string;
@@ -14,7 +15,8 @@ type CheckWebsiteArgs = {
 export const checkWebsite = async ({ websiteUrl, linkFilter, usePlaywright }: CheckWebsiteArgs) => {
   const startTime = performance.now();
 
-  const pages = await getWebsitePages(websiteUrl, true);
+  const allPages = await getWebsitePages(websiteUrl, true);
+  const pages = sampleItems({ items: allPages, key: (page) => page, label: "pages" });
 
   const { links } = await getLinksFromPages({ pages, linkFilter, usePlaywright });
   console.log(`Fetched ${links.length} links.`);

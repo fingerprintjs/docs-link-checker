@@ -6,6 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.js",
     "checkLinks:docs": "npx tsx ./checks/docs.ts",
     "checkLinks:github": "npx tsx ./checks/github.ts",
     "checkLinks:web": "npx tsx ./checks/web.ts",

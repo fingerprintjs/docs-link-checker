@@ -2,8 +2,6 @@ import { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
 import { getMyOctokit } from "../github_client";
 
-const octokit = getMyOctokit();
-
 /**
  * Check if a GitHub branch/tree exists
  * @param owner - The owner of the repository
@@ -16,6 +14,7 @@ export const checkGitHubTreeLink = async (
   repo: string,
   pathParts: string[]
 ): Promise<LinkCheckResult> => {
+  const octokit = getMyOctokit();
   const [, branch, ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
 

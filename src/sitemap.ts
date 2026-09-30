@@ -1,20 +1,28 @@
 import * as cheerio from "cheerio";
 import { getRandomUserAgent, log } from "./utils";
 
+// How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
+export const MAX_SITEMAP_DEPTH = 3;
+
 /**
  * Retrieves all the pages from a website by fetching the sitemap and parsing it.
  *
  * @param {string} url - The URL of the website.
  * @param {boolean} [verbose=false] - Whether to log the progress of the function.
- * @return {Promise<string[]>} - A promise that resolves to an array of page URLs.
+ * @return {Promise<string[]>} - A promise that resolves to an array of unique page URLs.
  */
 export const getWebsitePages = async (url: string, verbose = false) => {
   const sitemaps = await getWebsiteSitemaps(url, verbose);
-  const pages = await(
-    await Promise.all(sitemaps.map(async (sitemap) => await getPagesFromSitemap(sitemap)))
+  // Shared between all sitemaps, so each sitemap is fetched only once
+  const visitedSitemaps = new Set<string>();
+  const pages = (
+    await Promise.all(
+      // Not verbose, that would log every page
+      sitemaps.map((sitemap) => getPagesFromSitemap(sitemap, false, 0, visitedSitemaps))
+    )
   ).flat();
 
-  return pages;
+  return [...new Set(pages)];
 };
 
 /**
@@ -25,7 +33,7 @@ export const getWebsitePages = async (url: string, verbose = false) => {
  * @return {Promise<string[]>} - A promise that resolves to an array of sitemap URLs.
  */
 export const getWebsiteSitemaps = async (url: string, verbose = false): Promise<string[]> => {
-  const sitemapExists = await (
+  const sitemapExists = (
     await fetch(`${url}/sitemap.xml`, {
       headers: { "User-Agent": getRandomUserAgent() },
     })
@@ -53,38 +61,72 @@ export const getWebsiteSitemaps = async (url: string, verbose = false): Promise<
 /**
  * Retrieves an array of sitemap URLs from a sitemap index XML file.
  *
- * @param {string} sitemapIndexUrl - The URL of the sitemap index XML file.
+ * @param {string} sitemapIndexXml - The content of the sitemap index XML file.
  * @return {string[]} An array of sitemap URLs.
  */
-function getSitemapsFromSitemapIndex(sitemapIndexUrl: string) {
-  const $ = cheerio.load(sitemapIndexUrl, { xmlMode: true });
+function getSitemapsFromSitemapIndex(sitemapIndexXml: string) {
+  const $ = cheerio.load(sitemapIndexXml, { xmlMode: true });
   const sitemaps: string[] = [];
   $("sitemap").each((_, sitemapElem) => {
-    const location = $(sitemapElem).find("loc").text();
-    sitemaps.push(location);
+    const location = $(sitemapElem).find("loc").text().trim();
+    if (location) {
+      sitemaps.push(location);
+    }
   });
   return sitemaps;
 }
 
 /**
  * Retrieves pages from a sitemap URL and logs the number of pages retrieved.
+ * If the sitemap is a sitemap index (`<sitemapindex>`), the nested sitemaps are followed recursively
+ * (up to `MAX_SITEMAP_DEPTH`, each sitemap is fetched only once).
  *
  * @param {string} sitemapUrl - The URL of the sitemap.
  * @param {boolean} [verbose=false] - Whether to log the progress.
- * @return {string[]} An array of page URLs retrieved from the sitemap.
+ * @return {string[]} An array of unique page URLs retrieved from the sitemap.
  */
-export const getPagesFromSitemap = async (sitemapUrl: string, verbose = false) => {
+export const getPagesFromSitemap = async (
+  sitemapUrl: string,
+  verbose = false,
+  depth = 0,
+  visitedSitemaps = new Set<string>()
+): Promise<string[]> => {
+  if (visitedSitemaps.has(sitemapUrl)) {
+    log(`Skipping already visited sitemap ${sitemapUrl}`, verbose);
+    return [];
+  }
+  visitedSitemaps.add(sitemapUrl);
+
   const response = await (
     await fetch(sitemapUrl, { headers: { "User-Agent": getRandomUserAgent() } })
   ).text();
   const $ = cheerio.load(response, { xmlMode: true });
+
+  if ($("sitemapindex").length > 0) {
+    if (depth >= MAX_SITEMAP_DEPTH) {
+      console.warn(`Sitemap index ${sitemapUrl} is nested too deep (max depth ${MAX_SITEMAP_DEPTH}), skipping it.`);
+      return [];
+    }
+    const nestedSitemaps = getSitemapsFromSitemapIndex(response);
+    log(`${sitemapUrl} is a sitemap index with ${nestedSitemaps.length} sitemaps`, verbose);
+    const nestedPages = (
+      await Promise.all(
+        nestedSitemaps.map((nested) => getPagesFromSitemap(nested, verbose, depth + 1, visitedSitemaps))
+      )
+    ).flat();
+    return [...new Set(nestedPages)];
+  }
+
   const pages: string[] = [];
   $("url").each((_, urlElem) => {
-    const location = $(urlElem).find("loc").text();
-    pages.push(location);
+    const location = $(urlElem).find("loc").text().trim();
+    if (location) {
+      pages.push(location);
+    }
   });
+  const uniquePages = [...new Set(pages)];
 
-  console.log(`Retrieved ${pages.length} pages from ${sitemapUrl} sitemap.`);
-  log(pages, verbose);
-  return pages;
+  console.log(`Retrieved ${uniquePages.length} pages from ${sitemapUrl} sitemap.`);
+  log(uniquePages, verbose);
+  return uniquePages;
 };

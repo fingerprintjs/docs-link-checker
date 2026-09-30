@@ -8,28 +8,9 @@ import { checkGitHubReleaseLink } from "./checks/gh_release";
 import { checkIfRepositoryExists } from "./checks/gh_repo";
 import { checkGitHubTreeLink } from "./checks/gh_tree";
 import { checkGitHubCommitLink } from "./checks/gh_commit";
+import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./gh_url";
 
-/**
- * Check if a URL is a GitHub URL
- * @param url - The URL to check
- * @returns - True if the URL is a GitHub URL, false otherwise
- */
-export const isGithubUrl = (url: string) => {
-  const githubUrl = new URL(url);
-  return githubUrl.hostname === "github.com";
-};
-
-/**
- * Check if a URL is a GitHub code line link like #L5 or #L5-L10
- * @param href - The URL to check
- * @returns - True if the URL is a GitHub code line link, false otherwise
- */
-export const isGithubCodeLineLink = (href: string) => {
-  const url = new URL(href);
-  return (
-    url.host === "github.com" && url.pathname.includes("/blob/") && /^#L\d+(-L\d+)?$/.test(url.hash)
-  );
-};
+export { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink };
 
 /**
  * Use GitHub API (Octokit) to check if link is valid
@@ -97,7 +78,7 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   }
 
   // If wiki, check if it exists
-  if (pathParts[0] === "wiki") {
+  if (isGithubWikiLink(url)) {
     return checkLinkWithFetch(url);
   }
 

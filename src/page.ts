@@ -1,11 +1,6 @@
 import * as cheerio from "cheerio";
 import { Link } from "./types";
-import {
-  getRandomUserAgent,
-  parallelProcess,
-  PLAYWRIGHT_CONCURRENCY_LIMIT,
-  progressBar,
-} from "./utils";
+import { getRandomUserAgent, parallelProcess, PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 import { chromium } from "playwright";
 
 export function filterOutIrrelevantLinks(links: Link[]): Link[] {
@@ -99,7 +94,6 @@ export const getLinksFromPages = async ({
 }) => {
   console.log(`Retrieving links from ${pages.length} pages...`);
   // Parse links from pages
-  progressBar.start(pages.length, 0);
   const { results, errors } = await parallelProcess({
     items: pages,
     processFn: async (page: string) => {

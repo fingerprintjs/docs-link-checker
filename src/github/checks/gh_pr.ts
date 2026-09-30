@@ -3,8 +3,6 @@ import { getMyOctokit } from "../github_client";
 import { tryCatch } from "../../utils/tryCatch";
 import { RequestError } from "@octokit/types";
 
-const octokit = getMyOctokit();
-
 /**
  * Check if a GitHub pull request exists
  * @param fullUrl - The full URL of the pull request
@@ -18,6 +16,7 @@ export const checkGitHubPullRequestLink = async (
   repo: string,
   pathParts: string[]
 ): Promise<LinkCheckResult> => {
+  const octokit = getMyOctokit();
   const prNumber = parseInt(pathParts[1], 10);
   if (isNaN(prNumber)) {
     return {

@@ -6,13 +6,16 @@ A GitHub workflow that checks for broken links in our documentation, public GitH
 * You can start the workflow manually from inside [**Actions**](https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml).
 * Failed runs send a notification to the `#integrations-notifications` Slack channel. Once we fix all links and stabilize the workflow, we can send the notification to the `#documentation` channel.
 * The latest results are deployed to [GitHub pages](https://fingerprintjs.github.io/docs-link-checker/) of this repository (only from `main` and manual runs, never from pull requests).
-* On pull requests, the link checks still run end to end, but broken links do not fail the check (`FAIL_ON_BROKEN_LINKS=false`). They only fail if the checker itself crashes. On `main` and manual runs, broken links fail the run.
+* On pull requests, the link checks still run end to end (on a 10% sample of pages, see `LINK_CHECK_SAMPLE_RATE` below), but broken links do not fail the check (`FAIL_ON_BROKEN_LINKS=false`). They only fail if the checker itself crashes. On `main` and manual runs, broken links fail the run.
 
 ## Development
 
 * Node.js version is defined in `.nvmrc`, pnpm version in the `packageManager` field of `package.json` (use `corepack enable` or install the matching pnpm).
-* `pnpm install`, `pnpm run tsc`, `pnpm test` (single run) or `pnpm run test:watch`. Tests and link checks need a `GH_TOKEN` environment variable.
-* Link checks (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them.
+* `pnpm install`, `pnpm run tsc`, `pnpm test` (single run) or `pnpm run test:watch`.
+  * `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch`, the GitHub API and Playwright, and need no network or `GH_TOKEN`.
+  * `pnpm run test:integration` runs integration tests (`*.integration.test.ts`) against real websites and the GitHub API. They need network access, Playwright's Chromium and a `GH_TOKEN` environment variable.
+* Link checks (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) need a `GH_TOKEN` environment variable. They exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them.
+* Set `LINK_CHECK_SAMPLE_RATE` (a number between `0` and `1`, default `1`) to check only a part of the pages (website sitemap pages, GitHub README files). The sample is deterministic (pages are sorted, then every Nth page is picked) and has at least one page. On pull requests, the workflow uses `LINK_CHECK_SAMPLE_RATE=0.1` to keep CI fast. On `main` and manual runs, it checks everything.
 
 ## Limitations
 
