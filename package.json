@@ -4,13 +4,18 @@
   "description": "Checks links, including hash anchors, in Fingerprint docs, public GitHub READMEs and fingerprint.com",
   "private": true,
   "type": "module",
+  "bin": {
+    "docs-link-checker": "./bin/docs-link-checker.js"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.js",
-    "checkLinks:docs": "tsx ./checks/docs.ts",
-    "checkLinks:github": "tsx ./checks/github.ts",
-    "checkLinks:web": "tsx ./checks/web.ts",
+    "cli": "tsx src/cli.ts",
+    "checkLinks:docs": "tsx src/cli.ts site https://dev.fingerprint.com",
+    "checkLinks:github": "tsx src/cli.ts github-org fingerprintjs",
+    "checkLinks:web": "tsx src/cli.ts site https://fingerprint.com --include https://dev.fingerprint.com --include https://fingerprint.com --include https://github.com",
+    "checkLinks:files": "tsx src/cli.ts files README.md",
     "tsc": "tsc --noEmit",
     "lint": "biome lint",
     "format": "biome format --write",
@@ -38,7 +43,8 @@
     "marked": "^18.0.14",
     "playwright": "^1.63.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
@@ -47,7 +53,6 @@
     "@types/node": "^24.19.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },

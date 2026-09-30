@@ -114,7 +114,7 @@ type SampleArgs<T> = {
   items: T[];
   /** Stable key used to sort the items, so the sample is deterministic */
   key: (item: T) => string;
-  /** Defaults to `LINK_CHECK_SAMPLE_RATE` */
+  /** Defaults to `LINK_CHECK_SAMPLE_RATE` (also when `undefined` is passed explicitly) */
   rate?: number;
   label?: string;
 };
@@ -141,9 +141,7 @@ export const sampleItems = <T>({
   for (let i = 0; i < count; i++) {
     sample.push(sorted[Math.floor((i * sorted.length) / count)]);
   }
-  console.log(
-    `Sampling ${sample.length} of ${items.length} ${label} (LINK_CHECK_SAMPLE_RATE=${rate}).`,
-  );
+  console.log(`Sampling ${sample.length} of ${items.length} ${label} (sample rate ${rate}).`);
   return sample;
 };
 
