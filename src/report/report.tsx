@@ -1,7 +1,6 @@
 import { PromisePoolError } from "@supercharge/promise-pool";
 import { Link, LinkWithResult } from "../types";
-import ReactDOMServer from "react-dom/server";
-import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { writeFileSync } from "fs";
 
 type LinkCheckReport = ReturnType<typeof getJSONReport>;
@@ -174,7 +173,7 @@ document.addEventListener("click", function (event) {
  * Renders the report as a full HTML page. All dynamic values are escaped by React.
  */
 export function renderReportToHTML(jsonReport: LinkCheckReport): string {
-  const htmlString = ReactDOMServer.renderToStaticMarkup(<JSONReportRenderer report={jsonReport} />);
+  const htmlString = renderToStaticMarkup(<JSONReportRenderer report={jsonReport} />);
   return `
     <!DOCTYPE html>
     <html>

@@ -1,46 +1,50 @@
 {
   "name": "docs-link-checker",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Checks links, including hash anchors, in Fingerprint docs, public GitHub READMEs and fingerprint.com",
+  "private": true,
+  "type": "module",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.js",
-    "checkLinks:docs": "npx tsx ./checks/docs.ts",
-    "checkLinks:github": "npx tsx ./checks/github.ts",
-    "checkLinks:web": "npx tsx ./checks/web.ts",
+    "checkLinks:docs": "tsx ./checks/docs.ts",
+    "checkLinks:github": "tsx ./checks/github.ts",
+    "checkLinks:web": "tsx ./checks/web.ts",
     "tsc": "tsc --noEmit",
-    "gh-limit": "npx tsx ./checks/gh_rate_limit.ts"
+    "gh-limit": "tsx ./checks/gh_rate_limit.ts"
   },
   "keywords": [],
   "author": "Juraj Uhlar, Fingerprint",
   "license": "ISC",
   "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=24"
+  },
   "dependencies": {
-    "@octokit/core": "^6.1.5",
-    "@octokit/plugin-retry": "^7.2.1",
-    "@octokit/plugin-throttling": "^10.0.0",
-    "@octokit/rest": "^21.0.2",
-    "@supercharge/promise-pool": "^3.2.0",
-    "cheerio": "1.0.0-rc.12",
+    "@octokit/core": "^7.0.8",
+    "@octokit/plugin-retry": "^8.1.1",
+    "@octokit/plugin-throttling": "^11.0.5",
+    "@octokit/rest": "^22.0.1",
+    "@supercharge/promise-pool": "^3.3.0",
+    "cheerio": "^1.2.0",
     "cli-progress": "^3.12.0",
-    "dotenv": "^16.4.5",
+    "dotenv": "^18.0.4",
     "github-slugger": "^2.0.0",
-    "marked": "^14.1.3",
-    "playwright": "^1.45.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "typescript": "^5.5.3",
-    "vitest": "^2.1.4"
+    "marked": "^18.0.14",
+    "playwright": "^1.63.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "@octokit/types": "^14.0.0",
-    "@types/cli-progress": "^3.11.5",
-    "@types/node": "^20.12.12",
-    "@types/react": "^19.1.4",
-    "@types/react-dom": "^19.1.5",
-    "tsx": "^4.9.0"
+    "@octokit/types": "^18.0.0",
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^24.19.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

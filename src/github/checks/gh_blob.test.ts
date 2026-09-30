@@ -10,7 +10,7 @@ vi.mock("../github_client", () => ({
 
 import { checkGitHubBlobLink, getMarkdownAnchors } from "./gh_blob";
 
-const readme = readFileSync(join(__dirname, "..", "..", "__fixtures__", "readme.md"), "utf8");
+const readme = readFileSync(join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"), "utf8");
 
 const checkHash = (hash: string) => {
   const url = new URL(`https://github.com/owner/repo/blob/main/README.md${hash}`);

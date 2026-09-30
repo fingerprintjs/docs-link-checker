@@ -4,7 +4,7 @@ import { join } from "path";
 import * as cheerio from "cheerio";
 import { cssString, decodeHash, getHashSelectors, isHashPresentInHtml } from "./hash";
 
-const html = readFileSync(join(__dirname, "__fixtures__", "hashes.html"), "utf8");
+const html = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 const PAGE = "https://example.com/docs";
 
 // Hashes as they appear in URLs (`new URL(...).hash`), pointing to elements in the fixture

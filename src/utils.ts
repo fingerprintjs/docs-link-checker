@@ -1,4 +1,4 @@
-import PromisePool, { PromisePoolError, ProcessHandler } from "@supercharge/promise-pool";
+import { PromisePool, PromisePoolError, ProcessHandler } from "@supercharge/promise-pool";
 import * as cliProgress from "cli-progress";
 import { HostLimiter } from "./limiter";
 

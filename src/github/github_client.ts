@@ -4,7 +4,8 @@ import { Octokit } from "@octokit/rest";
 import dotenv from "dotenv";
 import { incrementMetric } from "../run_context";
 
-dotenv.config();
+// dotenv 17+ logs a message on every load, keep the output clean
+dotenv.config({ quiet: true });
 
 const MyOctokit = Octokit.plugin(retry, throttling);
 

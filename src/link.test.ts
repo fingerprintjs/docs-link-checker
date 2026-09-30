@@ -92,7 +92,7 @@ import {
 import { withRun } from "./run";
 import { getRunContext } from "./run_context";
 
-const hashesHtml = readFileSync(join(__dirname, "__fixtures__", "hashes.html"), "utf8");
+const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
 type FetchHandler = (url: string, init: RequestInit) => Response | Promise<Response>;
 
