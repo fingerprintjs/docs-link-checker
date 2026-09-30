@@ -569,9 +569,11 @@ export async function checkUrlsOnPageWithPlaywright(
   const [firstUrl] = urls;
   const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
 
-  try {
-    return await withPage(
-      async (page) => {
+  // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
+  // Errors while navigating and checking the page are reported as broken links.
+  return withPage(
+    async (page) => {
+      try {
         incrementMetric("playwrightNavigations");
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
         const response = await page.goto(firstUrl, { waitUntil: "domcontentloaded" });
@@ -599,16 +601,20 @@ export async function checkUrlsOnPageWithPlaywright(
           urls.map(async (url) => [url, await getPlaywrightHashResult(page, url, status, verbose)] as const)
         );
         return new Map(results);
-      },
-      { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined, headless }
-    );
-  } catch (error) {
-    return sameForAll({
-      ok: false,
-      error: "broken link",
-      errorDetail: String(error),
-    });
-  }
+      } catch (error) {
+        // The browser crashed: let `withPage` relaunch it and retry
+        if (page.isClosed()) {
+          throw error;
+        }
+        return sameForAll({
+          ok: false,
+          error: "broken link",
+          errorDetail: String(error),
+        });
+      }
+    },
+    { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined, headless }
+  );
 }
 
 /**

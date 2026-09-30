@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
+import { closeBrowser } from "./browser";
+
+// Checks outside of a run share one browser, close it when done
+afterAll(closeBrowser);
 
 const linkCheckMethods = [
   {

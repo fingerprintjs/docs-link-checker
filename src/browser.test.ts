@@ -14,11 +14,17 @@ const state = vi.hoisted(() => ({
   crashNextContext: false,
   gotoDelayMs: 10,
   routes: 0,
+  // Make the next navigation fail: "crash" closes the browser, "error" is a navigation error (e.g. DNS)
+  nextGotoFailure: null as "crash" | "error" | null,
+  failLaunch: false,
 }));
 
 vi.mock("playwright", () => {
   const launch = async () => {
     state.launches++;
+    if (state.failLaunch) {
+      throw new Error("browserType.launch: Executable doesn't exist");
+    }
     let connected = true;
     const disconnectedHandlers: Array<() => void> = [];
     const browser = {
@@ -47,8 +53,20 @@ vi.mock("playwright", () => {
           newPage: async () => {
             state.openPages++;
             state.maxOpenPages = Math.max(state.maxOpenPages, state.openPages);
+            let closed = false;
             return {
+              isClosed: () => closed,
               goto: async (url: string) => {
+                const failure = state.nextGotoFailure;
+                state.nextGotoFailure = null;
+                if (failure === "crash") {
+                  connected = false;
+                  closed = true;
+                  throw new Error("page.goto: Target crashed");
+                }
+                if (failure === "error") {
+                  throw new Error("page.goto: net::ERR_NAME_NOT_RESOLVED");
+                }
                 state.visited.push(url);
                 await new Promise((resolve) => setTimeout(resolve, state.gotoDelayMs));
                 return { status: () => 200, statusText: () => "", text: async () => "", ok: () => true };
@@ -82,6 +100,8 @@ beforeEach(async () => {
     crashNextContext: false,
     gotoDelayMs: 10,
     routes: 0,
+    nextGotoFailure: null,
+    failLaunch: false,
   });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -163,5 +183,42 @@ describe("shared browser", () => {
     expect(state.launches).toBe(1);
     // The context is closed even when the check throws
     expect(state.openPages).toBe(0);
+  });
+
+  it("relaunches the browser when it crashes during navigation and retries the check", async () => {
+    await getBrowser();
+    state.nextGotoFailure = "crash";
+
+    const result = await checkLinkWithPlaywright("https://example.com/crash");
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(state.launches).toBe(2);
+  });
+
+  it("reports navigation errors as broken links (no relaunch)", async () => {
+    state.nextGotoFailure = "error";
+
+    const result = await checkLinkWithPlaywright("https://does-not-exist.example.com");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link" });
+    expect(result.ok === false && result.errorDetail).toContain("ERR_NAME_NOT_RESOLVED");
+    expect(state.launches).toBe(1);
+  });
+
+  it("reports browser launch failures as unexpected errors (not broken links)", async () => {
+    state.failLaunch = true;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 403 })));
+
+    const { results, errors } = await checkLinks({
+      links: [link("https://blocked.example.com/a"), link("https://blocked.example.com/a#x")],
+    });
+
+    expect(results).toHaveLength(0);
+    // One error per link, like before
+    expect(errors.map((error) => error.item.href)).toEqual([
+      "https://blocked.example.com/a",
+      "https://blocked.example.com/a#x",
+    ]);
+    expect(errors[0].message).toContain("Executable doesn't exist");
   });
 });

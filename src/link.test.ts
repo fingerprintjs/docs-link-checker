@@ -36,6 +36,7 @@ vi.mock("playwright", () => ({
         route: async () => {},
         close: async () => {},
         newPage: async () => ({
+          isClosed: () => false,
           goto: async (url: string) => {
             playwrightState.visited.push(url);
             return {
