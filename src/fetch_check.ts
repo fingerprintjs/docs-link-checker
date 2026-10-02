@@ -2,11 +2,8 @@ import { DestinationNotAllowedError } from "./destination";
 import { type AnchorIndex, buildAnchorIndex, isHashInAnchorIndex } from "./hash";
 import {
   fetchWithHostLimit,
-  formatServerErrorRetry,
   getRandomUserAgent,
-  getServerErrorRetryDelay,
   type LimitedResponse,
-  MAX_SERVER_ERROR_RETRIES,
   OKAY_STATUS_CODES,
   TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./http";
@@ -18,7 +15,7 @@ import {
   shouldSpoofUserAgent,
   stripHash,
 } from "./link_common";
-import { getHostLimiter, incrementMetric } from "./run";
+import { incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 
 /**
@@ -87,28 +84,6 @@ const getResponseFailure = (
 };
 
 /**
- * A server error on HEAD follows the server error retry policy before the GET fallback: wait for `Retry-After` (or the
- * backoff) with the whole host paused, or give up when it asks for too long. The GET is its first retry.
- * @returns the server error retries left for the GET, or the final failure
- */
-const handleHeadServerError = (
-  response: LimitedResponse<string>,
-  url: string,
-): { getRetries: number | undefined } | FetchedPage => {
-  if (!TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-    return { getRetries: undefined };
-  }
-  const delayMs = getServerErrorRetryDelay(0, response.headers.get("Retry-After"));
-  if (delayMs === undefined) {
-    return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
-  }
-  console.log(formatServerErrorRetry(url, response.status, delayMs));
-  incrementMetric("serverErrorRetries");
-  getHostLimiter().pause(url, delayMs);
-  return { getRetries: MAX_SERVER_ERROR_RETRIES - 1 };
-};
-
-/**
  * Fetches a page with `GET` (if its HTML is needed) or `HEAD` (falls back to `GET` if HEAD fails, see
  * `shouldRetryHeadWithGet`).
  * Limited per host, honours `Retry-After` on 429 (pauses the whole host), retries 502, 503 and 504. Never throws.
@@ -124,12 +99,12 @@ const fetchPage = async (
 
   // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
   // unread bodies are cancelled (see `fetchWithHostLimit`).
-  // A HEAD request is not retried after a server error: the GET fallback is (see `shouldRetryHeadWithGet`), and the
-  // HEAD counts as the first attempt, so a failing server gets at most `1 + MAX_SERVER_ERROR_RETRIES` requests
-  const request = (method: "GET" | "HEAD", serverErrorRetries?: number) =>
+  // HEAD is sent with no server-error retries, so a failing server is not asked for it twice before the GET
+  // fallback (see `shouldRetryHeadWithGet`), which gets the normal retry policy.
+  const request = (method: "GET" | "HEAD") =>
     fetchWithHostLimit(
       url,
-      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : serverErrorRetries },
+      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : undefined },
       async (response) =>
         // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
         // An error page body is kept for the error detail (HEAD responses have none).
@@ -142,11 +117,7 @@ const fetchPage = async (
     let response = await request(needBody ? "GET" : "HEAD");
     // Some servers don't support (or block) HEAD requests, or answer them differently, retry once with GET
     if (!needBody && shouldRetryHeadWithGet(response.status)) {
-      const retry = handleHeadServerError(response, url);
-      if ("ok" in retry) {
-        return retry;
-      }
-      response = await request("GET", retry.getRetries);
+      response = await request("GET");
     }
     return (
       getResponseFailure(response, url) ?? {
@@ -194,11 +165,6 @@ export class PageFetchCache {
       this.pages.set(key, page);
     }
     return page;
-  }
-
-  /** Number of distinct page fetches */
-  get size() {
-    return this.pages.size;
   }
 }
 
