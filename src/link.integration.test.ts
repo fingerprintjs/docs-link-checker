@@ -1,18 +1,13 @@
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  closeBrowser,
-  HASH_FALLBACK_WAIT_TIMEOUT,
-  HASH_WAIT_TIMEOUT,
-  PAGE_OPERATION_TIMEOUT,
-} from "./browser";
+import { HASH_FALLBACK_WAIT_TIMEOUT, HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT } from "./browser";
 import { checkLinkWithFetch } from "./fetch_check";
 import { MAX_SERVER_ERROR_RETRIES, MAX_SERVER_ERROR_RETRY_DELAY } from "./http";
 import { checkLinks } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { getRunContext, withRun } from "./run";
+import { closeRunBrowser, getRunContext, withRun } from "./run";
 
 // Checks outside of a run share one browser, close it when done
-afterAll(closeBrowser);
+afterAll(closeRunBrowser);
 
 // Retries of a navigation answered with 502/503/504 (GitHub under load): the waits, plus the navigations
 const SERVER_ERROR_RETRY_TIME =

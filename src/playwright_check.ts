@@ -285,7 +285,7 @@ async function navigateAndCheck(
 
 /**
  * Checks a link with a real browser (the shared browser, see `withPage`).
- * Outside of a run (`checkLinks`, `checkWebsite`...), call `closeBrowser()` when done.
+ * Outside of a run (`checkLinks`, `checkWebsite`...), call `closeRunBrowser()` when done.
  */
 export async function checkLinkWithPlaywright(url: string): Promise<LinkCheckResult> {
   const results = await checkUrlsOnPageWithPlaywright([url]);

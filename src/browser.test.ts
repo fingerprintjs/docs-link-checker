@@ -89,15 +89,15 @@ vi.mock("playwright", () => {
   return { chromium: { launch: vi.fn(launch) } };
 });
 
-import { closeBrowser, getBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
+import { getBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { withRun } from "./run";
+import { closeRunBrowser,withRun } from "./run";
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
 beforeEach(async () => {
-  await closeBrowser();
+  await closeRunBrowser();
   Object.assign(state, {
     launches: 0,
     closes: 0,
@@ -116,7 +116,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await closeBrowser();
+  await closeRunBrowser();
   vi.restoreAllMocks();
 });
 
@@ -153,7 +153,7 @@ describe("shared browser", () => {
 
     expect(state.launches).toBe(1);
     expect(state.closes).toBe(1);
-    await closeBrowser(); // safe to call again
+    await closeRunBrowser(); // safe to call again
     expect(state.closes).toBe(1);
   });
 
@@ -278,7 +278,7 @@ describe("browser belongs to the run", () => {
     expect(state.launches).toBe(2);
     expect(state.closes).toBe(1);
 
-    await closeBrowser();
+    await closeRunBrowser();
     expect(state.closes).toBe(2);
   });
 });

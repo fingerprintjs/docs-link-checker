@@ -1,7 +1,7 @@
 import { type Browser, chromium, type Page, type Route } from "playwright";
 import { isBlockedUrlLiteral } from "./destination";
 import { Semaphore } from "./limiter";
-import { closeRunBrowser, getBrowserSlot, incrementMetric, isPrivateHostsAllowed } from "./run";
+import { getBrowserSlot, incrementMetric, isPrivateHostsAllowed } from "./run";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
@@ -200,13 +200,6 @@ const forgetBrowser = (slot: ReturnType<typeof getBrowserSlot>, browser: Browser
     slot.promise = undefined;
   }
 };
-
-/**
- * Closes the shared browser of the current run (or the default context). Safe to call multiple times.
- * Call it yourself after standalone checks outside of a run (tests), runs close their own browser at the end
- * (see `withRun`).
- */
-export const closeBrowser = closeRunBrowser;
 
 type WithPageOptions = {
   userAgent?: string;
