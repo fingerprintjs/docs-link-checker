@@ -21,7 +21,7 @@ const { octokit } = vi.hoisted(() => {
 vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 
 import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./gh_check_link";
-import { decodePathSegment, getGithubPathSegments } from "./gh_url";
+import { decodePathSegment, getGithubPathSegments, isGithubReservedRoute } from "./gh_url";
 
 beforeEach(() => {
   for (const fn of [
@@ -199,6 +199,11 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
 
   it("reports a missing account as broken link", async () => {
     octokit.users.getByUsername.mockRejectedValue(octokit.notFound());
+    // The page itself is checked too (it could be one of GitHub's own pages), it is missing as well
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Not found", { status: 404 })),
+    );
 
     const result = await checkLinkWithGithubApi("https://github.com/no-such-org-xyz");
 
@@ -230,5 +235,96 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
 
   it("accepts github.com itself", async () => {
     expect(await checkLinkWithGithubApi("https://github.com/")).toEqual({ ok: true, status: 200 });
+  });
+});
+
+describe("isGithubReservedRoute()", () => {
+  it.each([
+    "https://github.com/features",
+    "https://github.com/features/actions",
+    "https://github.com/marketplace/actions/checkout",
+    "https://github.com/topics/javascript",
+    "https://github.com/Explore",
+    "https://github.com/sponsors/someone",
+    "https://github.com/orgs/fingerprintjs/people",
+    "https://github.com/settings/tokens",
+  ])("detects %s", (url) => {
+    expect(isGithubReservedRoute(url)).toBe(true);
+  });
+
+  it.each([
+    "https://github.com/",
+    "https://github.com/fingerprintjs",
+    "https://github.com/fingerprintjs/features",
+    "https://github.com/featuresx",
+    "https://gist.github.com/features",
+  ])("does not detect %s", (url) => {
+    expect(isGithubReservedRoute(url)).toBe(false);
+  });
+});
+
+describe("checkLinkWithGithubApi() with GitHub's own pages", () => {
+  const fetchMock =
+    vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(
+      async () => new Response("<html><body></body></html>", { status: 200 }),
+    );
+    // Restored after every test (`unstubGlobals`)
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  it.each([
+    "https://github.com/features",
+    "https://github.com/marketplace",
+    "https://github.com/topics/javascript",
+    "https://github.com/pricing/",
+  ])("checks %s as a page, not as an account or a repository", async (url) => {
+    const result = await checkLinkWithGithubApi(url);
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(url);
+    expect(octokit.users.getByUsername).not.toHaveBeenCalled();
+    expect(octokit.repos.get).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing GitHub page as broken link", async () => {
+    fetchMock.mockImplementation(async () => new Response("Not found", { status: 404 }));
+
+    const result = await checkLinkWithGithubApi("https://github.com/topics/no-such-topic-xyz");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+
+  it("accepts an unknown account URL whose page exists (a GitHub page missing from the reserved routes)", async () => {
+    octokit.users.getByUsername.mockRejectedValue(octokit.notFound());
+
+    const result = await checkLinkWithGithubApi("https://github.com/premium-support");
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(octokit.users.getByUsername).toHaveBeenCalledWith({ username: "premium-support" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the API 404 when the page of an unknown account does not work either", async () => {
+    octokit.users.getByUsername.mockRejectedValue(octokit.notFound());
+    fetchMock.mockImplementation(async () => new Response("Too many requests", { status: 429 }));
+
+    const result = await checkLinkWithGithubApi("https://github.com/no-such-org-xyz");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "User or organization no-such-org-xyz not found",
+    });
+  });
+
+  it("does not fetch the page of an existing account", async () => {
+    await checkLinkWithGithubApi("https://github.com/fingerprintjs");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

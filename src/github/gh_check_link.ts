@@ -11,6 +11,7 @@ import { checkGitHubTreeLink } from "./checks/gh_tree";
 import {
   getGithubPathSegments,
   isGithubCodeLineLink,
+  isGithubReservedRoute,
   isGithubUrl,
   isGithubWikiLink,
 } from "./gh_url";
@@ -44,9 +45,22 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
     return { ok: true, status: 200 };
   }
 
+  // GitHub's own pages (`/features`, `/topics/x`...), not an account: check the page itself
+  if (isGithubReservedRoute(url)) {
+    return checkLinkWithFetch(url);
+  }
+
   // `https://github.com/owner` (with or without a trailing slash): a user or an organization, not a repository
   if (!repo) {
-    return checkIfOwnerExists(owner);
+    const result = await checkIfOwnerExists(owner);
+    // Not an account: maybe one of GitHub's own pages missing from the reserved routes, check the page itself
+    if (!result.ok && result.status === 404) {
+      const page = await checkLinkWithFetch(url);
+      if (page.ok) {
+        return page;
+      }
+    }
+    return result;
   }
 
   // If pathParts is empty, it's a repository link, just check if it exists

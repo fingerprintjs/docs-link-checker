@@ -8,7 +8,13 @@ import {
 } from "./browser";
 import { assertDestinationAllowed, DestinationNotAllowedError } from "./destination";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
-import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
+import {
+  isGithubCodeLineLink,
+  isGithubReservedRoute,
+  isGithubUrl,
+  isGithubWikiLink,
+} from "./github/gh_url";
+
 import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
 import { fetchWithHostLimit } from "./http";
 import { withTimeout } from "./limiter";
@@ -56,7 +62,8 @@ export const getInitialCheckMethod = (href: string): CheckMethod => {
     if (isGithubCodeLineLink(href)) {
       return "playwright";
     }
-    if (isGithubWikiLink(href)) {
+    // Wikis and GitHub's own pages (`/features`, `/topics/x`...) are not available through the API
+    if (isGithubWikiLink(href) || isGithubReservedRoute(href)) {
       return "fetch";
     }
     return "github-api";

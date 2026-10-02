@@ -303,6 +303,18 @@ describe("checkLinks() Playwright escalation", () => {
     expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
   });
 
+  it("checks GitHub's own pages with fetch (re-checked with Playwright if blocked), not as accounts", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
+    const hrefs = ["https://github.com/features", "https://github.com/topics/javascript"];
+
+    const { results } = await checkLinks({ links: hrefs.map((href) => link(href)) });
+
+    expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(playwrightState.visited.toSorted()).toEqual(hrefs);
+    expect(results.every((r) => r.result.ok)).toBe(true);
+  });
+
   it("shouldRecheckWithPlaywright() never re-checks OK results", () => {
     expect(shouldRecheckWithPlaywright({ ok: true, status: 200 }, "fetch")).toBe(false);
     expect(shouldRecheckWithPlaywright({ ok: true, status: 200 }, "github-api")).toBe(false);
