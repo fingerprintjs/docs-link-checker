@@ -59,7 +59,7 @@ export const getMyOctokit = (): MyOctokitInstance => {
  * Counts every request sent by the client (all API operations, pagination pages, the rate limit check,
  * GraphQL, retries by the retry/throttling plugins) in the run metrics, in one place.
  */
-export const countRequests = (octokit: Pick<MyOctokitInstance, "hook">) => {
+const countRequests = (octokit: Pick<MyOctokitInstance, "hook">) => {
   octokit.hook.before("request", () => {
     incrementMetric("githubApiRequests");
   });

@@ -333,7 +333,7 @@ describe("checkLocalFiles()", () => {
   it("checks local links on disk and external links with checkLinks", async () => {
     const report = await checkLocalFiles({ patterns: ["**/*.md"], cwd: FIXTURE, outputDir: false });
     expect(vi.mocked(checkLinks)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(checkLinks).mock.calls[0][0].links.map((link) => link.href)).toEqual([
+    expect(vi.mocked(checkLinks).mock.calls[0]![0].links.map((link) => link.href)).toEqual([
       "https://example.com/page",
     ]);
     expect(report.siteName).toBe("local files");

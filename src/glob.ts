@@ -39,42 +39,50 @@ export const parseGlob = (glob: string): GlobToken[] => {
   return tokens;
 };
 
+/** Positions after `literal` that start at a reachable position */
+const advanceLiteral = (reachable: Uint8Array, text: string, literal: string): Uint8Array => {
+  const next = new Uint8Array(reachable.length);
+  for (let i = 0; i + literal.length <= text.length; i++) {
+    if (reachable[i] && text.startsWith(literal, i)) {
+      next[i + literal.length] = 1;
+    }
+  }
+  return next;
+};
+
+/** A wildcard extends every reachable position to the right, `*` (not `**`) stops at `/` */
+const advanceWildcard = (reachable: Uint8Array, text: string, stopAtSlash: boolean): Uint8Array => {
+  const next = new Uint8Array(reachable.length);
+  let active = false;
+  for (let i = 0; i <= text.length; i++) {
+    active ||= reachable[i] === 1;
+    if (active) {
+      next[i] = 1;
+    }
+    if (stopAtSlash && text[i] === "/") {
+      active = false;
+    }
+  }
+  return next;
+};
+
 /**
  * Checks if `text` matches the parsed glob. Tracks the set of text positions the pattern prefix can end at
  * (no backtracking).
  */
-export const matchGlobTokens = (tokens: GlobToken[], text: string): boolean => {
-  const length = text.length;
-  let reachable = new Uint8Array(length + 1);
+const matchGlobTokens = (tokens: GlobToken[], text: string): boolean => {
+  let reachable: Uint8Array = new Uint8Array(text.length + 1);
   reachable[0] = 1;
   for (const token of tokens) {
-    const next = new Uint8Array(length + 1);
-    let any = false;
-    if (token.type === "literal") {
-      for (let i = 0; i + token.value.length <= length; i++) {
-        if (reachable[i] && text.startsWith(token.value, i)) {
-          next[i + token.value.length] = 1;
-          any = true;
-        }
-      }
-    } else {
-      // A wildcard extends every reachable position to the right, `*` stops at `/`
-      let active = false;
-      for (let i = 0; i <= length; i++) {
-        if (reachable[i]) active = true;
-        if (active) {
-          next[i] = 1;
-          any = true;
-        }
-        if (token.type === "star" && text[i] === "/") active = false;
-      }
-    }
-    if (!any) {
+    reachable =
+      token.type === "literal"
+        ? advanceLiteral(reachable, text, token.value)
+        : advanceWildcard(reachable, text, token.type === "star");
+    if (!reachable.includes(1)) {
       return false;
     }
-    reachable = next;
   }
-  return reachable[length] === 1;
+  return reachable[text.length] === 1;
 };
 
 /** Returns a matcher for the glob (parsed once) */

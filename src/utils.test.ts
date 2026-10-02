@@ -67,7 +67,7 @@ describe("parallelProcess() progress bar", () => {
     });
 
     expect(bars).toHaveLength(1);
-    expect(bars[0].stop).toHaveBeenCalledTimes(1);
+    expect(bars[0]!.stop).toHaveBeenCalledTimes(1);
   });
 
   it("does not create a bar in CI", async () => {
@@ -151,7 +151,7 @@ describe("sampleItems()", () => {
     { length: 100 },
     (_, i) => `https://example.com/page-${String(i).padStart(3, "0")}`,
   );
-  const shuffled = [...items].reverse();
+  const shuffled = items.toReversed();
 
   it("returns all items with rate 1", () => {
     expect(sampleItems({ items: shuffled, key: (x) => x, rate: 1 })).toBe(shuffled);

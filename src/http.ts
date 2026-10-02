@@ -8,7 +8,7 @@ export const MAX_RATE_LIMIT_RETRIES = 2;
 // Redirects followed per request (like `fetch`, which gives up after 20; 10 is plenty for real links)
 export const MAX_REDIRECTS = 10;
 
-const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 export type LimitedResponse<T> = {
   status: number;
@@ -29,11 +29,11 @@ export type LimitedRequestOptions = {
 };
 
 /** Log message for a rate-limited request that is retried (the header can be seconds or an HTTP date) */
-export const formatRateLimitRetry = (url: string, delayMs: number, retryAfter: string | null) =>
+const formatRateLimitRetry = (url: string, delayMs: number, retryAfter: string | null) =>
   `Rate limited (${url}), retrying after ${Math.ceil(delayMs / 1000)}s (Retry-After: ${retryAfter})...`;
 
 /** Cancels the response body if it was not consumed (frees the connection) */
-export const discardBody = async (response: Response) => {
+const discardBody = async (response: Response) => {
   if (!response.bodyUsed) {
     await response.body?.cancel().catch(() => {});
   }
@@ -99,7 +99,7 @@ export const fetchWithHostLimit = async <T>(
       try {
         const location = response.headers.get("Location");
         // An empty Location is a valid (relative) target, it resolves to the current URL
-        if (REDIRECT_STATUS_CODES.includes(response.status) && location !== null) {
+        if (REDIRECT_STATUS_CODES.has(response.status) && location !== null) {
           return { type: "redirect", location, status: response.status };
         }
         if (response.status === 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {

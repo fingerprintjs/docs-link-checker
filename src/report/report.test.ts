@@ -69,8 +69,8 @@ describe("renderReportToHTML()", () => {
 describe("renderReportToHTML() with ignored links", () => {
   const report = getJSONReport({
     links: [
-      { ...links[0], href: "https://broken.com/" },
-      { ...links[0], href: "https://ignored.com/", page: "docs/a.md", line: 7 },
+      { ...links[0]!, href: "https://broken.com/" },
+      { ...links[0]!, href: "https://ignored.com/", page: "docs/a.md", line: 7 },
     ],
     errors: [],
     siteName: "site",
@@ -114,10 +114,10 @@ describe("renderReportToHTML() for local files", () => {
       local("docs/guide.md", "https://example.com/x", 11),
     ],
   });
-  const hrefs = (html: string) =>
+  const hrefs = (markup: string) =>
     cheerio
-      .load(html)("td a[href]")
-      .map((_, a) => cheerio.load(html)(a).attr("href"))
+      .load(markup)("td a[href]")
+      .map((_, a) => cheerio.load(markup)(a).attr("href"))
       .get();
 
   it("renders local pages and links as plain code text without a source URL", () => {

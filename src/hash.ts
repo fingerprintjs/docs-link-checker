@@ -24,7 +24,7 @@ export const cssString = (value: string): string =>
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     // Every other non-printable character (U+0001-U+001F, U+007F) as a hex escape, like `\a ` for a newline
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+    // oxlint-disable-next-line no-control-regex -- matching control characters is the point
     .replace(/[\u0001-\u001f\u007f]/g, (char) => `\\${char.charCodeAt(0).toString(16)} `)}"`;
 
 /**
@@ -40,7 +40,7 @@ const getHashVariants = (rawHash: string): string[] => {
  */
 const getGithubLineNumber = (hash: string, url: string): string | undefined =>
   isGithubCodeLineLink(url)
-    ? decodeUrlHash(hash).replace(/^#/, "").split("-")[0].slice(1)
+    ? (decodeUrlHash(hash).replace(/^#/, "").split("-")[0] ?? "").slice(1)
     : undefined;
 
 /**

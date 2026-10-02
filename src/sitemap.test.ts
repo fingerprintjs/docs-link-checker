@@ -98,7 +98,7 @@ describe("getWebsitePages()", () => {
 
     const pages = await getWebsitePages(SITE);
 
-    expect(pages.sort()).toEqual([`${SITE}/blog/1`, `${SITE}/docs/1`, `${SITE}/docs/2`]);
+    expect(pages.toSorted()).toEqual([`${SITE}/blog/1`, `${SITE}/docs/1`, `${SITE}/docs/2`]);
     const fetchedUrls = fetchMock.mock.calls.map(([url]) => String(url));
     // sitemap.xml is fetched twice: existence check + parsing. Every other sitemap only once.
     expect(fetchedUrls.filter((url) => url === `${SITE}/sitemap-docs.xml`)).toHaveLength(1);

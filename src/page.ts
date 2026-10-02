@@ -61,7 +61,7 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
     const response = await fetchWithHostLimit(
       pageUrl,
       { headers: { "User-Agent": getRandomUserAgent() } },
-      async (response) => (response.ok ? response.text() : ""),
+      async (res) => (res.ok ? res.text() : ""),
     );
     if (response.status < 200 || response.status >= 300) {
       // Thrown (not an empty list), so the page shows up in the extraction errors instead of silently having no links
@@ -153,7 +153,7 @@ export const getLinksFromPages = async ({
  * @param pageUrl
  * @returns
  */
-export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise<Link[]> => {
+const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise<Link[]> => {
   try {
     return await withPage(async (page) => {
       incrementMetric("playwrightNavigations");
@@ -171,22 +171,19 @@ export const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise
       await page.waitForSelector(".markdown-body");
 
       // Extract all links using page.evaluate
-      const links = await page.evaluate(
-        ([pageUrl]) => {
-          // Get all 'a' elements (but not anchor icons) inside article content
-          const anchors = document.querySelectorAll<HTMLAnchorElement>(
-            ".markdown-body a:not(.fa-anchor)",
-          );
+      const links = await page.evaluate((linkPage) => {
+        // Get all 'a' elements (but not anchor icons) inside article content
+        const anchors = document.querySelectorAll<HTMLAnchorElement>(
+          ".markdown-body a:not(.fa-anchor)",
+        );
 
-          // Convert NodeList to array and map to desired format
-          return Array.from(anchors).map((anchor) => ({
-            page: pageUrl,
-            href: anchor.href,
-            text: anchor.textContent?.trim() ?? "",
-          }));
-        },
-        [pageUrl],
-      );
+        // Convert NodeList to array and map to desired format
+        return Array.from(anchors).map((anchor) => ({
+          page: linkPage,
+          href: anchor.href,
+          text: anchor.textContent.trim(),
+        }));
+      }, pageUrl);
 
       return filterOutIrrelevantLinks(links);
     });

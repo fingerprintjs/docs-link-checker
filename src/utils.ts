@@ -12,13 +12,13 @@ export const log = (message: unknown, verbose = false) => {
  * The progress bar redraws the terminal line, which only makes sense in an interactive terminal.
  * In CI (or when output is piped) it just spams the log, so it's disabled there.
  */
-export const isProgressBarEnabled = () => Boolean(process.stderr.isTTY) && !process.env.CI;
+const isProgressBarEnabled = (): boolean => process.stderr.isTTY && !process.env.CI;
 
 /**
  * Creates a new progress bar (one per `parallelProcess` call, so nested pools don't restart a shared bar).
  * Returns `undefined` when the progress bar is disabled.
  */
-export const createProgressBar = (): cliProgress.SingleBar | undefined => {
+const createProgressBar = (): cliProgress.SingleBar | undefined => {
   if (!isProgressBarEnabled()) {
     return undefined;
   }
@@ -40,9 +40,11 @@ export const describeItem = (item: unknown): string => {
     }
     try {
       // JSON.stringify returns undefined when toJSON() returns undefined
-      return JSON.stringify(item) ?? String(item);
+      const json = JSON.stringify(item);
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the types say `string`, but JSON.stringify returns undefined when toJSON() returns undefined
+      return json ?? Object.prototype.toString.call(item);
     } catch {
-      return String(item);
+      return Object.prototype.toString.call(item);
     }
   }
   return String(item);
@@ -73,9 +75,8 @@ export const parallelProcess = async <T, R>({
   progressBar?.start(items.length, 0);
   try {
     const pool = PromisePool.withConcurrency(concurrencyLimit);
-    const { results, errors } = await (taskTimeout === null
-      ? pool
-      : pool.withTaskTimeout(taskTimeout)
+    const { results, errors } = await (
+      taskTimeout === null ? pool : pool.withTaskTimeout(taskTimeout)
     )
       .for(items)
       .onTaskFinished(() => {
@@ -132,14 +133,15 @@ export const sampleItems = <T>({
   if (rate >= 1 || items.length === 0) {
     return items;
   }
-  const sorted = [...items].sort((a, b) => {
-    const [keyA, keyB] = [key(a), key(b)];
-    return keyA < keyB ? -1 : keyA > keyB ? 1 : 0;
-  });
+  const sorted = items.toSorted((a, b) => compareStrings(key(a), key(b)));
   const count = Math.max(1, Math.ceil(sorted.length * rate));
   const sample: T[] = [];
   for (let i = 0; i < count; i++) {
-    sample.push(sorted[Math.floor((i * sorted.length) / count)]);
+    // count <= sorted.length, so the index is always in range
+    const item = sorted[Math.floor((i * sorted.length) / count)];
+    if (item !== undefined) {
+      sample.push(item);
+    }
   }
   console.log(`Sampling ${sample.length} of ${items.length} ${label} (sample rate ${rate}).`);
   return sample;
@@ -147,7 +149,7 @@ export const sampleItems = <T>({
 
 export const CONCURRENCY_LIMIT = 100;
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
-export const DEFAULT_HOST_CONCURRENCY_LIMIT = 8;
+const DEFAULT_HOST_CONCURRENCY_LIMIT = 8;
 
 /**
  * Parses the `LINK_CHECK_HOST_CONCURRENCY` environment variable (positive integer, default 8):
@@ -188,8 +190,11 @@ export const FORBIDDEN_STATUS_CODES = [403, 401];
 
 // Spoofed user agents to bypass some websites restrictions
 
+const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
+
 const userAgents = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  DEFAULT_USER_AGENT,
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:110.0) Gecko/20100101 Firefox/110.0",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/109.0",
@@ -201,4 +206,8 @@ const userAgents = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
 ];
 
-export const getRandomUserAgent = () => userAgents[Math.floor(Math.random() * userAgents.length)];
+/** Code unit order (like the default `sort()`), not locale-dependent */
+export const compareStrings = (a: string, b: string): number => Number(a > b) - Number(a < b);
+
+export const getRandomUserAgent = (): string =>
+  userAgents[Math.floor(Math.random() * userAgents.length)] ?? DEFAULT_USER_AGENT;

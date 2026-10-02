@@ -7,7 +7,7 @@ describe("extractLinksFromMarkdown", () => {
     const markdown = "[Google](https://www.google.com) is a search engine.";
     const page = "test-page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -24,7 +24,7 @@ describe("extractLinksFromMarkdown", () => {
       "[Google](https://www.google.com) and [GitHub](https://github.com) are websites.";
     const page = "multi-link-page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -46,7 +46,7 @@ describe("extractLinksFromMarkdown", () => {
       "[Search! Engine](https://www.google.com/search?q=test) with [special chars](https://example.com/path/to/page?param=value#section).";
     const page = "special-chars-page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -68,7 +68,7 @@ describe("extractLinksFromMarkdown", () => {
       "# Title\n\nThis is a paragraph with [a link](https://example.com).\n\n## Subheading\n\nAnother [link here](https://another.com).";
     const page = "mixed-content-page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -89,7 +89,7 @@ describe("extractLinksFromMarkdown", () => {
     const markdown = "[**Bold Link**](https://bold.com) and [*Italic Link*](https://italic.com)";
     const page = "nested-formatting-page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -110,7 +110,7 @@ describe("extractLinksFromMarkdown", () => {
     const markdown = "This is a plain text without any links.";
     const page = "no-links-page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([]);
   });
@@ -120,7 +120,7 @@ describe("extractLinksFromMarkdown", () => {
     const markdown = "[Reference Link][ref]\n\n[ref]: https://reference.com";
     const page = "reference-links-page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -136,7 +136,7 @@ describe("extractLinksFromMarkdown", () => {
     const markdown = "[Relative Link](/path/to/file.ts) and [Another Relative](/another/link.md)";
     const page = "https://example.com/current/page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -157,7 +157,7 @@ describe("extractLinksFromMarkdown", () => {
     const markdown = "[Root Relative](/index.html) and [Another Root Relative](/docs/guide.md)";
     const page = "https://example.com/current/page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -178,7 +178,7 @@ describe("extractLinksFromMarkdown", () => {
     const markdown = "[Anchor Link](#section1) and [Another Anchor](#another-section)";
     const page = "https://example.com/current/page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -200,7 +200,7 @@ describe("extractLinksFromMarkdown", () => {
       "[Absolute Link](https://other.com) [Relative Link](/path) [Anchor](#section) [Full URL](https://example.com/page)";
     const page = "https://example.com/current/page";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {
@@ -232,7 +232,7 @@ describe("extractLinksFromMarkdown", () => {
 
     // Test with page URL ending with slash
     const pageWithSlash = "https://example.com/current/";
-    const linksWithSlash = await extractLinksFromMarkdown(markdown, pageWithSlash);
+    const linksWithSlash = extractLinksFromMarkdown(markdown, pageWithSlash);
     expect(linksWithSlash).toEqual([
       {
         page: "https://example.com/current/",
@@ -243,7 +243,7 @@ describe("extractLinksFromMarkdown", () => {
 
     // Test with page URL without trailing slash
     const pageWithoutSlash = "https://example.com/current";
-    const linksWithoutSlash = await extractLinksFromMarkdown(markdown, pageWithoutSlash);
+    const linksWithoutSlash = extractLinksFromMarkdown(markdown, pageWithoutSlash);
     expect(linksWithoutSlash).toEqual([
       {
         page: "https://example.com/current",
@@ -254,11 +254,11 @@ describe("extractLinksFromMarkdown", () => {
   });
 
   // Test links in nested GitHub readmes to GitHub paths in the same repository
-  it("should handle anchor links by prepending current page URL", async () => {
+  it("should resolve root-relative links in nested GitHub readmes against the repository", async () => {
     const markdown = "See [Folder](/nested/folder) and [File](/nested/file.md)";
     const page = "https://github.com/fingerprintjs/repository/blob/main/folder/README.md";
 
-    const links = await extractLinksFromMarkdown(markdown, page);
+    const links = extractLinksFromMarkdown(markdown, page);
 
     expect(links).toEqual([
       {

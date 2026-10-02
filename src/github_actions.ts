@@ -4,7 +4,7 @@ import { getLinksToFix, type LinkCheckReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
 /** How many links to fix are listed in the job summary table */
-export const SUMMARY_TABLE_LIMIT = 50;
+const SUMMARY_TABLE_LIMIT = 50;
 const MAX_CELL_LENGTH = 300;
 
 /**

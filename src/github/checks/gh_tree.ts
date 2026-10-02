@@ -1,5 +1,5 @@
-import type { RequestError } from "@octokit/types";
 import type { LinkCheckResult } from "../../types";
+import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
 import { getContentCached } from "../gh_cache";
 import { getMyOctokit } from "../github_client";
@@ -17,7 +17,7 @@ export const checkGitHubTreeLink = async (
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
-  const [, branch, ...restOfPath] = pathParts;
+  const [, branch = "", ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
 
   // If there's no path specified, we just check if the branch/commit exists
@@ -73,8 +73,8 @@ export const checkGitHubTreeLink = async (
   }
 
   // Check if it was a 404 error
-  const error = contentResult.error as Partial<RequestError> | null;
-  if (error?.status === 404) {
+  const { error } = contentResult;
+  if (getErrorStatus(error) === 404) {
     return {
       ok: false,
       error: "broken link",

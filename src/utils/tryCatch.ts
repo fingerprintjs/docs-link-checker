@@ -4,19 +4,24 @@ type Success<T> = {
   error: null;
 };
 
-type Failure<E> = {
+type Failure = {
   data: null;
-  error: E;
+  // Octokit errors keep their `status`, read it with `getErrorStatus` (see errors.ts)
+  error: Error;
 };
 
-type Result<T, E = Error> = Success<T> | Failure<E>;
+type Result<T> = Success<T> | Failure;
 
 // Main wrapper function
-export async function tryCatch<T, E = Error>(promise: Promise<T>): Promise<Result<T, E>> {
+export async function tryCatch<T>(promise: Promise<T>): Promise<Result<T>> {
   try {
     const data = await promise;
     return { data, error: null };
   } catch (error) {
-    return { data: null, error: error as E };
+    // Anything can be thrown, wrap non-errors so `error` is always truthy and has a message
+    return {
+      data: null,
+      error: error instanceof Error ? error : new Error(String(error), { cause: error }),
+    };
   }
 }

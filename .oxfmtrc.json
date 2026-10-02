@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "sortImports": { "newlinesBetween": false },
+  "sortPackageJson": false,
+  "ignorePatterns": [".claude", "results", "src/__fixtures__", "pnpm-lock.yaml"]
+}

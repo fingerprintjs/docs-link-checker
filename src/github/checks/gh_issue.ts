@@ -1,5 +1,5 @@
-import type { RequestError } from "@octokit/types";
 import type { LinkCheckResult } from "../../types";
+import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
 import { getMyOctokit } from "../github_client";
 
@@ -17,7 +17,7 @@ export const checkGitHubIssueLink = async (
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
-  const [, issueNumberPart] = pathParts;
+  const [, issueNumberPart = ""] = pathParts;
   if (issueNumberPart === "new") {
     return { ok: true, status: 200 };
   }
@@ -40,8 +40,8 @@ export const checkGitHubIssueLink = async (
   );
 
   if (error) {
-    const requestError = error as unknown as RequestError;
-    if (requestError.status === 404) {
+    const status = getErrorStatus(error);
+    if (status === 404) {
       return {
         ok: false,
         error: "broken link",
@@ -53,7 +53,7 @@ export const checkGitHubIssueLink = async (
     return {
       ok: false,
       error: "unexpected error",
-      status: requestError.status,
+      status: status,
       errorDetail: String(error),
     };
   }

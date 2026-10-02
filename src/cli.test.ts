@@ -217,9 +217,9 @@ describe("formatFileProblems()", () => {
     // Report order: broken links first, then unexpected errors
     const [first, second] = formatFileProblems(report);
     expect(first).toBe("b.md: c.md: broken link");
-    expect(second.startsWith("a.md:3: https://x.com: unexpected error: boom xxx")).toBe(true);
+    expect(second?.startsWith("a.md:3: https://x.com: unexpected error: boom xxx")).toBe(true);
     expect(second).not.toContain("\n");
-    expect(second.endsWith("…")).toBe(true);
+    expect(second?.endsWith("…")).toBe(true);
   });
 });
 
@@ -461,7 +461,7 @@ describe("runCli()", () => {
         io(),
       ),
     ).toBe(0);
-    const args = mocks.checkWebsite.mock.calls[0][0];
+    const args = mocks.checkWebsite.mock.calls[0]![0];
     expect(args).toMatchObject({
       websiteUrl: "https://example.com",
       sampleRate: 0.2,

@@ -8,6 +8,7 @@ import { withRun } from "../run";
 import { timePhase } from "../run_context";
 import type { Link } from "../types";
 import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_cache";
 import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
 
@@ -28,7 +29,7 @@ async function getOrgRepos(orgName: string) {
     .filter((repo) => repo.archived === false)
     .map((repo) => ({
       full_name: repo.full_name,
-      owner: { login: repo.owner?.login ?? orgName },
+      owner: { login: repo.owner.login },
       name: repo.name,
     }));
 }
@@ -49,7 +50,7 @@ async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFil
 
   // Filter only markdown files
   const mdFiles = treeData.tree
-    .filter((item) => item.type === "blob" && item.path?.toLowerCase().endsWith("readme.md"))
+    .filter((item) => item.type === "blob" && item.path.toLowerCase().endsWith("readme.md"))
     .map((item) => ({
       sourcePath: `https://github.com/${owner}/${repo}/blob/${defaultBranch}/${item.path}`,
       downloadUrl: `https://raw.githubusercontent.com/${owner}/${repo}/${defaultBranch}/${item.path}`,
@@ -69,7 +70,8 @@ export async function getReadmesFromOrg(orgName: string, sampleRate?: number): P
     repos = await getOrgRepos(orgName);
   } catch (error) {
     throw new Error(
-      `Failed to list repositories of GitHub organization ${orgName}: ${(error as Error).message}`,
+      `Failed to list repositories of GitHub organization ${orgName}: ${getErrorMessage(error)}`,
+      { cause: error },
     );
   }
   console.log(`\nFound ${repos.length} public repositories in ${orgName} organization.`);
@@ -107,8 +109,8 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
     // every request has its own timeout instead of the task timeout
     taskTimeout: null,
     processFn: async (file) => {
-      const response = await fetchWithHostLimit(file.downloadUrl, {}, async (response) =>
-        response.ok ? response.text() : "",
+      const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
+        res.ok ? res.text() : "",
       );
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);

@@ -20,6 +20,10 @@
     "jsx": "react-jsx",
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "noEmit": true,
     "verbatimModuleSyntax": true,
     "types": ["node"]

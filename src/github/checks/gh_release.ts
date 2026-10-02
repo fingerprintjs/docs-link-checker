@@ -1,7 +1,86 @@
-import type { RequestError } from "@octokit/types";
 import type { LinkCheckResult } from "../../types";
+import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
 import { getMyOctokit } from "../github_client";
+
+type Octokit = ReturnType<typeof getMyOctokit>;
+type RepoParams = { owner: string; repo: string };
+
+const OK: LinkCheckResult = { ok: true, status: 200 };
+
+const brokenLink = (errorDetail: string): LinkCheckResult => ({
+  ok: false,
+  error: "broken link",
+  status: 404,
+  errorDetail,
+});
+
+/** A 404 from the API is a broken link (with `notFoundDetail`), any other error is unexpected */
+const requestErrorResult = (error: Error, notFoundDetail: string): LinkCheckResult =>
+  getErrorStatus(error) === 404
+    ? brokenLink(notFoundDetail)
+    : { ok: false, error: "unexpected error", status: 500, errorDetail: String(error) };
+
+/** `/releases/download/{tag}/{asset}`: the release and its asset exist */
+const checkReleaseAsset = async (
+  octokit: Octokit,
+  { owner, repo }: RepoParams,
+  tag: string,
+  assetName: string,
+): Promise<LinkCheckResult> => {
+  const { data: release, error } = await tryCatch(
+    octokit.repos.getReleaseByTag({ owner, repo, tag }),
+  );
+  if (error) {
+    return requestErrorResult(error, `Release tag ${tag} not found in repository ${owner}/${repo}`);
+  }
+  if (!release.data.assets.some((asset) => asset.name === assetName)) {
+    return brokenLink(
+      `Asset ${assetName} not found in release ${tag} of repository ${owner}/${repo}`,
+    );
+  }
+  return OK;
+};
+
+/** `/releases/latest`: the repository has at least one release */
+const checkLatestRelease = async (
+  octokit: Octokit,
+  { owner, repo }: RepoParams,
+): Promise<LinkCheckResult> => {
+  const { data: releases, error } = await tryCatch(
+    octokit.repos.listReleases({ owner, repo, per_page: 1 }),
+  );
+  if (error) {
+    return { ok: false, error: "unexpected error", status: 500, errorDetail: String(error) };
+  }
+  return releases.data.length === 0 ? brokenLink("No releases found in repository") : OK;
+};
+
+/** `/releases/tag/{tag}`: a release with the tag exists */
+const checkReleaseTag = async (
+  octokit: Octokit,
+  { owner, repo }: RepoParams,
+  tag: string,
+): Promise<LinkCheckResult> => {
+  const { error } = await tryCatch(octokit.repos.getReleaseByTag({ owner, repo, tag }));
+  return error
+    ? requestErrorResult(error, `Release tag ${tag} not found in repository ${owner}/${repo}`)
+    : OK;
+};
+
+/** `/releases/{id}`: a release with the numeric ID exists */
+const checkReleaseId = async (
+  octokit: Octokit,
+  { owner, repo }: RepoParams,
+  releaseId: number,
+): Promise<LinkCheckResult> => {
+  const { error } = await tryCatch(
+    octokit.repos.getRelease({ owner, repo, release_id: releaseId }),
+  );
+  return error
+    ? requestErrorResult(error, `Release #${releaseId} not found in repository ${owner}/${repo}`)
+    : OK;
+};
 
 /**
  * Check if a GitHub release exists
@@ -16,151 +95,23 @@ export const checkGitHubReleaseLink = async (
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
-  // If pathParts[1] is "download", check if the release asset exists
-  if (pathParts[1] === "download") {
-    const tag = pathParts[2];
-    const assetName = pathParts[3];
+  const repoParams = { owner, repo };
+  const [, kind = "", ...rest] = pathParts;
 
-    const { data: release, error: releaseError } = await tryCatch(
-      octokit.repos.getReleaseByTag({
-        owner,
-        repo,
-        tag,
-      }),
-    );
-
-    if (releaseError) {
-      const requestError = releaseError as unknown as RequestError;
-      if (requestError.status === 404) {
-        return {
-          ok: false,
-          error: "broken link",
-          status: 404,
-          errorDetail: `Release tag ${tag} not found in repository ${owner}/${repo}`,
-        };
-      }
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(releaseError),
-      };
-    }
-
-    // Then check if the asset exists
-    const asset = release.data.assets.find((a) => a.name === assetName);
-    if (!asset) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: `Asset ${assetName} not found in release ${tag} of repository ${owner}/${repo}`,
-      };
-    }
-
-    return { ok: true, status: 200 };
+  if (kind === "download") {
+    const [tag = "", assetName = ""] = rest;
+    return checkReleaseAsset(octokit, repoParams, tag, assetName);
   }
-
-  // If pathParts[1] is "latest", check if any release exists
-  if (pathParts[1] === "latest") {
-    const { data: releases, error } = await tryCatch(
-      octokit.repos.listReleases({
-        owner,
-        repo,
-        per_page: 1,
-      }),
-    );
-
-    if (error) {
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(error),
-      };
-    }
-
-    if (releases.data.length === 0) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: "No releases found in repository",
-      };
-    }
-
-    return { ok: true, status: 200 };
+  if (kind === "latest") {
+    return checkLatestRelease(octokit, repoParams);
   }
-
-  // If pathParts[1] is "tag", check if the specific tag exists
-  if (pathParts[1] === "tag") {
+  if (kind === "tag") {
     // Tags can contain slashes (`@fingerprint/vue@2.0.0`), written encoded (`%2F`) or not
-    const tag = pathParts.slice(2).join("/");
-    const { error } = await tryCatch(
-      octokit.repos.getReleaseByTag({
-        owner,
-        repo,
-        tag,
-      }),
-    );
-
-    if (error) {
-      const requestError = error as unknown as RequestError;
-      if (requestError.status === 404) {
-        return {
-          ok: false,
-          error: "broken link",
-          status: 404,
-          errorDetail: `Release tag ${tag} not found in repository ${owner}/${repo}`,
-        };
-      }
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(error),
-      };
-    }
-
-    return { ok: true, status: 200 };
+    return checkReleaseTag(octokit, repoParams, rest.join("/"));
   }
-
-  // If pathParts[1] is a number, check if the specific release exists
-  const releaseId = parseInt(pathParts[1], 10);
+  const releaseId = parseInt(kind, 10);
   if (!Number.isNaN(releaseId)) {
-    const { error } = await tryCatch(
-      octokit.repos.getRelease({
-        owner,
-        repo,
-        release_id: releaseId,
-      }),
-    );
-
-    if (error) {
-      const requestError = error as unknown as RequestError;
-      if (requestError.status === 404) {
-        return {
-          ok: false,
-          error: "broken link",
-          status: 404,
-          errorDetail: `Release #${releaseId} not found in repository ${owner}/${repo}`,
-        };
-      }
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(error),
-      };
-    }
-
-    return { ok: true, status: 200 };
+    return checkReleaseId(octokit, repoParams, releaseId);
   }
-
-  return {
-    ok: false,
-    error: "broken link",
-    status: 404,
-    errorDetail: "Invalid release URL format",
-  };
+  return brokenLink("Invalid release URL format");
 };

@@ -22,7 +22,7 @@ const LAUNCH_OPTIONS = {
 const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font"]);
 
 // Analytics, tag managers and ads: slow down the page and never add anchors
-export const BLOCKED_HOSTS = [
+const BLOCKED_HOSTS = [
   "googletagmanager.com",
   "google-analytics.com",
   "analytics.google.com",

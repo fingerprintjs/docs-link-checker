@@ -8,13 +8,10 @@ import {
   isNonPublicAddress,
   parseIPv6,
 } from "./destination";
+import { checkLinkWithFetch } from "./fetch_check";
 import { fetchWithHostLimit } from "./http";
-import {
-  checkLinks,
-  checkLinkWithFetch,
-  checkLinkWithPlaywright,
-  shouldRecheckWithPlaywright,
-} from "./link";
+import { checkLinks, shouldRecheckWithPlaywright } from "./link";
+import { checkLinkWithPlaywright } from "./playwright_check";
 import { setHostLimiter } from "./utils";
 
 // `node:dns/promises` is mocked for all unit tests (src/test_setup.ts)
@@ -221,7 +218,7 @@ describe("fetchWithHostLimit() destination guard", () => {
       fetchWithHostLimit("https://public.example/start", {}, (r) => r.text()),
     ).rejects.toThrow("Destination not allowed (private or local address): internal.corp.example");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toBe("https://public.example/start");
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("https://public.example/start");
   });
 
   it("follows redirects to private hosts with the opt-out", async () => {

@@ -285,7 +285,7 @@ describe("checkLinkWithGithubApi() with GitHub's own pages", () => {
     const result = await checkLinkWithGithubApi(url);
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(String(fetchMock.mock.calls[0][0])).toBe(url);
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(url);
     expect(octokit.users.getByUsername).not.toHaveBeenCalled();
     expect(octokit.repos.get).not.toHaveBeenCalled();
   });

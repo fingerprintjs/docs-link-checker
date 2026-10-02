@@ -1,5 +1,5 @@
-import type { RequestError } from "@octokit/types";
 import type { LinkCheckResult } from "../../types";
+import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
 import { getMyOctokit } from "../github_client";
 
@@ -33,8 +33,8 @@ export const checkGitHubDiscussionLink = async (
   }
 
   if (
-    (error as unknown as RequestError).status === 404 ||
-    error?.message?.includes("Could not resolve to a Discussion")
+    getErrorStatus(error) === 404 ||
+    error?.message.includes("Could not resolve to a Discussion")
   ) {
     return {
       ok: false,

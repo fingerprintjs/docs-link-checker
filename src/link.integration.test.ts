@@ -5,7 +5,8 @@ import {
   HASH_WAIT_TIMEOUT,
   PAGE_OPERATION_TIMEOUT,
 } from "./browser";
-import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
+import { checkLinkWithFetch } from "./fetch_check";
+import { checkLinkWithPlaywright } from "./playwright_check";
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeBrowser);
@@ -60,12 +61,16 @@ for (const { function: checkLink, name } of linkCheckMethods) {
       expect(result).toMatchObject({ ok: true, status: 200 });
     });
 
-    it(`${name} should return 'hash not found' for broken hash links (server-rendered)`, {
-      timeout: HASH_CHECK_TEST_TIMEOUT,
-    }, async () => {
-      const result = await checkLink("https://fingerprint.com#does-not-exist");
-      expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
-    });
+    it(
+      `${name} should return 'hash not found' for broken hash links (server-rendered)`,
+      {
+        timeout: HASH_CHECK_TEST_TIMEOUT,
+      },
+      async () => {
+        const result = await checkLink("https://fingerprint.com#does-not-exist");
+        expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
+      },
+    );
 
     it(`${name} should return OK for hashes implemented using 'href', like on GitHub`, async () => {
       const result = await checkLink(
@@ -114,53 +119,69 @@ describe("checkLinkWithPlaywright()", () => {
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
-  it("should return 'hash not found' for broken hash links (client-rendered)", {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
-  }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://developer.apple.com/documentation/webkit#this-hash-does-not-exist",
-    );
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-  });
+  it(
+    "should return 'hash not found' for broken hash links (client-rendered)",
+    {
+      timeout: HASH_CHECK_TEST_TIMEOUT,
+    },
+    async () => {
+      const result = await checkLinkWithPlaywright(
+        "https://developer.apple.com/documentation/webkit#this-hash-does-not-exist",
+      );
+      expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    },
+  );
 
-  it("should return OK for anchors rendered late (Mintlify expands nested fields on hash navigation)", {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
-  }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://docs.fingerprint.com/reference/server-api-get-event#response-ip-info-v6-address",
-    );
-    expect(result).toEqual({ ok: true, status: 200 });
-  });
+  it(
+    "should return OK for anchors rendered late (Mintlify expands nested fields on hash navigation)",
+    {
+      timeout: HASH_CHECK_TEST_TIMEOUT,
+    },
+    async () => {
+      const result = await checkLinkWithPlaywright(
+        "https://docs.fingerprint.com/reference/server-api-get-event#response-ip-info-v6-address",
+      );
+      expect(result).toEqual({ ok: true, status: 200 });
+    },
+  );
 
-  it(`should return OK for working L{number} hashes on GitHub `, async () => {
+  it(`should return OK for working L{number} hashes on GitHub`, async () => {
     const result = await checkLinkWithPlaywright(
       "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3",
     );
     expect(result).toMatchObject({ ok: true, status: 200 });
   });
 
-  it(`should return OK for working L{number}-L{number} hashes on GitHub `, async () => {
+  it(`should return OK for working L{number}-L{number} hashes on GitHub`, async () => {
     const result = await checkLinkWithPlaywright(
       "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3-L5",
     );
     expect(result).toMatchObject({ ok: true, status: 200 });
   });
 
-  it(`should return 'hash not found' for broken L{number} hashes on GitHub `, {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
-  }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999",
-    );
-    expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
-  });
+  it(
+    `should return 'hash not found' for broken L{number} hashes on GitHub`,
+    {
+      timeout: HASH_CHECK_TEST_TIMEOUT,
+    },
+    async () => {
+      const result = await checkLinkWithPlaywright(
+        "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999",
+      );
+      expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
+    },
+  );
 
-  it(`should return 'hash not found' for broken L{number}-L{number} hashes on GitHub `, {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
-  }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999",
-    );
-    expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
-  });
+  it(
+    `should return 'hash not found' for broken L{number}-L{number} hashes on GitHub`,
+    {
+      timeout: HASH_CHECK_TEST_TIMEOUT,
+    },
+    async () => {
+      const result = await checkLinkWithPlaywright(
+        "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999",
+      );
+      expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
+    },
+  );
 });

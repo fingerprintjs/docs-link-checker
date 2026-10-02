@@ -1,4 +1,5 @@
 import type { LinkCheckResult } from "../../types";
+import { getErrorStatus } from "../../utils/errors";
 import { getRepoCached, getUserCached } from "../gh_cache";
 
 /**
@@ -35,7 +36,7 @@ export const checkIfOwnerExists = async (owner: string): Promise<LinkCheckResult
     await getUserCached(owner);
     return { ok: true, status: 200 };
   } catch (error) {
-    if ((error as { status?: number } | undefined)?.status === 404) {
+    if (getErrorStatus(error) === 404) {
       return {
         ok: false,
         error: "broken link",

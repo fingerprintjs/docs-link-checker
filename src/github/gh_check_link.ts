@@ -1,4 +1,5 @@
-import { checkLinkWithFetch, checkLinkWithPlaywright } from "../link";
+import { checkLinkWithFetch } from "../fetch_check";
+import { checkLinkWithPlaywright } from "../playwright_check";
 import type { LinkCheckResult } from "../types";
 import { checkGitHubBlobLink } from "./checks/gh_blob";
 import { checkGitHubCommitLink } from "./checks/gh_commit";
@@ -17,6 +18,38 @@ import {
 } from "./gh_url";
 
 export { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink };
+
+/** Sections whose index page (`/owner/repo/issues`) exists for every repository */
+const SECTIONS_WITH_INDEX_PAGE = new Set(["issues", "discussions", "releases", "pulls"]);
+
+type SectionCheckArgs = { url: URL; owner: string; repo: string; pathParts: string[] };
+
+/** Checks by the first path segment after the repository (`/owner/repo/{section}/...`) */
+const SECTION_CHECKS: Partial<
+  Record<string, (args: SectionCheckArgs) => Promise<LinkCheckResult>>
+> = {
+  issues: ({ owner, repo, pathParts }) => checkGitHubIssueLink(owner, repo, pathParts),
+  discussions: ({ owner, repo, pathParts }) =>
+    checkGitHubDiscussionLink(owner, repo, parseInt(pathParts[1] ?? "", 10)),
+  blob: ({ url, owner, repo, pathParts }) => checkGitHubBlobLink(url, owner, repo, pathParts),
+  tree: ({ owner, repo, pathParts }) => checkGitHubTreeLink(owner, repo, pathParts),
+  releases: ({ owner, repo, pathParts }) => checkGitHubReleaseLink(owner, repo, pathParts),
+  pull: ({ owner, repo, pathParts }) => checkGitHubPullRequestLink(owner, repo, pathParts),
+  commit: ({ owner, repo, pathParts }) => checkGitHubCommitLink(owner, repo, pathParts),
+};
+
+/** A user or an organization (`https://github.com/owner`) */
+const checkOwnerLink = async (owner: string, url: string): Promise<LinkCheckResult> => {
+  const result = await checkIfOwnerExists(owner);
+  // Not an account: maybe one of GitHub's own pages missing from the reserved routes, check the page itself
+  if (!result.ok && result.status === 404) {
+    const page = await checkLinkWithFetch(url);
+    if (page.ok) {
+      return page;
+    }
+  }
+  return result;
+};
 
 /**
  * Use GitHub API (Octokit) to check if link is valid
@@ -52,68 +85,29 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
 
   // `https://github.com/owner` (with or without a trailing slash): a user or an organization, not a repository
   if (!repo) {
-    const result = await checkIfOwnerExists(owner);
-    // Not an account: maybe one of GitHub's own pages missing from the reserved routes, check the page itself
-    if (!result.ok && result.status === 404) {
-      const page = await checkLinkWithFetch(url);
-      if (page.ok) {
-        return page;
-      }
-    }
-    return result;
+    return checkOwnerLink(owner, url);
   }
 
+  const [section, ...sectionParts] = pathParts;
+
   // If pathParts is empty, it's a repository link, just check if it exists
-  if (pathParts.length === 0) {
+  if (section === undefined) {
     return checkIfRepositoryExists(owner, repo);
   }
 
   // If nothings follows the section path segment, just check that the repository exists
-  if (
-    pathParts.length === 1 &&
-    ["issues", "discussions", "releases", "pulls"].includes(pathParts[0])
-  ) {
+  if (sectionParts.length === 0 && SECTIONS_WITH_INDEX_PAGE.has(section)) {
     return checkIfRepositoryExists(owner, repo);
   }
 
-  // If issue, check if it exists
-  if (pathParts[0] === "issues") {
-    return checkGitHubIssueLink(owner, repo, pathParts);
-  }
-
-  // If discussion, check if it exists
-  if (pathParts[0] === "discussions") {
-    return checkGitHubDiscussionLink(owner, repo, parseInt(pathParts[1], 10));
-  }
-
-  // If blob, check if it exists
-  if (pathParts[0] === "blob") {
-    return checkGitHubBlobLink(githubUrl, owner, repo, pathParts);
-  }
-
-  // If branch or folder, check if it exists
-  if (pathParts[0] === "tree") {
-    return checkGitHubTreeLink(owner, repo, pathParts);
-  }
-
-  // If release, check if it exists
-  if (pathParts[0] === "releases") {
-    return checkGitHubReleaseLink(owner, repo, pathParts);
-  }
-
-  // If pull request, check if it exists
-  if (pathParts[0] === "pull") {
-    return checkGitHubPullRequestLink(owner, repo, pathParts);
-  }
-
-  // If wiki, check if it exists
+  // Wikis are not available through the API
   if (isGithubWikiLink(url)) {
     return checkLinkWithFetch(url);
   }
 
-  // If commit, check if it exists
-  if (pathParts[0] === "commit") {
-    return checkGitHubCommitLink(owner, repo, pathParts);
+  const checkSection = SECTION_CHECKS[section];
+  if (checkSection) {
+    return checkSection({ url: githubUrl, owner, repo, pathParts });
   }
 
   return {

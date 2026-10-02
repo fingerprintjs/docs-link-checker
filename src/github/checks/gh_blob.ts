@@ -1,9 +1,9 @@
-import type { RequestError } from "@octokit/types";
 import * as cheerio from "cheerio";
 import GithubSlugger from "github-slugger";
 import { marked, Parser, type Token } from "marked";
 import { decodeHash } from "../../hash";
 import type { LinkCheckResult } from "../../types";
+import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
 import { getContentCached } from "../gh_cache";
 
@@ -37,7 +37,8 @@ export const getMarkdownAnchors = (markdown: string): Set<string> => {
   const slugger = new GithubSlugger();
   const anchors = new Set<string>();
 
-  marked.walkTokens(marked.lexer(markdown), (token: Token) => {
+  // The callback is synchronous, walkTokens returns its (empty) results
+  void marked.walkTokens(marked.lexer(markdown), (token: Token) => {
     if (token.type === "heading") {
       // Slug is based on the rendered text content of the heading (no markdown syntax, link URLs or HTML tags)
       const headingHtml = Parser.parseInline(token.tokens ?? []);
@@ -80,7 +81,7 @@ export const checkGitHubBlobLink = async (
   repo: string,
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
-  const [, branch, ...restOfPath] = pathParts;
+  const [, branch = "", ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
   // Remove the # character, decode percent-encoding and make it lowercase
   const hash = decodeHash(fullUrl.hash).toLowerCase();
@@ -95,7 +96,7 @@ export const checkGitHubBlobLink = async (
   );
 
   if (error) {
-    if ((error as unknown as RequestError).status === 404) {
+    if (getErrorStatus(error) === 404) {
       return {
         ok: false,
         error: "broken link",

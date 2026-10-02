@@ -13,5 +13,12 @@ export default defineConfig({
     env: { GH_TOKEN: "", GITHUB_STEP_SUMMARY: "", GITHUB_OUTPUT: "", GITHUB_ACTIONS: "" },
     unstubGlobals: true,
     unstubEnvs: true,
+    // `pnpm run test:coverage` (CI) fails when coverage drops below these numbers (a bit below the current ones)
+    coverage: {
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/__fixtures__/**", "src/test_setup.ts"],
+      reporter: ["text-summary", "html"],
+      thresholds: { statements: 90, branches: 85, functions: 92, lines: 90 },
+    },
   },
 });

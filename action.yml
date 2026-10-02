@@ -1,54 +1,54 @@
-name: 'Docs link checker'
-description: 'Checks links in markdown files, including #anchors: relative links on disk, absolute links over the network'
-author: 'Fingerprint'
+name: "Docs link checker"
+description: "Checks links in markdown files, including #anchors: relative links on disk, absolute links over the network"
+author: "Fingerprint"
 branding:
-  icon: 'link'
-  color: 'orange'
+  icon: "link"
+  color: "orange"
 # https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action
 
 inputs:
   files:
-    description: 'Glob patterns (or paths) of markdown files to check, relative to the repository root, separated by spaces or new lines. node_modules and .git are skipped.'
+    description: "Glob patterns (or paths) of markdown files to check, relative to the repository root, separated by spaces or new lines. node_modules and .git are skipped."
     required: false
-    default: '**/*.md'
+    default: "**/*.md"
   github-token:
-    description: 'Token used to check GitHub links with the GitHub API (rate limits, private repositories).'
+    description: "Token used to check GitHub links with the GitHub API (rate limits, private repositories)."
     required: false
     default: ${{ github.token }}
   fail-on-broken:
     description: 'Fail the step when links need fixing ("true" or "false").'
     required: false
-    default: 'true'
+    default: "true"
   baseline:
-    description: 'Path of a baseline (ignore) file relative to the repository root. Matching links are reported as ignored.'
+    description: "Path of a baseline (ignore) file relative to the repository root. Matching links are reported as ignored."
     required: false
-    default: ''
+    default: ""
   sample-rate:
-    description: 'Check only a deterministic share of the files (a number between 0 and 1).'
+    description: "Check only a deterministic share of the files (a number between 0 and 1)."
     required: false
-    default: '1'
+    default: "1"
   annotations:
     description: 'Report links to fix as annotations on the files ("true" or "false").'
     required: false
-    default: 'true'
+    default: "true"
   output-dir:
-    description: 'Where to save the JSON and HTML reports. Defaults to a directory in RUNNER_TEMP.'
+    description: "Where to save the JSON and HTML reports. Defaults to a directory in RUNNER_TEMP."
     required: false
-    default: ''
+    default: ""
 
 outputs:
   links-to-fix:
-    description: 'Number of links to fix (broken links, missing anchors, errors), not counting ignored links'
+    description: "Number of links to fix (broken links, missing anchors, errors), not counting ignored links"
     value: ${{ steps.check.outputs.links-to-fix }}
   report-path:
-    description: 'Path of the JSON report'
+    description: "Path of the JSON report"
     value: ${{ steps.check.outputs.report-path }}
   report-html-path:
-    description: 'Path of the HTML report'
+    description: "Path of the HTML report"
     value: ${{ steps.check.outputs.report-html-path }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Read Node.js and pnpm versions of the link checker
       id: versions
@@ -100,11 +100,11 @@ runs:
         INPUT_FAIL_ON_BROKEN: ${{ inputs.fail-on-broken }}
         INPUT_ANNOTATIONS: ${{ inputs.annotations }}
         # The calling workflow's env must not change the action's behavior (or abort it with an invalid value)
-        LINK_CHECK_SAMPLE_RATE: ''
-        LINK_CHECK_BASELINE: ''
-        LINK_CHECK_HOST_CONCURRENCY: ''
+        LINK_CHECK_SAMPLE_RATE: ""
+        LINK_CHECK_BASELINE: ""
+        LINK_CHECK_HOST_CONCURRENCY: ""
         # Private and local destinations are always blocked in the action (links can come from untrusted PRs)
-        LINK_CHECK_ALLOW_PRIVATE_HOSTS: ''
+        LINK_CHECK_ALLOW_PRIVATE_HOSTS: ""
       run: |
         for input in "fail-on-broken=${INPUT_FAIL_ON_BROKEN}" "annotations=${INPUT_ANNOTATIONS}"; do
           case "${input#*=}" in
@@ -162,12 +162,12 @@ runs:
         INPUT_ANNOTATIONS: ${{ inputs.annotations }}
         INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
         # The calling workflow's env must not change the action's behavior, inputs do
-        FAIL_ON_BROKEN_LINKS: ''
-        LINK_CHECK_SAMPLE_RATE: ''
-        LINK_CHECK_BASELINE: ''
-        LINK_CHECK_HOST_CONCURRENCY: ''
+        FAIL_ON_BROKEN_LINKS: ""
+        LINK_CHECK_SAMPLE_RATE: ""
+        LINK_CHECK_BASELINE: ""
+        LINK_CHECK_HOST_CONCURRENCY: ""
         # Private and local destinations are always blocked in the action (links can come from untrusted PRs)
-        LINK_CHECK_ALLOW_PRIVATE_HOSTS: ''
+        LINK_CHECK_ALLOW_PRIVATE_HOSTS: ""
       run: |
         set -f
         # shellcheck disable=SC2086

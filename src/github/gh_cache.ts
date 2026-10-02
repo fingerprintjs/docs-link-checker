@@ -1,4 +1,5 @@
 import { incrementMetric, runCached } from "../run_context";
+import { getErrorStatus } from "../utils/errors";
 import { getMyOctokit } from "./github_client";
 
 /**
@@ -12,7 +13,7 @@ export type UserResponse = Awaited<ReturnType<Octokit["users"]["getByUsername"]>
 export type ContentResponse = Awaited<ReturnType<Octokit["repos"]["getContent"]>>;
 
 // "Not found" is a definitive answer worth caching. Other errors (rate limits, 5xx) are retried on the next call.
-const isNotFound = (error: unknown) => (error as { status?: number } | undefined)?.status === 404;
+const isNotFound = (error: unknown) => getErrorStatus(error) === 404;
 
 const cachedRequest = <T>(key: string, request: () => Promise<T>): Promise<T> =>
   runCached(`github:${key}`, request, {

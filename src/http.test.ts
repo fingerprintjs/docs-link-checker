@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { checkLinkWithFetch } from "./fetch_check";
 import { getReadmeLinks } from "./github/gh_get_links";
 import {
   fetchWithHostLimit,
@@ -7,7 +8,7 @@ import {
   MAX_REDIRECTS,
 } from "./http";
 import { HostLimiter } from "./limiter";
-import { checkLinks, checkLinkWithFetch } from "./link";
+import { checkLinks } from "./link";
 import { getLinksFromPages, parseLinksFromPage } from "./page";
 import { setHostLimiter } from "./utils";
 import { checkWebsite } from "./website";
@@ -61,7 +62,7 @@ describe("fetchWithHostLimit()", () => {
       [200, "a"],
       [200, "b"],
     ]);
-    const rateLimitedAt = events[0].at;
+    const rateLimitedAt = events[0]!.at;
     const queuedStart = events.find((event) => event.name.endsWith("/b"))!.at;
     expect(queuedStart - rateLimitedAt).toBeGreaterThanOrEqual(950);
   });
@@ -161,7 +162,7 @@ describe("fetchWithHostLimit() redirects", () => {
     const result = await checkLinkWithFetch("https://loop.example.com/");
 
     expect(result).toMatchObject({ ok: false, error: "broken link" });
-    expect(result.ok === false && result.errorDetail).toContain("Too many redirects");
+    expect(!result.ok && result.errorDetail).toContain("Too many redirects");
   });
 
   it("switches to GET on 303 (fetch spec)", async () => {
@@ -373,7 +374,7 @@ describe("page link extraction and rate limiting", () => {
 
     expect(links).toHaveLength(1);
     expect(errors).toHaveLength(1);
-    expect(errors[0].item).toBe("https://docs.example.com/limited");
-    expect(errors[0].message).toContain("status: 429");
+    expect(errors[0]!.item).toBe("https://docs.example.com/limited");
+    expect(errors[0]!.message).toContain("status: 429");
   });
 });
