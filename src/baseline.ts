@@ -159,10 +159,12 @@ export const createBaseline = (entries: BaselineEntry[]): Baseline => {
     (link: { href: string; page: string }) =>
     ({ hrefMatches, pageMatches }: (typeof compiled)[number]) =>
       hrefMatches(link.href) && (!pageMatches || pageMatches(link.page));
+  const findEntries = (link: { href: string; page: string }): BaselineEntry[] =>
+    compiled.filter(matches(link)).map(({ entry }) => entry);
   return {
     entries,
-    findEntry: (link) => compiled.find(matches(link))?.entry,
-    findEntries: (link) => compiled.filter(matches(link)).map(({ entry }) => entry),
+    findEntry: (link) => findEntries(link)[0],
+    findEntries,
   };
 };
 
