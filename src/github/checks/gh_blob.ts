@@ -1,62 +1,12 @@
-import * as cheerio from "cheerio";
-import GithubSlugger from "github-slugger";
-import { marked, Parser, type Token } from "marked";
 import { decodeHash } from "../../hash";
 import { checkLineAnchor, countLines } from "../../line_anchor";
+import { getMarkdownAnchors, hasMatchingAnchor } from "../../markdown";
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
 import { getApiErrorResult } from "../gh_api_error";
 import { getBlobCached } from "../gh_cache";
 import { getRefPathContent } from "../gh_ref";
 import { isGithubCodeLineLink } from "../gh_url";
-
-// GitHub prefixes ids in rendered markdown with `user-content-`, links work both with and without it
-const USER_CONTENT_PREFIX = "user-content-";
-
-/**
- * Collects anchor ids from HTML: `id` on any element and `name` on `<a>` elements.
- */
-const getHtmlAnchors = (html: string): string[] => {
-  const $ = cheerio.load(html, null, false);
-  const anchors: string[] = [];
-  $("[id]").each((_, element) => {
-    const id = $(element).attr("id");
-    if (id) anchors.push(id);
-  });
-  $("a[name]").each((_, element) => {
-    const name = $(element).attr("name");
-    if (name) anchors.push(name);
-  });
-  return anchors;
-};
-
-/**
- * Returns all anchors GitHub generates for a markdown file (lowercase):
- * - Heading slugs (GitHub-slugger semantics, duplicate headings get `-1`, `-2`... suffixes).
- *   Headings in fenced code blocks are ignored, headings in blockquotes and lists are included.
- * - Explicit HTML anchors like `<a name="x">`, `<a id="x">` and `<h2 id="x">`.
- */
-export const getMarkdownAnchors = (markdown: string): Set<string> => {
-  const slugger = new GithubSlugger();
-  const anchors = new Set<string>();
-
-  // The callback is synchronous, walkTokens returns its (empty) results
-  void marked.walkTokens(marked.lexer(markdown), (token: Token) => {
-    if (token.type === "heading") {
-      // Slug is based on the rendered text content of the heading (no markdown syntax, link URLs or HTML tags)
-      const headingHtml = Parser.parseInline(token.tokens ?? []);
-      const headingText = cheerio.load(headingHtml, null, false).text().trim();
-      anchors.add(slugger.slug(headingText));
-    }
-    if (token.type === "html") {
-      for (const anchor of getHtmlAnchors(token.raw)) {
-        anchors.add(anchor.toLowerCase());
-      }
-    }
-  });
-
-  return anchors;
-};
 
 // Decoded text per file response: the response is cached for the run, so each file is decoded once for all its hashes
 const textByFile = new WeakMap<object, Promise<FileText>>();
@@ -105,13 +55,8 @@ const isRenderedMarkdown = (path: string, url: URL) =>
   /\.(md|markdown|mdown|mkdn|mkd|mdwn)$/i.test(path) && url.searchParams.get("plain") !== "1";
 
 /** `true` if the heading anchors of the file include the hash (lowercase, with or without `user-content-`) */
-const hasHeadingAnchor = (fileText: FileText, hash: string) => {
-  const anchors = getTextAnchors(fileText);
-  const hashWithoutPrefix = hash.startsWith(USER_CONTENT_PREFIX)
-    ? hash.slice(USER_CONTENT_PREFIX.length)
-    : hash;
-  return anchors.has(hash) || anchors.has(hashWithoutPrefix);
-};
+const hasHeadingAnchor = (fileText: FileText, hash: string) =>
+  hasMatchingAnchor(getTextAnchors(fileText), hash);
 
 /**
  * Check if a GitHub blob exists, and its hash: a heading of a markdown file, or a code line (`#L12`, `#L12-L15`,

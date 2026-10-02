@@ -1,13 +1,12 @@
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import { fetchWithHostLimit } from "../http";
 import { checkLinks } from "../link";
-import { extractLinksFromMarkdown } from "../markdown";
+import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
 import { DEFAULT_OUTPUT_DIR, getJSONReport, saveReport } from "../report/report";
-import { withRun } from "../run";
-import { timePhase } from "../run_context";
+import { type RunConfig, timePhase, withRun } from "../run";
 import type { Link } from "../types";
-import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { formatConcurrentErrors, parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_cache";
 import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
@@ -100,14 +99,29 @@ export async function getReadmesFromOrg(orgName: string, sampleRate?: number): P
   });
 }
 
+/** The `https://github.com/owner/repo/blob/<ref>` prefix of a README's blob URL, to resolve repo-relative links */
+const extractGitHubRepoUrl = (url: string): string | undefined =>
+  url.match(/(https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+)/)?.[1];
+
+/**
+ * Resolves an href found in a README against the blob URL it was downloaded from:
+ * - A root-relative path (`/docs/a.md`) resolves against the repository, like GitHub renders it.
+ * - A `#hash` resolves against the page.
+ * - Anything else resolves against the page URL, absolute URLs are returned unchanged.
+ */
+export const resolveReadmeHref = (href: string, page: string): string => {
+  if (URL.canParse(href)) return href;
+  if (href.startsWith("#")) return `${page}${href}`;
+  const repoUrl = extractGitHubRepoUrl(page);
+  if (href.startsWith("/") && repoUrl) return `${repoUrl}${href}`;
+  return new URL(href, page).toString();
+};
+
 /** Downloads README files (limited per host) and extracts their links */
 export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
   const { results, errors } = await parallelProcess({
     items: files,
-    // Downloads wait for a per-host slot (all files are on raw.githubusercontent.com),
-    // every request has its own timeout instead of the task timeout
-    taskTimeout: null,
     processFn: async (file) => {
       const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
         res.ok ? res.text() : "",
@@ -115,14 +129,17 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);
       }
-      const links = extractLinksFromMarkdown(response.data, file.sourcePath);
-      return links;
+      return extractMarkdownLinks(response.data).map(({ href, text }) => ({
+        page: file.sourcePath,
+        href: resolveReadmeHref(href, file.sourcePath),
+        text,
+      }));
     },
   });
 
   if (errors.length > 0) {
     console.error(
-      `Errors fetching files and extracting links: ${errors.length}\n${formatPoolErrors(errors)}`,
+      `Errors fetching files and extracting links: ${errors.length}\n${formatConcurrentErrors(errors)}`,
     );
   }
   const links = results.flat();
@@ -133,7 +150,7 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
 /** Report name of an organization (`fingerprintjs` -> `fingerprintjs-github-readmes.html`) */
 export const getGithubOrgSiteName = (org: string) => `${org} GitHub readmes`;
 
-export type CheckReadmesOptions = {
+export type CheckReadmesOptions = RunConfig & {
   /** Share of README files to check (0-1), defaults to `LINK_CHECK_SAMPLE_RATE` */
   sampleRate?: number;
   /** Failing links matching the baseline are reported as ignored */
@@ -152,9 +169,11 @@ export const checkReadmesInGithubOrg = (
     sampleRate,
     baseline = EMPTY_BASELINE,
     outputDir = DEFAULT_OUTPUT_DIR,
+    hostConcurrency,
+    allowPrivateHosts,
   }: CheckReadmesOptions = {},
 ) =>
-  withRun(async () => {
+  withRun({ hostConcurrency, allowPrivateHosts }, async () => {
     const startTime = performance.now();
     await checkGitHubRateLimit(getMyOctokit());
 
@@ -165,15 +184,10 @@ export const checkReadmesInGithubOrg = (
     const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
     const filteredLinks = filterOutIrrelevantLinks(links);
 
-    const { results, errors } = await checkLinks({
-      links: filteredLinks,
-      verbose: true,
-      fetchConcurrencyLimit: 20,
-    });
+    const results = await checkLinks({ links: filteredLinks, fetchConcurrencyLimit: 20 });
 
     const report = getJSONReport({
       links: results,
-      errors,
       siteName: getGithubOrgSiteName(org),
       baseline,
     });

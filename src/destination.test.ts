@@ -6,13 +6,12 @@ import {
   DestinationNotAllowedError,
   isBlockedHostLiteral,
   isNonPublicAddress,
-  parseIPv6,
 } from "./destination";
 import { checkLinkWithFetch } from "./fetch_check";
 import { fetchWithHostLimit } from "./http";
 import { checkLinks, shouldRecheckWithPlaywright } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { setHostLimiter } from "./utils";
+import { setHostLimiter, withRun } from "./run";
 
 // `node:dns/promises` is mocked for all unit tests (src/test_setup.ts)
 const mockedLookup = vi.mocked(lookup) as unknown as ReturnType<
@@ -79,6 +78,11 @@ describe("isNonPublicAddress()", () => {
     "64:ff9b::10.0.0.1",
     "2002:c0a8:0101::1",
     "fe80::1%eth0",
+    // IPv4-compatible, IPv4-translated, NAT64 and 6to4 forms are blocked wholesale, public addresses too
+    "::8.8.8.8",
+    "::ffff:0:8.8.8.8",
+    "64:ff9b::8.8.8.8",
+    "2002:0808:0808::1",
     // Not an IP address: fail closed
     "not-an-ip",
   ])("%s is non-public", (address) => {
@@ -99,18 +103,8 @@ describe("isNonPublicAddress()", () => {
     "2606:4700:4700::1111",
     "2001:4860:4860::8888",
     "::ffff:8.8.8.8",
-    "64:ff9b::8.8.8.8",
-    "2002:0808:0808::1",
   ])("%s is public", (address) => {
     expect(isNonPublicAddress(address)).toBe(false);
-  });
-
-  it("expands IPv6 addresses", () => {
-    expect(parseIPv6("::ffff:1.2.3.4")).toEqual([0, 0, 0, 0, 0, 0xffff, 0x0102, 0x0304]);
-    expect(parseIPv6("1::")).toEqual([1, 0, 0, 0, 0, 0, 0, 0]);
-    expect(parseIPv6("1:2:3:4:5:6:7:8")).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(parseIPv6("1:2:3:4:5:6:1.2.3.4")).toEqual([1, 2, 3, 4, 5, 6, 0x0102, 0x0304]);
-    expect(parseIPv6("1::2::3")).toBeUndefined();
   });
 });
 
@@ -181,12 +175,12 @@ describe("assertDestinationAllowed()", () => {
     await expect(assertDestinationAllowed("https://nxdomain.example/")).resolves.toBeUndefined();
   });
 
-  it("allows everything with LINK_CHECK_ALLOW_PRIVATE_HOSTS=true (opt-out)", async () => {
+  it("allows everything with allowPrivateHosts (--allow-private-hosts / LINK_CHECK_ALLOW_PRIVATE_HOSTS, opt-out)", async () => {
     resolvesTo({ "dev.internal": ["10.0.0.5"] });
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "true");
-    await expect(assertDestinationAllowed("http://localhost:3000/")).resolves.toBeUndefined();
-    await expect(assertDestinationAllowed("http://dev.internal/")).resolves.toBeUndefined();
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "false");
+    await withRun({ allowPrivateHosts: true }, async () => {
+      await expect(assertDestinationAllowed("http://localhost:3000/")).resolves.toBeUndefined();
+      await expect(assertDestinationAllowed("http://dev.internal/")).resolves.toBeUndefined();
+    });
     await expect(assertDestinationAllowed("http://localhost:3000/")).rejects.toThrow(
       DestinationNotAllowedError,
     );
@@ -222,14 +216,15 @@ describe("fetchWithHostLimit() destination guard", () => {
   });
 
   it("follows redirects to private hosts with the opt-out", async () => {
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "true");
     const fetchMock = vi.fn(async (input: string | URL | Request) =>
       String(input).startsWith("https://public.example/")
         ? new Response("", { status: 302, headers: { Location: "http://127.0.0.1:3000/" } })
         : new Response("dev server"),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const response = await fetchWithHostLimit("https://public.example/", {}, (r) => r.text());
+    const response = await withRun({ allowPrivateHosts: true }, () =>
+      fetchWithHostLimit("https://public.example/", {}, (r) => r.text()),
+    );
     expect(response.data).toBe("dev server");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -256,14 +251,13 @@ describe("link checks with blocked destinations", () => {
       async (_input: string | URL | Request) => new Response("<html></html>"),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { results, errors } = await checkLinks({
+    const results = await checkLinks({
       links: [
         { page: "README.md", href: "http://rebind.attacker.example/", text: "a" },
         { page: "README.md", href: "http://[fd00::1]/#x", text: "b" },
         { page: "README.md", href: "https://example.com/", text: "c" },
       ],
     });
-    expect(errors).toEqual([]);
     const byHref = Object.fromEntries(results.map((link) => [link.href, link.result]));
     expect(byHref["http://rebind.attacker.example/"]).toMatchObject({
       ok: false,

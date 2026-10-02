@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { getGlobstarParent, matchGlob, parseGlob } from "./glob";
+import { createGlobMatcher, parseGlob } from "./glob";
+
+const matchGlob = (glob: string, text: string): boolean => createGlobMatcher(glob)(text);
 
 describe("parseGlob()", () => {
   it("splits literals and wildcards, runs of 2+ stars are one globstar", () => {
@@ -16,7 +18,7 @@ describe("parseGlob()", () => {
   });
 });
 
-describe("matchGlob()", () => {
+describe("createGlobMatcher()", () => {
   it("matches the whole text literally without wildcards", () => {
     expect(matchGlob("https://example.com/a", "https://example.com/a")).toBe(true);
     expect(matchGlob("https://example.com/a", "https://example.com/a/b")).toBe(false);
@@ -68,17 +70,9 @@ describe("matchGlob()", () => {
     // Not for other wildcards at the end
     expect(matchGlob("https://x.com/*", "https://x.com")).toBe(false);
     expect(matchGlob("https://x.com**", "https://x.com")).toBe(true);
-  });
-
-  it("getGlobstarParent() strips a trailing `/**` (any run of 2+ stars) only", () => {
-    expect(getGlobstarParent("https://a.com/**")).toBe("https://a.com");
-    expect(getGlobstarParent("https://a.com/***")).toBe("https://a.com");
-    expect(getGlobstarParent("https://a.com/*")).toBeUndefined();
-    expect(getGlobstarParent("https://a.com**")).toBeUndefined();
-    expect(getGlobstarParent("https://a.com/")).toBeUndefined();
-    expect(getGlobstarParent("/**")).toBe("");
-    expect(getGlobstarParent("**")).toBeUndefined();
+    // `/**` alone (empty parent) only matches the empty text under the globstar, not dropping the `/` too
     expect(matchGlob("/**", "")).toBe(false);
+    expect(matchGlob("/**", "/")).toBe(true);
   });
 
   it("stays fast on inputs that make backtracking matchers explode", () => {

@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HostLimiter, parseRetryAfter, Semaphore, withTimeout } from "./limiter";
-import { getHostConcurrencyLimit, setHostLimiter } from "./utils";
+import {
+  HostLimiter,
+  parseHostConcurrency,
+  parseRetryAfter,
+  Semaphore,
+  withTimeout,
+} from "./limiter";
+import { setHostLimiter } from "./run";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -145,15 +151,15 @@ describe("withTimeout()", () => {
   });
 });
 
-describe("getHostConcurrencyLimit()", () => {
+describe("parseHostConcurrency()", () => {
   it("defaults to 8 and can be configured", () => {
-    expect(getHostConcurrencyLimit(undefined)).toBe(8);
-    expect(getHostConcurrencyLimit("")).toBe(8);
-    expect(getHostConcurrencyLimit("3")).toBe(3);
+    expect(parseHostConcurrency(undefined)).toBe(8);
+    expect(parseHostConcurrency("")).toBe(8);
+    expect(parseHostConcurrency("3")).toBe(3);
   });
 
   it.each(["0", "-1", "1.5", "abc"])("rejects %s", (value) => {
-    expect(() => getHostConcurrencyLimit(value)).toThrow("LINK_CHECK_HOST_CONCURRENCY");
+    expect(() => parseHostConcurrency(value)).toThrow("LINK_CHECK_HOST_CONCURRENCY");
   });
 });
 
@@ -183,12 +189,14 @@ describe("checkLinks() per-host limit", () => {
       }),
     );
     const { checkLinks } = await import("./link");
+    const { withRun } = await import("./run");
     const links = [
       ...Array.from({ length: 30 }, (_, i) => `https://busy.example.com/page-${i}`),
       ...Array.from({ length: 5 }, (_, i) => `https://quiet.example.com/page-${i}`),
     ].map((href) => ({ href, page: "https://example.com", text: "" }));
 
-    const { results } = await checkLinks({ links });
+    // checkLinks() starts its own run, so it needs the host concurrency in its config (not setHostLimiter())
+    const results = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
 
     expect(results).toHaveLength(35);
     expect(results.every((r) => r.result.ok)).toBe(true);

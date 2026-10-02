@@ -26,7 +26,7 @@ const links: LinkWithResult[] = [
   },
 ];
 
-const html = renderReportToHTML(getJSONReport({ links, errors: [], siteName: `<b>site</b>` }));
+const html = renderReportToHTML(getJSONReport({ links, siteName: `<b>site</b>` }));
 const $ = cheerio.load(html);
 
 describe("renderReportToHTML()", () => {
@@ -72,7 +72,6 @@ describe("renderReportToHTML() with ignored links", () => {
       { ...links[0]!, href: "https://broken.com/" },
       { ...links[0]!, href: "https://ignored.com/", page: "docs/a.md", line: 7 },
     ],
-    errors: [],
     siteName: "site",
     baseline: createBaseline([{ href: "https://ignored.com/", reason: "<i>known</i>" }]),
   });
@@ -105,7 +104,6 @@ describe("renderReportToHTML() for local files", () => {
   });
   const report = getJSONReport({
     siteName: "local files",
-    errors: [],
     links: [
       local("docs/guide.md", "../missing.md", 7),
       local("docs/guide.md", "#nope", 3),

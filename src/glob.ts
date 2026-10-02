@@ -88,26 +88,21 @@ const matchGlobTokens = (tokens: GlobToken[], text: string): boolean => {
 };
 
 /**
- * For a glob ending with `/` and a globstar (`docs/**`), the glob without them (`docs`), otherwise `undefined`
+ * `true` if `glob` ends with a literal `/` followed by a run of 2+ stars, with at least one character before
+ * that `/` (so `x/**` counts, but `/**` alone, with an empty parent, does not)
  */
-export const getGlobstarParent = (glob: string): string | undefined => {
+const endsWithGlobstarSuffix = (glob: string): boolean => {
   let end = glob.length;
   while (end > 0 && glob[end - 1] === "*") end--;
-  if (glob.length - end < 2 || end === 0 || glob[end - 1] !== "/") {
-    return undefined;
-  }
-  return glob.slice(0, end - 1);
+  return glob.length - end >= 2 && end > 1 && glob[end - 1] === "/";
 };
 
 /** Returns a matcher for the glob (parsed once) */
 export const createGlobMatcher = (glob: string): ((text: string) => boolean) => {
   const tokens = parseGlob(glob);
-  const parent = getGlobstarParent(glob);
-  // `x/**` matches `x` itself too (an empty parent, from `/**`, would match the empty text only)
-  const parentTokens = parent ? parseGlob(parent) : undefined;
+  // `x/**` matches `x` itself too: matching `text + "/"` against the same tokens covers it, the trailing
+  // globstar then matches the empty string instead of the dropped `/`.
+  const alsoMatchesParent = endsWithGlobstarSuffix(glob);
   return (text) =>
-    matchGlobTokens(tokens, text) ||
-    (parentTokens !== undefined && matchGlobTokens(parentTokens, text));
+    matchGlobTokens(tokens, text) || (alsoMatchesParent && matchGlobTokens(tokens, `${text}/`));
 };
-
-export const matchGlob = (glob: string, text: string): boolean => createGlobMatcher(glob)(text);

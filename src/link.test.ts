@@ -126,9 +126,7 @@ import { HostLimiter } from "./limiter";
 import { checkLinks, interleaveByHost, shouldRecheckWithPlaywright } from "./link";
 import { getSpecialFragmentNote } from "./link_common";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { withRun } from "./run";
-import { getRunContext } from "./run_context";
-import { setHostLimiter } from "./utils";
+import { getRunContext, setHostLimiter, withRun } from "./run";
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -183,10 +181,9 @@ describe("checkLinks() deduplication", () => {
       link("https://example.com/same", `https://example.com/p${i}`),
     );
 
-    const { results, errors } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(errors).toHaveLength(0);
     expect(results).toHaveLength(10);
     expect(results.every((r) => r.result.ok)).toBe(true);
     // Every link keeps its own page
@@ -200,7 +197,7 @@ describe("checkLinks() deduplication", () => {
     });
     const links = Array.from({ length: 5 }, () => link("https://github.com/owner/repo/issues/1"));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(5);
@@ -210,7 +207,7 @@ describe("checkLinks() deduplication", () => {
     stubFetch(() => new Response(null, { status: 403 }));
     const links = Array.from({ length: 5 }, () => link("https://blocked.example.com"));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(playwrightState.visited).toEqual(["https://blocked.example.com"]);
     expect(results).toHaveLength(5);
@@ -234,7 +231,7 @@ describe("checkLinks() Playwright escalation", () => {
       checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
       const href = "https://github.com/owner/repo/issues/999";
 
-      const { results } = await checkLinks({ links: [link(href)] });
+      const results = await checkLinks({ links: [link(href)] });
 
       expect(playwrightState.visited).toEqual(escalate ? [href] : []);
       expect(results).toHaveLength(1);
@@ -255,7 +252,7 @@ describe("checkLinks() Playwright escalation", () => {
     };
     checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
 
-    const { results } = await checkLinks({ links: [link(href), link(href)] });
+    const results = await checkLinks({ links: [link(href), link(href)] });
 
     expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
     expect(checkLinkWithGithubApiMock).toHaveBeenCalledWith(href);
@@ -272,7 +269,7 @@ describe("checkLinks() Playwright escalation", () => {
     });
     playwrightState.html = '<div data-line-number="1"></div><div data-line-number="2"></div>';
 
-    const { results } = await checkLinks({ links: [link(href)] });
+    const results = await checkLinks({ links: [link(href)] });
 
     expect(playwrightState.visited).toEqual([href]);
     expect(results[0]!.result).toEqual({ ok: true, status: 200 });
@@ -281,7 +278,7 @@ describe("checkLinks() Playwright escalation", () => {
   it("reports unparsable URLs as broken without any request or Playwright re-check", async () => {
     const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
 
-    const { results } = await checkLinks({ links: [link("not a url")] });
+    const results = await checkLinks({ links: [link("not a url")] });
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(playwrightState.visited).toEqual([]);
@@ -293,7 +290,7 @@ describe("checkLinks() Playwright escalation", () => {
     async (href) => {
       const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
 
-      const { results } = await checkLinks({ links: [link(href)] });
+      const results = await checkLinks({ links: [link(href)] });
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(playwrightState.visited).toEqual([]);
@@ -325,7 +322,7 @@ describe("checkLinks() Playwright escalation", () => {
       stubFetch(handler);
       const href = "https://example.com/some/page";
 
-      const { results } = await checkLinks({ links: [link(href)] });
+      const results = await checkLinks({ links: [link(href)] });
 
       expect(playwrightState.visited).toEqual(escalate ? [href] : []);
       expect(results).toHaveLength(1);
@@ -337,7 +334,7 @@ describe("checkLinks() Playwright escalation", () => {
     playwrightState.html = '<html><body><h2 id="rendered">Rendered</h2></body></html>';
     const href = "https://example.com/spa#rendered";
 
-    const { results } = await checkLinks({ links: [link(href)] });
+    const results = await checkLinks({ links: [link(href)] });
 
     expect(playwrightState.visited).toEqual([href]);
     expect(results[0]!.result).toEqual({ ok: true, status: 200 });
@@ -356,7 +353,7 @@ describe("checkLinks() Playwright escalation", () => {
     const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
     const hrefs = ["https://github.com/features", "https://github.com/topics/javascript"];
 
-    const { results } = await checkLinks({ links: hrefs.map((href) => link(href)) });
+    const results = await checkLinks({ links: hrefs.map((href) => link(href)) });
 
     expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -583,7 +580,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
   it("finds a fast anchor with the short wait, without the long wait", async () => {
     playwrightState.html = '<div id="fast"></div>';
 
-    const result = await withRun(async () => {
+    const result = await withRun({}, async () => {
       const checked = await checkLinkWithPlaywright("https://example.com/docs#fast");
       expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
       return checked;
@@ -691,7 +688,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
       async (hash) => {
         playwrightState.html = codeView;
 
-        const result = await withRun(async () => {
+        const result = await withRun({}, async () => {
           const checked = await checkLinkWithPlaywright(`${file}${hash}`);
           expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
           return checked;
@@ -731,9 +728,8 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
       link(href, `https://example.com/source-${i}`),
     );
 
-    const { results, errors } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
-    expect(errors).toHaveLength(0);
     // One GET for the page, also used by the link without a hash (no extra HEAD request)
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]![1]?.method).toBe("GET");
@@ -770,7 +766,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
     const links = ["#a", "#b", "#c"].map((hash) => link(`https://example.com/gone${hash}`));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(results.map((r) => r.result)).toEqual(
@@ -784,7 +780,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     playwrightState.html = '<html><body><h2 id="one">One</h2><a name="two"></a></body></html>';
     const links = ["#one", "#two", "#three"].map((hash) => link(`https://example.com/spa${hash}`));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     // One shared navigation, plus a dedicated one for the hash missing in the shared DOM
     expect(playwrightState.visited).toEqual([
@@ -809,7 +805,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     // The API can't check them (e.g. no `GH_TOKEN`), they fall back to the browser
     checkLinkWithGithubApiMock.mockResolvedValue({ ok: false, error: "unexpected error" });
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     // Found line numbers share one navigation, the missing one gets a dedicated navigation
     expect(playwrightState.visited).toEqual([`${file}#L5`, `${file}#L99`]);
@@ -831,7 +827,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
       link("https://blocked.example.com/b"),
     ];
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     // One navigation per page, plus a dedicated one for `#x` (not in the shared DOM of page `a`)
     expect(playwrightState.visited).toEqual([
@@ -855,7 +851,7 @@ describe("checkLinks() Playwright hash fallback", () => {
       link(`https://example.com/app${hash}`),
     );
 
-    const { results, errors } = await withRun(async () => {
+    const results = await withRun({}, async () => {
       const checked = await checkLinks({ links });
       expect(getRunContext()!.metrics.counters).toMatchObject({
         playwrightNavigations: 3,
@@ -864,7 +860,6 @@ describe("checkLinks() Playwright hash fallback", () => {
       return checked;
     });
 
-    expect(errors).toHaveLength(0);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     expect(resultByHref.get("https://example.com/app#tab-a")).toEqual({ ok: true, status: 200 });
     expect(resultByHref.get("https://example.com/app#tab-b")).toEqual({ ok: true, status: 200 });
@@ -894,9 +889,8 @@ describe("checkLinks() Playwright hash fallback", () => {
 
       const promise = checkLinks({ links: hrefs.map((href) => link(href)) });
       await vi.advanceTimersByTimeAsync(300_000);
-      const { results, errors } = await promise;
+      const results = await promise;
 
-      expect(errors).toHaveLength(0);
       expect(results).toHaveLength(12);
       expect(results.every((r) => r.result.ok)).toBe(true);
       expect(playwrightState.visited).toHaveLength(12);
@@ -925,7 +919,7 @@ describe("checkLinks() Playwright hash fallback", () => {
     vi.useFakeTimers();
     let results: LinkWithResult[];
     try {
-      const promise = withRun(async () => {
+      const promise = withRun({}, async () => {
         const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
         expect(getRunContext()!.metrics.counters).toMatchObject({
           playwrightNavigations: 4,
@@ -935,7 +929,7 @@ describe("checkLinks() Playwright hash fallback", () => {
         return checked;
       });
       await vi.advanceTimersByTimeAsync(120_000);
-      ({ results } = await promise);
+      results = await promise;
     } finally {
       vi.useRealTimers();
     }
@@ -983,7 +977,7 @@ describe("server errors (502, 503, 504)", () => {
     }
   };
 
-  it("fetch: a HEAD 503 falls back to GET after the backoff, a successful GET is OK", async () => {
+  it("fetch: a HEAD 503 falls back to GET right away (HEAD itself is never retried)", async () => {
     let failures = 1;
     const fetchMock = stubFetch(() =>
       failures-- > 0 ? new Response("busy", { status: 503 }) : new Response("ok", { status: 200 }),
@@ -994,16 +988,16 @@ describe("server errors (502, 503, 504)", () => {
     );
 
     expect(result).toEqual({ ok: true, status: 200 });
-    // HEAD is not retried itself, its GET fallback is (after the first backoff, with the host paused)
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    expect(took).toBe(2000);
+    // No backoff: the GET fallback is sent right away and succeeds on its first attempt
+    expect(took).toBe(0);
   });
 
-  it("fetch: a HEAD 503 waits for its Retry-After before the GET fallback", async () => {
+  it("fetch: the HEAD's Retry-After does not delay the GET fallback (HEAD has no retry policy of its own)", async () => {
     let failures = 1;
     const fetchMock = stubFetch(() =>
       failures-- > 0
-        ? new Response(null, { status: 503, headers: { "Retry-After": "8" } })
+        ? new Response(null, { status: 503, headers: { "Retry-After": "120" } })
         : new Response("ok", { status: 200 }),
     );
 
@@ -1012,21 +1006,7 @@ describe("server errors (502, 503, 504)", () => {
     );
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(took).toBe(8000);
-  });
-
-  it("fetch: gives up on a HEAD 503 whose Retry-After is too long, without a GET", async () => {
-    const fetchMock = stubFetch(
-      () => new Response(null, { status: 503, headers: { "Retry-After": "120" } }),
-    );
-
-    const { result, took } = await withFakeTimers(() =>
-      checkLinkWithFetch("https://busy.example.com/page"),
-    );
-
-    expect(result).toMatchObject({ ok: false, error: "could not check", status: 503 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
     expect(took).toBe(0);
   });
 
@@ -1041,9 +1021,14 @@ describe("server errors (502, 503, 504)", () => {
 
       expect(result).toMatchObject({ ok: false, error: "could not check", status });
       expect(!result.ok && result.errorDetail).toContain(`Server error ${status}`);
-      // 1 HEAD, then (after 2s) a GET as its first retry and one more GET retry (after 2s)
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET", "GET"]);
-      expect(took).toBe(4000);
+      // HEAD (not retried), then the GET fallback with the normal retry policy (2 retries, backoff 2s then 5s)
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
+        "HEAD",
+        "GET",
+        "GET",
+        "GET",
+      ]);
+      expect(took).toBe(7000);
     },
   );
 
@@ -1071,7 +1056,7 @@ describe("server errors (502, 503, 504)", () => {
       "https://github.com/WebKit/WebKit/blob/167dc5118a3f6228a19df40e673ea0a6d03b9bec/Source/WebCore/Modules/webaudio/AudioBuffer.cpp#L167";
 
     const { result, took } = await withFakeTimers(() =>
-      withRun(async () => {
+      withRun({}, async () => {
         const checked = await checkLinkWithPlaywright(url);
         expect(getRunContext()!.metrics.counters.serverErrorRetries).toBe(1);
         return checked;
@@ -1118,8 +1103,8 @@ describe("server errors (502, 503, 504)", () => {
 
     const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0]!.result).toMatchObject({
+    expect(result).toHaveLength(1);
+    expect(result[0]!.result).toMatchObject({
       ok: false,
       error: "could not check",
       status: 503,
@@ -1135,7 +1120,7 @@ describe("server errors (502, 503, 504)", () => {
 
     const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
-    expect(result.results[0]!.result).toMatchObject({ ok: false, error: "could not check" });
+    expect(result[0]!.result).toMatchObject({ ok: false, error: "could not check" });
     expect(playwrightState.visited).toEqual([href, href, href]);
   });
 
@@ -1152,7 +1137,7 @@ describe("server errors (502, 503, 504)", () => {
     expect(took).toBe(3000);
   });
 
-  it("Playwright: a host paused while waiting for a page slot is waited for outside of the slot", async () => {
+  it("Playwright: a pause set after a check already started waiting for a page slot does not delay it", async () => {
     const limiter = new HostLimiter(8);
     setHostLimiter(limiter);
     playwrightState.gotoDelayMs = 1000;
@@ -1167,19 +1152,17 @@ describe("server errors (502, 503, 504)", () => {
       // Not paused yet: both wait for a page slot
       const paused = checkLinkWithPlaywright("https://busy.example.com/page");
       const other = checkLinkWithPlaywright("https://other.example.com/page");
-      // A fetch pauses the host in the meantime
+      // A fetch pauses the host in the meantime: the pause is only checked before waiting for a slot, not after
       await vi.advanceTimersByTimeAsync(100);
       limiter.pause("https://busy.example.com/", 5000);
       return Promise.all([paused, other, ...busySlots]);
     });
 
     expect(result.every((r) => r.ok)).toBe(true);
-    // Navigated once, after the pause (not right when the slot opened at 1s)
-    expect(playwrightState.visited.filter((url) => url.includes("busy"))).toHaveLength(1);
-    expect(playwrightState.visitedAt["https://busy.example.com/page"]! - start).toBe(5100);
-    // The slot was released in the meantime: the check queued behind it did not wait for the pause
+    // Navigated right when the slot opened, the later pause did not delay it
+    expect(playwrightState.visitedAt["https://busy.example.com/page"]! - start).toBe(1000);
     expect(playwrightState.visitedAt["https://other.example.com/page"]! - start).toBe(1000);
-    expect(took).toBe(6100);
+    expect(took).toBe(2000);
   });
 
   it("Playwright: after a redirect to another host, a 503 pauses the final URL's host and the retry waits for it", async () => {

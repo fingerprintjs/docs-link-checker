@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withRun } from "./run";
 import {
   formatRunMetrics,
+  getHostLimiter,
   getRunContext,
   incrementMetric,
+  isPrivateHostsAllowed,
   runCached,
   timePhase,
-} from "./run_context";
+  withRun,
+} from "./run";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -15,9 +17,9 @@ afterEach(() => {
 describe("run context", () => {
   it("nested runs join the outer run", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    await withRun(async () => {
+    await withRun({}, async () => {
       const outer = getRunContext();
-      await withRun(async () => {
+      await withRun({}, async () => {
         expect(getRunContext()).toBe(outer);
       });
     });
@@ -26,7 +28,7 @@ describe("run context", () => {
 
   it("logs metrics and phase timings at the end of the run", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    await withRun(async () => {
+    await withRun({}, async () => {
       incrementMetric("totalLinks", 10);
       incrementMetric("uniqueUrls", 4);
       incrementMetric("playwrightNavigations");
@@ -48,6 +50,16 @@ describe("run context", () => {
     await runCached("key", fn);
     await runCached("key", fn);
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies the run's config to the host limiter and the SSRF guard setting", async () => {
+    expect(isPrivateHostsAllowed()).toBe(false);
+    await withRun({ hostConcurrency: 3, allowPrivateHosts: true }, async () => {
+      expect(getHostLimiter().limitPerHost).toBe(3);
+      expect(isPrivateHostsAllowed()).toBe(true);
+    });
+    // Outside of the run, the default context is unaffected
+    expect(isPrivateHostsAllowed()).toBe(false);
   });
 
   it("formats metrics", () => {
@@ -77,7 +89,7 @@ describe("checkLinks() metrics", () => {
       "https://example.com/q",
     ];
 
-    const counters = await withRun(async () => {
+    const counters = await withRun({}, async () => {
       await checkLinks({
         links: hrefs.map((href) => ({ href, page: "https://example.com", text: "" })),
       });
@@ -109,7 +121,7 @@ describe("checkLinks() metrics", () => {
     );
     const { checkLinks } = await import("./link");
 
-    const counters = await withRun(async () => {
+    const counters = await withRun({}, async () => {
       await checkLinks({
         links: [{ href: "https://example.com/old", page: "https://example.com", text: "" }],
       });

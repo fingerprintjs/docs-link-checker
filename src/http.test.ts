@@ -10,10 +10,8 @@ import {
   MAX_SERVER_ERROR_RETRIES,
 } from "./http";
 import { HostLimiter } from "./limiter";
-import { checkLinks } from "./link";
 import { getLinksFromPages, parseLinksFromPage } from "./page";
-import { setHostLimiter } from "./utils";
-import { checkWebsite } from "./website";
+import { setHostLimiter } from "./run";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -449,27 +447,6 @@ describe("unread response bodies are cancelled before the host slot is released"
   });
 });
 
-describe("invalid LINK_CHECK_HOST_CONCURRENCY", () => {
-  it.each([
-    [
-      "checkLinks",
-      () =>
-        checkLinks({
-          links: [{ href: "https://example.com/", page: "https://example.com", text: "" }],
-        }),
-    ],
-    ["checkWebsite", () => checkWebsite({ websiteUrl: "https://example.com" })],
-  ])("%s fails before doing any work", async (_name, run) => {
-    setHostLimiter(undefined);
-    vi.stubEnv("LINK_CHECK_HOST_CONCURRENCY", "abc");
-    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(run()).rejects.toThrow('Invalid LINK_CHECK_HOST_CONCURRENCY "abc"');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-});
-
 describe("page link extraction and rate limiting", () => {
   const html = '<a href="https://example.com/target">Target</a>';
 
@@ -509,6 +486,6 @@ describe("page link extraction and rate limiting", () => {
     expect(links).toHaveLength(1);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.item).toBe("https://docs.example.com/limited");
-    expect(errors[0]!.message).toContain("status: 429");
+    expect(String(errors[0]!.error)).toContain("status: 429");
   });
 });

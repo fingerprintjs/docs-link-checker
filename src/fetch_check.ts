@@ -2,9 +2,9 @@ import { DestinationNotAllowedError } from "./destination";
 import { type AnchorIndex, buildAnchorIndex, isHashInAnchorIndex } from "./hash";
 import {
   fetchWithHostLimit,
-  formatServerErrorRetry,
-  getServerErrorRetryDelay,
-  MAX_SERVER_ERROR_RETRIES,
+  getRandomUserAgent,
+  OKAY_STATUS_CODES,
+  TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./http";
 import {
   getBlockedDestinationResult,
@@ -14,16 +14,8 @@ import {
   shouldSpoofUserAgent,
   stripHash,
 } from "./link_common";
-import { incrementMetric } from "./run_context";
+import { incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
-import {
-  getHostLimiter,
-  getRandomUserAgent,
-  log,
-  OKAY_STATUS_CODES,
-  TRANSIENT_SERVER_ERROR_STATUS_CODES,
-} from "./utils";
-import { getErrorMessage } from "./utils/errors";
 
 /**
  * A failed HEAD request is retried once with GET: some servers refuse HEAD (403, 405, 501) and some answer it
@@ -60,7 +52,7 @@ const lazyAnchorIndex = (html: string) => {
  */
 const fetchPage = async (
   url: string,
-  { needBody, verbose = false }: { needBody: boolean; verbose?: boolean },
+  { needBody }: { needBody: boolean },
 ): Promise<FetchedPage> => {
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {
@@ -69,12 +61,12 @@ const fetchPage = async (
 
   // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
   // unread bodies are cancelled (see `fetchWithHostLimit`).
-  // A HEAD request is not retried after a server error: the GET fallback is (see `shouldRetryHeadWithGet`), and the
-  // HEAD counts as the first attempt, so a failing server gets at most `1 + MAX_SERVER_ERROR_RETRIES` requests
-  const request = (method: "GET" | "HEAD", serverErrorRetries?: number) =>
+  // HEAD is sent with no server-error retries, so a failing server is not asked for it twice before the GET
+  // fallback (see `shouldRetryHeadWithGet`), which gets the normal retry policy.
+  const request = (method: "GET" | "HEAD") =>
     fetchWithHostLimit(
       url,
-      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : serverErrorRetries },
+      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : undefined },
       async (response) =>
         // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
         // An error page body is kept for the error detail (HEAD responses have none).
@@ -87,21 +79,7 @@ const fetchPage = async (
     let response = await request(needBody ? "GET" : "HEAD");
     // Some servers don't support (or block) HEAD requests, or answer them differently, retry once with GET
     if (!needBody && shouldRetryHeadWithGet(response.status)) {
-      // A server error on HEAD follows the server error retry policy before the GET: wait for `Retry-After` (or the
-      // backoff) with the whole host paused, or give up when it asks for too long. The GET is its first retry.
-      let getServerErrorRetries: number | undefined;
-      if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-        const delayMs = getServerErrorRetryDelay(0, response.headers.get("Retry-After"));
-        if (delayMs === undefined) {
-          return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
-        }
-        console.log(formatServerErrorRetry(url, response.status, delayMs));
-        incrementMetric("serverErrorRetries");
-        getHostLimiter().pause(url, delayMs);
-        getServerErrorRetries = MAX_SERVER_ERROR_RETRIES - 1;
-      }
-      log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-      response = await request("GET", getServerErrorRetries);
+      response = await request("GET");
     }
 
     // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
@@ -145,7 +123,6 @@ const fetchPage = async (
     if (error instanceof DestinationNotAllowedError) {
       return { ok: false, result: getBlockedDestinationResult(error) };
     }
-    log(`Something went wrong: ${getErrorMessage(error)}`, verbose);
     return {
       ok: false,
       result: {
@@ -170,22 +147,17 @@ export class PageFetchCache {
    */
   constructor(private readonly pagesWithHash: ReadonlySet<string> = new Set()) {}
 
-  get(pageUrl: string, needBody: boolean, verbose = false): Promise<FetchedPage> {
+  get(pageUrl: string, needBody: boolean): Promise<FetchedPage> {
     const getKey = `GET ${pageUrl}`;
     const useGet = needBody || this.pagesWithHash.has(pageUrl) || this.pages.has(getKey);
     const key = useGet ? getKey : `HEAD ${pageUrl}`;
     let page = this.pages.get(key);
     if (!page) {
       incrementMetric("uniquePagesFetched");
-      page = fetchPage(pageUrl, { needBody: useGet, verbose });
+      page = fetchPage(pageUrl, { needBody: useGet });
       this.pages.set(key, page);
     }
     return page;
-  }
-
-  /** Number of distinct page fetches */
-  get size() {
-    return this.pages.size;
   }
 }
 
@@ -204,8 +176,6 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
     return { ok: true, status: page.status, note };
   }
 
-  // Note: GitHub `#L12` line links no longer work server-side, since GitHub switched to client-side rendering 🤦
-  // Playwright fallback still works. The check is kept in case GitHub switches back to server-side rendering.
   if (!page.getAnchors || !isHashInAnchorIndex(page.getAnchors(), hash, url)) {
     return { ok: false, status: page.status, error: "hash not found" };
   }
@@ -215,13 +185,11 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
 /**
  * Check a link with fetch, assuming page is server-side rendered
  * @param url link URL
- * @param verbose log details
  * @param pageCache share page fetches between links (links to the same page with different hashes fetch it once)
  * @returns LinkCheckResult, a URL that cannot be parsed is reported as a broken link
  */
 export const checkLinkWithFetch = async (
   url: string,
-  verbose = false,
   pageCache?: PageFetchCache,
 ): Promise<LinkCheckResult> => {
   // A URL that cannot be parsed (or is not http(s)) is a broken link, not an exception
@@ -241,11 +209,7 @@ export const checkLinkWithFetch = async (
   const needBody = hasHash(url);
   const pageUrl = stripHash(url);
   const page = pageCache
-    ? await pageCache.get(pageUrl, needBody, verbose)
-    : await fetchPage(pageUrl, { needBody, verbose });
-  const result = getResultFromPage(page, url);
-  if (result.ok) {
-    log(`OK`, verbose);
-  }
-  return result;
+    ? await pageCache.get(pageUrl, needBody)
+    : await fetchPage(pageUrl, { needBody });
+  return getResultFromPage(page, url);
 };

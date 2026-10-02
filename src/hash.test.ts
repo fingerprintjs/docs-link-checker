@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { describe, expect, it } from "vitest";
-import { cssString, decodeHash, getHashSelectors, isHashPresentInHtml } from "./hash";
+import {
+  buildAnchorIndex,
+  cssString,
+  decodeHash,
+  getHashSelectors,
+  isHashInAnchorIndex,
+} from "./hash";
 
 const html = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 const PAGE = "https://example.com/docs";
@@ -53,43 +59,20 @@ describe("cssString", () => {
   it("escapes every non-printable character, so any hash gives a valid selector", () => {
     expect(cssString("a\u0001b\u001fc\u007fd")).toBe('"a\\1 b\\1f c\\7f d"');
     // A control character in a hash (`#%01section`) must not break the selector
-    expect(isHashPresentInHtml('<h2 id="\u0001section">A</h2>', "#%01section", PAGE)).toBe(true);
+    const index = buildAnchorIndex('<h2 id="\u0001section">A</h2>');
+    expect(isHashInAnchorIndex(index, "#%01section")).toBe(true);
   });
 });
 
-describe("isHashPresentInHtml()", () => {
+describe("buildAnchorIndex() / isHashInAnchorIndex()", () => {
+  const index = buildAnchorIndex(html);
+
   it.each(existingHashes)("finds %s", (hash) => {
-    expect(isHashPresentInHtml(html, hash, PAGE)).toBe(true);
+    expect(isHashInAnchorIndex(index, hash)).toBe(true);
   });
 
   it.each(missingHashes)("does not find (or throw for) %s", (hash) => {
-    expect(isHashPresentInHtml(html, hash, PAGE)).toBe(false);
-  });
-
-  it("finds GitHub line numbers only for GitHub code line links", () => {
-    expect(isHashPresentInHtml(html, "#L12", "https://github.com/o/r/blob/main/a.js#L12")).toBe(
-      true,
-    );
-    expect(
-      isHashPresentInHtml(html, "#L12-L20", "https://github.com/o/r/blob/main/a.js#L12-L20"),
-    ).toBe(true);
-    expect(isHashPresentInHtml(html, "#L13", "https://github.com/o/r/blob/main/a.js#L13")).toBe(
-      false,
-    );
-    expect(isHashPresentInHtml(html, "#L12", `${PAGE}#L12`)).toBe(false);
-  });
-
-  it("finds the first line of GitHub code line links with columns", () => {
-    expect(
-      isHashPresentInHtml(
-        html,
-        "#L12C5-L20C1",
-        "https://github.com/o/r/blob/main/a.js#L12C5-L20C1",
-      ),
-    ).toBe(true);
-    expect(isHashPresentInHtml(html, "#L13C1", "https://github.com/o/r/blob/main/a.js#L13C1")).toBe(
-      false,
-    );
+    expect(isHashInAnchorIndex(index, hash)).toBe(false);
   });
 });
 

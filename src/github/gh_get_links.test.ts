@@ -15,8 +15,13 @@ vi.mock("./github_client", () => ({
 }));
 
 import { HostLimiter } from "../limiter";
-import { setHostLimiter } from "../utils";
-import { checkReadmesInGithubOrg, getReadmeLinks, getReadmesFromOrg } from "./gh_get_links";
+import { setHostLimiter } from "../run";
+import {
+  checkReadmesInGithubOrg,
+  getReadmeLinks,
+  getReadmesFromOrg,
+  resolveReadmeHref,
+} from "./gh_get_links";
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
   full_name: `org/${name}`,
@@ -90,6 +95,21 @@ describe("checkReadmesInGithubOrg()", () => {
     await expect(checkReadmesInGithubOrg("org")).rejects.toThrow(
       "Failed to list repositories of GitHub organization org: Not Found",
     );
+  });
+});
+
+describe("resolveReadmeHref()", () => {
+  const page = "https://github.com/fingerprintjs/repository/blob/main/folder/README.md";
+
+  it.each([
+    ["https://other.com", "https://other.com"],
+    ["#section", `${page}#section`],
+    ["/nested/folder", "https://github.com/fingerprintjs/repository/blob/main/nested/folder"],
+    ["/nested/file.md", "https://github.com/fingerprintjs/repository/blob/main/nested/file.md"],
+    ["../sibling.md", "https://github.com/fingerprintjs/repository/blob/main/sibling.md"],
+    ["sibling.md", "https://github.com/fingerprintjs/repository/blob/main/folder/sibling.md"],
+  ])("resolves %s to %s", (href, expected) => {
+    expect(resolveReadmeHref(href, page)).toBe(expected);
   });
 });
 

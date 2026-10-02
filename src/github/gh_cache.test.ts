@@ -6,10 +6,9 @@ const { octokit } = vi.hoisted(() => ({
 
 vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 
-import { withRun } from "../run";
-import { getRunContext } from "../run_context";
+import { getRunContext, withRun } from "../run";
 import { checkGitHubBlobLink } from "./checks/gh_blob";
-import { checkIfRepositoryExists } from "./checks/gh_repo";
+import { checkIfRepositoryExists } from "./checks/gh_simple";
 import { getContentCached, getRepoCached } from "./gh_cache";
 
 const delayed = <T>(value: T, ms = 10) =>
@@ -35,7 +34,7 @@ afterEach(() => {
 
 describe("GitHub API cache", () => {
   it("dedupes concurrent calls for the same (owner, repo, ref, path) within a run", async () => {
-    await withRun(async () => {
+    await withRun({}, async () => {
       const responses = await Promise.all(
         Array.from({ length: 10 }, () => getContentCached(params)),
       );
@@ -47,7 +46,7 @@ describe("GitHub API cache", () => {
   });
 
   it("caches different refs and paths separately", async () => {
-    await withRun(async () => {
+    await withRun({}, async () => {
       await Promise.all([
         getContentCached(params),
         getContentCached({ ...params, ref: "develop" }),
@@ -59,7 +58,7 @@ describe("GitHub API cache", () => {
   });
 
   it("caches repositories (case-insensitive)", async () => {
-    await withRun(async () => {
+    await withRun({}, async () => {
       await Promise.all([
         getRepoCached("owner", "repo"),
         getRepoCached("Owner", "Repo"),
@@ -76,8 +75,8 @@ describe("GitHub API cache", () => {
   });
 
   it("does not share the cache between runs", async () => {
-    await withRun(() => getContentCached(params));
-    await withRun(() => getContentCached(params));
+    await withRun({}, () => getContentCached(params));
+    await withRun({}, () => getContentCached(params));
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
   });
 
@@ -87,7 +86,7 @@ describe("GitHub API cache", () => {
       Object.assign(new Error("Server Error"), { status: 502 }),
     );
 
-    await withRun(async () => {
+    await withRun({}, async () => {
       expect(await checkIfRepositoryExists("owner", "gone")).toMatchObject({
         ok: false,
         status: 404,
@@ -109,7 +108,7 @@ describe("GitHub API cache", () => {
     async (status) => {
       octokit.repos.get.mockRejectedValue(Object.assign(new Error("Denied"), { status }));
 
-      await withRun(async () => {
+      await withRun({}, async () => {
         for (let i = 0; i < 2; i++) {
           expect(await checkIfRepositoryExists("owner", "repo")).toMatchObject({
             ok: false,
@@ -124,7 +123,7 @@ describe("GitHub API cache", () => {
 
   it("checks many hashes of the same file with one API request", async () => {
     const hashes = ["", "#title", "#usage", "#missing"];
-    const results = await withRun(() =>
+    const results = await withRun({}, () =>
       Promise.all(
         hashes.map((hash) =>
           checkGitHubBlobLink(
@@ -142,7 +141,7 @@ describe("GitHub API cache", () => {
   });
 
   it("counts cache hits in the run metrics (requests are counted by the Octokit client)", async () => {
-    await withRun(async () => {
+    await withRun({}, async () => {
       await Promise.all([
         getContentCached(params),
         getContentCached(params),
