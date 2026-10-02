@@ -89,11 +89,10 @@ vi.mock("playwright", () => {
   return { chromium: { launch: vi.fn(launch) } };
 });
 
-import { closeBrowser, getBrowser, withPage } from "./browser";
+import { closeBrowser, getBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
 import { withRun } from "./run";
-import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
@@ -132,9 +131,8 @@ describe("shared browser", () => {
       link(`https://blocked-${i}.example.com/page`),
     );
 
-    const { results, errors } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
-    expect(errors).toHaveLength(0);
     expect(results).toHaveLength(20);
     expect(state.visited).toHaveLength(20);
     expect(state.launches).toBe(1);
@@ -228,17 +226,24 @@ describe("shared browser", () => {
       vi.fn(async () => new Response(null, { status: 403 })),
     );
 
-    const { results, errors } = await checkLinks({
+    const results = await checkLinks({
       links: [link("https://blocked.example.com/a"), link("https://blocked.example.com/a#x")],
     });
 
-    expect(results).toHaveLength(0);
-    // One error per link, like before
-    expect(errors.map((error) => error.item.href)).toEqual([
+    // One "unexpected error" result per link, like any other failure
+    expect(results.map((result) => result.href)).toEqual([
       "https://blocked.example.com/a",
       "https://blocked.example.com/a#x",
     ]);
-    expect(errors[0]!.message).toContain("Executable doesn't exist");
+    expect(
+      results.every((result) => !result.result.ok && result.result.error === "unexpected error"),
+    ).toBe(true);
+    expect(
+      results.every(
+        (result) =>
+          !result.result.ok && result.result.errorDetail?.includes("Executable doesn't exist"),
+      ),
+    ).toBe(true);
   });
 });
 

@@ -1,7 +1,6 @@
 import * as cheerio from "cheerio";
-import { fetchWithHostLimit } from "./http";
+import { fetchWithHostLimit, getRandomUserAgent } from "./http";
 import { Semaphore } from "./limiter";
-import { getRandomUserAgent } from "./utils";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;

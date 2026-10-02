@@ -257,14 +257,13 @@ describe("link checks with blocked destinations", () => {
       async (_input: string | URL | Request) => new Response("<html></html>"),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { results, errors } = await checkLinks({
+    const results = await checkLinks({
       links: [
         { page: "README.md", href: "http://rebind.attacker.example/", text: "a" },
         { page: "README.md", href: "http://[fd00::1]/#x", text: "b" },
         { page: "README.md", href: "https://example.com/", text: "c" },
       ],
     });
-    expect(errors).toEqual([]);
     const byHref = Object.fromEntries(results.map((link) => [link.href, link.result]));
     expect(byHref["http://rebind.attacker.example/"]).toMatchObject({
       ok: false,

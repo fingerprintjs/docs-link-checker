@@ -8,7 +8,14 @@ import {
 import { assertDestinationAllowed, DestinationNotAllowedError } from "./destination";
 import { isGithubCodeLineLink } from "./github/gh_url";
 import { getHashSelectors } from "./hash";
-import { formatServerErrorRetry, getServerErrorRetryDelay } from "./http";
+import {
+  FORBIDDEN_STATUS_CODES,
+  formatServerErrorRetry,
+  getRandomUserAgent,
+  getServerErrorRetryDelay,
+  OKAY_STATUS_CODES,
+  TRANSIENT_SERVER_ERROR_STATUS_CODES,
+} from "./http";
 import { withTimeout } from "./limiter";
 import {
   getBlockedDestinationResult,
@@ -18,12 +25,6 @@ import {
 } from "./link_common";
 import { getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
-import {
-  FORBIDDEN_STATUS_CODES,
-  getRandomUserAgent,
-  OKAY_STATUS_CODES,
-  TRANSIENT_SERVER_ERROR_STATUS_CODES,
-} from "./utils";
 
 /** Waits up to `timeout` for an element matching `selector` to be in the DOM */
 async function waitForSelectorAttached(page: Page, selector: string, timeout: number) {

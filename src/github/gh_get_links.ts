@@ -6,7 +6,7 @@ import { filterOutIrrelevantLinks } from "../page";
 import { DEFAULT_OUTPUT_DIR, getJSONReport, saveReport } from "../report/report";
 import { type RunConfig, timePhase, withRun } from "../run";
 import type { Link } from "../types";
-import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { formatConcurrentErrors, parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_cache";
 import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
@@ -104,9 +104,6 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
   const { results, errors } = await parallelProcess({
     items: files,
-    // Downloads wait for a per-host slot (all files are on raw.githubusercontent.com),
-    // every request has its own timeout instead of the task timeout
-    taskTimeout: null,
     processFn: async (file) => {
       const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
         res.ok ? res.text() : "",
@@ -121,7 +118,7 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
 
   if (errors.length > 0) {
     console.error(
-      `Errors fetching files and extracting links: ${errors.length}\n${formatPoolErrors(errors)}`,
+      `Errors fetching files and extracting links: ${errors.length}\n${formatConcurrentErrors(errors)}`,
     );
   }
   const links = results.flat();
@@ -166,14 +163,10 @@ export const checkReadmesInGithubOrg = (
     const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
     const filteredLinks = filterOutIrrelevantLinks(links);
 
-    const { results, errors } = await checkLinks({
-      links: filteredLinks,
-      fetchConcurrencyLimit: 20,
-    });
+    const results = await checkLinks({ links: filteredLinks, fetchConcurrencyLimit: 20 });
 
     const report = getJSONReport({
       links: results,
-      errors,
       siteName: getGithubOrgSiteName(org),
       baseline,
     });

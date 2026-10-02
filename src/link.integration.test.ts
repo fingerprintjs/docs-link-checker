@@ -176,7 +176,7 @@ describe("checkLinks() GitHub code line links", () => {
 
       const { results, metrics } = await withRun({}, async () => {
         const checked = await checkLinks({ links });
-        return { ...checked, metrics: { ...getRunContext()!.metrics.counters } };
+        return { results: checked, metrics: { ...getRunContext()!.metrics.counters } };
       });
 
       const resultFor = (hash: string) => results.find((r) => r.href === `${file}${hash}`)?.result;

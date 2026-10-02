@@ -1,6 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PromisePoolError } from "@supercharge/promise-pool";
 import { renderToStaticMarkup } from "react-dom/server";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
@@ -12,32 +11,15 @@ type IgnoredLink = LinkWithResult & { ignoreReason?: string };
 
 type GetReportArgs = {
   links: LinkWithResult[];
-  errors: PromisePoolError<Link>[];
   siteName: string;
   /** Failing links matching the baseline are moved to `ignored` and don't count towards `totalLinksToFix` */
   baseline?: Baseline;
 };
 
-export const getJSONReport = ({
-  links,
-  errors,
-  siteName,
-  baseline = EMPTY_BASELINE,
-}: GetReportArgs) => {
-  const allResults: LinkWithResult[] = [
-    ...links,
-    ...errors.map(
-      (error) =>
-        ({
-          ...error.item,
-          result: { ok: false, error: "unexpected error", errorDetail: error.message, status: 0 },
-        }) satisfies LinkWithResult,
-    ),
-  ];
-
+export const getJSONReport = ({ links, siteName, baseline = EMPTY_BASELINE }: GetReportArgs) => {
   const ignored: IgnoredLink[] = [];
   const notIgnored: LinkWithResult[] = [];
-  for (const link of allResults) {
+  for (const link of links) {
     const entry = link.result.ok ? undefined : baseline.findEntry(link);
     if (entry) {
       ignored.push(entry.reason ? { ...link, ignoreReason: entry.reason } : link);

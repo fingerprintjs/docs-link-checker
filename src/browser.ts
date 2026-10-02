@@ -2,7 +2,9 @@ import { type Browser, chromium, type Page, type Route } from "playwright";
 import { isBlockedUrlLiteral } from "./destination";
 import { Semaphore } from "./limiter";
 import { closeRunBrowser, getBrowserSlot, incrementMetric, isPrivateHostsAllowed } from "./run";
-import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
+
+// How many Playwright pages (browser contexts) are open at the same time
+export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
 
 // Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own
 export const PAGE_OPERATION_TIMEOUT = 30000;

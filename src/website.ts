@@ -53,11 +53,10 @@ export const checkWebsite = ({
     );
     console.log(`Fetched ${links.length} links.`);
 
-    const { results, errors } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     const report = getJSONReport({
       links: results,
-      errors,
       siteName: new URL(websiteUrl).hostname,
       baseline,
     });

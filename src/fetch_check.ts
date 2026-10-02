@@ -3,9 +3,12 @@ import { type AnchorIndex, buildAnchorIndex, isHashInAnchorIndex } from "./hash"
 import {
   fetchWithHostLimit,
   formatServerErrorRetry,
+  getRandomUserAgent,
   getServerErrorRetryDelay,
   type LimitedResponse,
   MAX_SERVER_ERROR_RETRIES,
+  OKAY_STATUS_CODES,
+  TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./http";
 import {
   getBlockedDestinationResult,
@@ -17,11 +20,6 @@ import {
 } from "./link_common";
 import { getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
-import {
-  getRandomUserAgent,
-  OKAY_STATUS_CODES,
-  TRANSIENT_SERVER_ERROR_STATUS_CODES,
-} from "./utils";
 
 /**
  * A failed HEAD request is retried once with GET: some servers refuse HEAD (403, 405, 501) and some answer it

@@ -122,19 +122,19 @@ describe("getJSONReport() with a baseline", () => {
         text: "t",
         result: { ok: false, error: "could not check", status: 403 },
       },
-    ],
-    errors: [
-      // A pool error (like `PromisePoolError`, only `item` and `message` are used)
+      // A check that threw (see `checkLinks`): reported as an "unexpected error" result, like any other failure
       {
-        item: { href: "https://error.com/x", page: "p", text: "t" },
-        message: "boom",
-      } as never,
+        href: "https://error.com/x",
+        page: "p",
+        text: "t",
+        result: { ok: false, error: "unexpected error", errorDetail: "boom" },
+      },
     ],
   });
 
   it("moves matching failures to `ignored` with the reason, they don't count towards links to fix", () => {
     expect(report.summary).toEqual({
-      linksChecked: 4,
+      linksChecked: 5,
       totalLinksToFix: 1,
       brokenLinks: 1,
       hashNotFound: 0,
@@ -300,7 +300,6 @@ describe("linkcheck.baseline.json (used by the default checks)", () => {
       siteName: "test",
       baseline,
       links: knownCouldNotCheck,
-      errors: [],
     });
 
     expect(report.summary.couldNotCheck).toBe(0);
@@ -316,7 +315,7 @@ describe("linkcheck.baseline.json (used by the default checks)", () => {
       broken("https://github.com/fingerprintjs/fingerprintjs-pro-spa/blob/master/LICENSE"),
       broken("https://docs.flutter.dev/get-started/install/macos/mobile-ios"),
     ];
-    const report = getJSONReport({ siteName: "test", baseline, links: realBroken, errors: [] });
+    const report = getJSONReport({ siteName: "test", baseline, links: realBroken });
 
     expect(report.summary.ignored).toBe(0);
     expect(report.summary.brokenLinks).toBe(realBroken.length);

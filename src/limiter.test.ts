@@ -196,7 +196,7 @@ describe("checkLinks() per-host limit", () => {
     ].map((href) => ({ href, page: "https://example.com", text: "" }));
 
     // checkLinks() starts its own run, so it needs the host concurrency in its config (not setHostLimiter())
-    const { results } = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
+    const results = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
 
     expect(results).toHaveLength(35);
     expect(results.every((r) => r.result.ok)).toBe(true);

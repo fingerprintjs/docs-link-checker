@@ -486,6 +486,6 @@ describe("page link extraction and rate limiting", () => {
     expect(links).toHaveLength(1);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.item).toBe("https://docs.example.com/limited");
-    expect(errors[0]!.message).toContain("status: 429");
+    expect(String(errors[0]!.error)).toContain("status: 429");
   });
 });

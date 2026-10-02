@@ -26,7 +26,6 @@ const broken = (href: string, extra: Partial<LinkWithResult> = {}): LinkWithResu
 const report = (links: LinkWithResult[], baselineHrefs: string[] = []) =>
   getJSONReport({
     links,
-    errors: [],
     siteName: "local files",
     baseline: createBaseline(baselineHrefs.map((href) => ({ href }))),
   });

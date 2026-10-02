@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
-import { fetchWithHostLimit } from "./http";
+import { fetchWithHostLimit, getRandomUserAgent } from "./http";
 import type { Link } from "./types";
-import { getRandomUserAgent, parallelProcess } from "./utils";
+import { parallelProcess } from "./utils";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
 const isHttpUrl = (href: string) => {
@@ -101,8 +101,6 @@ export const getLinksFromPages = async ({
   const { results, errors } = await parallelProcess({
     items: pages,
     processFn: async (page: string) => parseLinksFromPage(page),
-    // Tasks can wait for a per-host slot, every request has its own timeout instead
-    taskTimeout: null,
   });
 
   // Flatten and filter results if a link filter is provided

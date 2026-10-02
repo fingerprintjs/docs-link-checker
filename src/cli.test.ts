@@ -201,7 +201,6 @@ describe("formatFileProblems()", () => {
   it("prints one line per link to fix, collapsing and shortening error details", () => {
     const report = getJSONReport({
       siteName: "local files",
-      errors: [],
       links: [
         {
           page: "a.md",

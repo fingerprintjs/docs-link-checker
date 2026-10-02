@@ -429,14 +429,10 @@ export const checkLocalFiles = ({
     }));
 
     const externalLinks = filterOutIrrelevantLinks(collected.external);
-    const { results, errors } =
-      externalLinks.length > 0
-        ? await checkLinks({ links: externalLinks })
-        : { results: [], errors: [] };
+    const results = externalLinks.length > 0 ? await checkLinks({ links: externalLinks }) : [];
 
     const report = getJSONReport({
       links: [...localResults, ...results],
-      errors,
       siteName: LOCAL_FILES_SITE_NAME,
       baseline,
     });

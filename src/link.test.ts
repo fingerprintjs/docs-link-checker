@@ -181,10 +181,9 @@ describe("checkLinks() deduplication", () => {
       link("https://example.com/same", `https://example.com/p${i}`),
     );
 
-    const { results, errors } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(errors).toHaveLength(0);
     expect(results).toHaveLength(10);
     expect(results.every((r) => r.result.ok)).toBe(true);
     // Every link keeps its own page
@@ -198,7 +197,7 @@ describe("checkLinks() deduplication", () => {
     });
     const links = Array.from({ length: 5 }, () => link("https://github.com/owner/repo/issues/1"));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(5);
@@ -208,7 +207,7 @@ describe("checkLinks() deduplication", () => {
     stubFetch(() => new Response(null, { status: 403 }));
     const links = Array.from({ length: 5 }, () => link("https://blocked.example.com"));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(playwrightState.visited).toEqual(["https://blocked.example.com"]);
     expect(results).toHaveLength(5);
@@ -232,7 +231,7 @@ describe("checkLinks() Playwright escalation", () => {
       checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
       const href = "https://github.com/owner/repo/issues/999";
 
-      const { results } = await checkLinks({ links: [link(href)] });
+      const results = await checkLinks({ links: [link(href)] });
 
       expect(playwrightState.visited).toEqual(escalate ? [href] : []);
       expect(results).toHaveLength(1);
@@ -253,7 +252,7 @@ describe("checkLinks() Playwright escalation", () => {
     };
     checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
 
-    const { results } = await checkLinks({ links: [link(href), link(href)] });
+    const results = await checkLinks({ links: [link(href), link(href)] });
 
     expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
     expect(checkLinkWithGithubApiMock).toHaveBeenCalledWith(href);
@@ -270,7 +269,7 @@ describe("checkLinks() Playwright escalation", () => {
     });
     playwrightState.html = '<div data-line-number="1"></div><div data-line-number="2"></div>';
 
-    const { results } = await checkLinks({ links: [link(href)] });
+    const results = await checkLinks({ links: [link(href)] });
 
     expect(playwrightState.visited).toEqual([href]);
     expect(results[0]!.result).toEqual({ ok: true, status: 200 });
@@ -279,7 +278,7 @@ describe("checkLinks() Playwright escalation", () => {
   it("reports unparsable URLs as broken without any request or Playwright re-check", async () => {
     const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
 
-    const { results } = await checkLinks({ links: [link("not a url")] });
+    const results = await checkLinks({ links: [link("not a url")] });
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(playwrightState.visited).toEqual([]);
@@ -291,7 +290,7 @@ describe("checkLinks() Playwright escalation", () => {
     async (href) => {
       const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
 
-      const { results } = await checkLinks({ links: [link(href)] });
+      const results = await checkLinks({ links: [link(href)] });
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(playwrightState.visited).toEqual([]);
@@ -323,7 +322,7 @@ describe("checkLinks() Playwright escalation", () => {
       stubFetch(handler);
       const href = "https://example.com/some/page";
 
-      const { results } = await checkLinks({ links: [link(href)] });
+      const results = await checkLinks({ links: [link(href)] });
 
       expect(playwrightState.visited).toEqual(escalate ? [href] : []);
       expect(results).toHaveLength(1);
@@ -335,7 +334,7 @@ describe("checkLinks() Playwright escalation", () => {
     playwrightState.html = '<html><body><h2 id="rendered">Rendered</h2></body></html>';
     const href = "https://example.com/spa#rendered";
 
-    const { results } = await checkLinks({ links: [link(href)] });
+    const results = await checkLinks({ links: [link(href)] });
 
     expect(playwrightState.visited).toEqual([href]);
     expect(results[0]!.result).toEqual({ ok: true, status: 200 });
@@ -354,7 +353,7 @@ describe("checkLinks() Playwright escalation", () => {
     const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
     const hrefs = ["https://github.com/features", "https://github.com/topics/javascript"];
 
-    const { results } = await checkLinks({ links: hrefs.map((href) => link(href)) });
+    const results = await checkLinks({ links: hrefs.map((href) => link(href)) });
 
     expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -729,9 +728,8 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
       link(href, `https://example.com/source-${i}`),
     );
 
-    const { results, errors } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
-    expect(errors).toHaveLength(0);
     // One GET for the page, also used by the link without a hash (no extra HEAD request)
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]![1]?.method).toBe("GET");
@@ -768,7 +766,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
     const links = ["#a", "#b", "#c"].map((hash) => link(`https://example.com/gone${hash}`));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(results.map((r) => r.result)).toEqual(
@@ -782,7 +780,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     playwrightState.html = '<html><body><h2 id="one">One</h2><a name="two"></a></body></html>';
     const links = ["#one", "#two", "#three"].map((hash) => link(`https://example.com/spa${hash}`));
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     // One shared navigation, plus a dedicated one for the hash missing in the shared DOM
     expect(playwrightState.visited).toEqual([
@@ -807,7 +805,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     // The API can't check them (e.g. no `GH_TOKEN`), they fall back to the browser
     checkLinkWithGithubApiMock.mockResolvedValue({ ok: false, error: "unexpected error" });
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     // Found line numbers share one navigation, the missing one gets a dedicated navigation
     expect(playwrightState.visited).toEqual([`${file}#L5`, `${file}#L99`]);
@@ -829,7 +827,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
       link("https://blocked.example.com/b"),
     ];
 
-    const { results } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
     // One navigation per page, plus a dedicated one for `#x` (not in the shared DOM of page `a`)
     expect(playwrightState.visited).toEqual([
@@ -853,7 +851,7 @@ describe("checkLinks() Playwright hash fallback", () => {
       link(`https://example.com/app${hash}`),
     );
 
-    const { results, errors } = await withRun({}, async () => {
+    const results = await withRun({}, async () => {
       const checked = await checkLinks({ links });
       expect(getRunContext()!.metrics.counters).toMatchObject({
         playwrightNavigations: 3,
@@ -862,7 +860,6 @@ describe("checkLinks() Playwright hash fallback", () => {
       return checked;
     });
 
-    expect(errors).toHaveLength(0);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     expect(resultByHref.get("https://example.com/app#tab-a")).toEqual({ ok: true, status: 200 });
     expect(resultByHref.get("https://example.com/app#tab-b")).toEqual({ ok: true, status: 200 });
@@ -892,9 +889,8 @@ describe("checkLinks() Playwright hash fallback", () => {
 
       const promise = checkLinks({ links: hrefs.map((href) => link(href)) });
       await vi.advanceTimersByTimeAsync(300_000);
-      const { results, errors } = await promise;
+      const results = await promise;
 
-      expect(errors).toHaveLength(0);
       expect(results).toHaveLength(12);
       expect(results.every((r) => r.result.ok)).toBe(true);
       expect(playwrightState.visited).toHaveLength(12);
@@ -933,7 +929,7 @@ describe("checkLinks() Playwright hash fallback", () => {
         return checked;
       });
       await vi.advanceTimersByTimeAsync(120_000);
-      ({ results } = await promise);
+      results = await promise;
     } finally {
       vi.useRealTimers();
     }
@@ -1116,8 +1112,8 @@ describe("server errors (502, 503, 504)", () => {
 
     const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0]!.result).toMatchObject({
+    expect(result).toHaveLength(1);
+    expect(result[0]!.result).toMatchObject({
       ok: false,
       error: "could not check",
       status: 503,
@@ -1133,7 +1129,7 @@ describe("server errors (502, 503, 504)", () => {
 
     const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
-    expect(result.results[0]!.result).toMatchObject({ ok: false, error: "could not check" });
+    expect(result[0]!.result).toMatchObject({ ok: false, error: "could not check" });
     expect(playwrightState.visited).toEqual([href, href, href]);
   });
 
