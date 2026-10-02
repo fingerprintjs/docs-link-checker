@@ -1,4 +1,5 @@
 import type { DestinationNotAllowedError } from "./destination";
+import { MAX_SERVER_ERROR_RETRIES } from "./http";
 import type { LinkCheckResult } from "./types";
 
 /** Result for a link to a private or local address: never requested, not counted as broken */
@@ -9,6 +10,17 @@ export const getBlockedDestinationResult = (
   error: "could not check",
   errorDetail: error.message,
   destinationBlocked: true,
+});
+
+/**
+ * Result for a 502, 503 or 504 that persisted after the retries (`TRANSIENT_SERVER_ERROR_STATUS_CODES`): the server
+ * is overloaded or rate limiting (github.com returns 503 under load), it says nothing about the link
+ */
+export const getServerErrorResult = (status: number, statusText: string): LinkCheckResult => ({
+  ok: false,
+  error: "could not check",
+  status,
+  errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
 });
 
 /** The URL without its hash (`https://example.com/page#section` -> `https://example.com/page`) */

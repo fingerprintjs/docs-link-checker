@@ -14,7 +14,7 @@ describe("checkGitHubReleaseLink", () => {
     });
   });
 
-  it("should return error for latest release when no releases exist", async () => {
+  it("should return broken link for the latest release of a non-existent repository", async () => {
     const result = await checkGitHubReleaseLink("fingerprintjs", "nonexistent-repo", [
       "releases",
       "latest",
@@ -22,8 +22,8 @@ describe("checkGitHubReleaseLink", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      error: "unexpected error",
-      status: 500,
+      error: "broken link",
+      status: 404,
     });
   });
 

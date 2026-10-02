@@ -79,7 +79,7 @@ A baseline (ignore) file lists known false positives and accepted broken links. 
 
 - Every entry has exactly one of:
   - `href`: the exact link, as reported (the resolved URL for websites and GitHub, the link as written for local files).
-  - `pattern`: a glob. `**` matches anything, `*` anything except `/`, everything else (including `?`, `.`, `+`, `(`, `[`) is literal. A plain string entry is a shorthand for `{ "pattern": "..." }`. At most 2048 characters.
+  - `pattern`: a glob. `**` matches anything, `*` anything except `/`, everything else (including `?`, `.`, `+`, `(`, `[`) is literal. A pattern ending with `/**` also matches what comes before it: `https://example.com/**` matches `https://example.com` (no trailing slash) too. A plain string entry is a shorthand for `{ "pattern": "..." }`. At most 2048 characters.
 - `page` (optional): only ignore the link on this page (an exact value or a glob, for example `docs/**`).
 - `reason` (optional): shown in the report.
 - Regular expressions are not supported on purpose (a `regex` key is rejected): the file is user input, and a pattern like `(a+)+$` could make the check hang ([ReDoS](https://owasp.org/www-community/attacks/Regular_expression_Denial_of_Service_-_ReDoS)). Globs are matched without regular expressions, in linear time.
@@ -159,19 +159,27 @@ jobs:
 - Node.js version is defined in `.nvmrc` (and `engines.node`), pnpm version in the `packageManager` field of `package.json` (use `corepack enable` or install the matching pnpm).
 - The project is ESM (`"type": "module"`). TypeScript runs directly with `tsx` (link checks) and vitest (tests), `tsc` only type-checks.
 - `pnpm install`, `pnpm run tsc`, `pnpm test` (single run) or `pnpm run test:watch`.
-- Format with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`.oxfmtrc.json`, also sorts imports) and lint with [oxlint](https://oxc.rs/docs/guide/usage/linter) (`.oxlintrc.json`). The linter runs type-aware rules (floating promises, `any` leaks, unsafe type assertions, deprecated APIs), limits function complexity (`sonarjs/cognitive-complexity`) and size, and bans skipped and focused tests. Warnings fail too.
+
+* Format with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`.oxfmtrc.json`, also sorts imports) and lint with [oxlint](https://oxc.rs/docs/guide/usage/linter) (`.oxlintrc.json`). The linter runs type-aware rules (floating promises, `any` leaks, unsafe type assertions, deprecated APIs), limits function complexity (`sonarjs/cognitive-complexity`) and size, and bans skipped and focused tests. Warnings fail too.
   - `pnpm run check` runs everything CI runs except tests: formatter check, linter, suppression check, `tsc` and [knip](https://knip.dev/) (unused files, exports and dependencies).
   - `pnpm run check:fix` formats and applies safe lint fixes, `pnpm run lint` only lints, `pnpm run format` only formats.
   - Fix findings instead of suppressing them. A suppression (`// oxlint-disable-next-line rule -- reason`) needs a reason, and their number is capped (`pnpm run lint:suppressions`, `checks/lint_suppressions.ts`).
+
 - `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch`, the GitHub API and Playwright, and need no network or `GH_TOKEN`.
-- `pnpm run test:coverage` runs them with coverage (CI). It fails when coverage drops below the thresholds in `vitest.config.js`.
+
+* `pnpm run test:coverage` runs them with coverage (CI). It fails when coverage drops below the thresholds in `vitest.config.js`.
+
 - `pnpm run test:integration` runs integration tests (`*.integration.test.ts`) against real websites and the GitHub API. They need network access, Playwright's Chromium and a `GH_TOKEN` environment variable.
 - The package scripts used by the workflow (`pnpm run checkLinks:docs`, `checkLinks:github`, `checkLinks:web`) run the [CLI](#cli) (`site` and `github-org` commands), `pnpm run checkLinks:files` checks this README. They need a `GH_TOKEN` environment variable (can also be set in a `.env` file). They exit with code 1 when broken links are found. Set `FAIL_ON_BROKEN_LINKS=false` to only report them. The `site` and `github-org` scripts use the [baseline file](#baseline-file) `linkcheck.baseline.json` at the repository root: it ignores links on hosts that require a login or block automated clients (they would always be "could not check"). Add hosts there with a `reason`, never real broken links.
-- Code map: `src/cli.ts` (CLI), `src/website.ts` (`site`), `src/github/gh_get_links.ts` (`github-org`), `src/local_files.ts` (`files`), `src/link.ts` (`checkLinks`, the shared checking pipeline), `src/fetch_check.ts` and `src/playwright_check.ts` (single link checks), `src/baseline.ts`, `src/report/report.tsx` (JSON and HTML reports), `src/github_actions.ts` (job summary, annotations, step outputs), `action.yml` (reusable action).
+
+* Code map: `src/cli.ts` (CLI), `src/website.ts` (`site`), `src/github/gh_get_links.ts` (`github-org`), `src/local_files.ts` (`files`), `src/link.ts` (`checkLinks`, the shared checking pipeline), `src/fetch_check.ts` and `src/playwright_check.ts` (single link checks), `src/baseline.ts`, `src/report/report.tsx` (JSON and HTML reports), `src/github_actions.ts` (job summary, annotations, step outputs), `action.yml` (reusable action).
+
 - Set `LINK_CHECK_SAMPLE_RATE` (a number between `0` and `1`, default `1`) to check only a part of the pages (website sitemap pages, GitHub README files). The sample is deterministic (pages are sorted, then every Nth page is picked) and has at least one page. On pull requests, the workflow uses `LINK_CHECK_SAMPLE_RATE=0.1` to keep CI fast. On `main` and manual runs, it checks everything.
 - Set `LINK_CHECK_HOST_CONCURRENCY` (a positive integer, default `8`) to change the maximum number of concurrent `fetch` requests to a single host. It applies to every `fetch` request of a run (sitemaps, source pages, README downloads, link checks), and to every redirect hop (limited by the host it goes to). A `429` response with `Retry-After` pauses requests to that host, and the request is retried. Sitemaps are also limited to 5 concurrent fetches overall. GitHub API requests are limited by Octokit instead, and Playwright navigations by the browser's page limit.
-- Links without a hash are checked with `HEAD`. Any failed `HEAD` response (except `429`) is retried once with `GET`: some servers refuse `HEAD` and some answer it differently (support.google.com and chatgpt.com return `404` to `HEAD` and `200` to `GET`).
-- Hashes not found in the server HTML are checked in Chromium: each anchor is waited for up to 3 seconds. If the anchor of the URL the page was opened with is still missing, the checker keeps waiting for it, 15 seconds in total (client-side rendered docs like Mintlify and the Terraform Registry add some anchors late, even after the page looks idle). Anchors that appear earlier return right away, a missing anchor of the opened URL takes the whole 15 seconds. GitHub code line links (`#L12`, `#L12-L15`) are checked against the line numbers of the rendered code view instead. Text fragments (`:~:`), `#/` and Google Help accordion states (`#zippy=...` on support.google.com) are accepted without an element.
+- A `502`, `503` or `504` (an overloaded server, github.com also returns `503` under load) is retried twice, after 2s and 5s, or after `Retry-After` if it asks for longer (at most 10s, a longer `Retry-After` is not waited for). Like a `429`, the retry pauses all requests to that host, Playwright navigations included. If the error persists (also in the browser), the link is reported as "could not check" with the status, not as broken. The wait adds at most 20s per request or navigation. GitHub API requests are retried by Octokit (3 times on 5xx), a persisting server error is re-checked with Playwright.
+- Links without a hash are checked with `HEAD`. Any failed `HEAD` response (except `429`) is retried once with `GET` (a `HEAD` server error is not retried itself, the `GET` is): some servers refuse `HEAD` and some answer it differently (support.google.com and chatgpt.com return `404` to `HEAD` and `200` to `GET`).
+- Hashes not found in the server HTML are checked in Chromium: each anchor is waited for up to 3 seconds. If the anchor of the URL the page was opened with is still missing, the checker keeps waiting for it, 15 seconds in total (client-side rendered docs like Mintlify and the Terraform Registry add some anchors late, even after the page looks idle). Anchors that appear earlier return right away, a missing anchor of the opened URL takes the whole 15 seconds. Text fragments (`:~:`), `#/` and Google Help accordion states (`#zippy=...` on support.google.com) are accepted without an element.
+- GitHub code line links (`#L12`, `#L12-L15`, with columns `#L12C5-L15C1`, on `github.com/<owner>/<repo>/blob/...`) are checked with the GitHub API, not in the browser (github.com refuses blob pages to headless browsers on CI runners with `503`): the file is read once per run (files over 1 MB with the blob API) and its last linked line must be in the file (lines start at 1, ranges go forward, `#L0` is invalid, a trailing newline does not count as a line, binary files have no lines). On a rendered markdown file (without `?plain=1`), a heading slug like `l12` is accepted too. Branch and tag names with slashes (`blob/feature/x/src/a.ts`, any number of segments, also in `tree/...` links) are resolved when the first segment is not a ref with the file: the branches and tags starting with it are listed once per repository and first segment (cached for the run), the longest one the URL starts with is the ref. A missing file or repository (`404`, also private repositories the token can't see, or `410` Gone) is a broken link. If the API can't answer (no `GH_TOKEN`, a bad token `401`, `403` (rate limited after Octokit's retry, or no access), `429`, server or network errors), the link falls back to the browser, which checks the line numbers of the rendered code view (a persisting `503` there is "could not check").
 - GitHub URLs are decoded before they are passed to the GitHub API (tags like `%40scope%2Fpkg%401.0.0`), and `https://github.com/<owner>` is checked as a user or organization (and as a page if the API doesn't know the account). GitHub's own pages (`/features`, `/topics/...`, `/marketplace/...`...) are checked as regular pages.
 - Each run launches one shared Chromium (only if needed) that blocks images, media, fonts and analytics scripts. Links to the same page with different hashes share one fetch or browser navigation, and GitHub API responses are cached for the run. The run metrics (links, unique URLs and pages, requests, navigations, duration per phase) are logged at the end.
 
@@ -183,7 +191,7 @@ jobs:
 - Fingerprint.com is only checked for links to our resources and GitHub, external links trigger too many false positives for now.
 - Link [text fragments](https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments) are not checked.
 - Code quality, test coverage and CI does not meet production standards.
-- Github `#L{number}` links still cause false positives sometimes.
+- GitHub `#L{number}` links are only checked against the number of lines of the file (not, e.g., whether the line still shows what the link meant).
 
 ## Motivation
 
@@ -208,7 +216,7 @@ So a proper documentation link checker must:
 - [x] Nicer Readme
 - [x] Clean up promise pool
 - [x] Run tests in CI
-- [ ] Fix Github `#L{number}` links occasional false positives
+- [x] Fix GitHub `#L{number}` links occasional false positives (checked with the GitHub API)
 - [ ] Add more tests for everything
 - [ ] Nicer report styling
 - [x] Add a linter and a formatter (oxlint, oxfmt)

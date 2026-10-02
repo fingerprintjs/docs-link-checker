@@ -90,6 +90,33 @@ describe("HostLimiter", () => {
     expect(Date.now() - otherStart).toBeLessThan(40);
   });
 
+  it("waitUntilResumed() waits for a pause without taking a slot", async () => {
+    const limiter = new HostLimiter(1);
+    let release!: () => void;
+    // The only slot stays busy, waitUntilResumed must not wait for it
+    const busy = limiter.run(
+      "https://paused.example.com/",
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    // Let the busy request start before the pause
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    limiter.pause("https://paused.example.com/a", 50);
+    const start = Date.now();
+    await limiter.waitUntilResumed("https://paused.example.com/b");
+    expect(Date.now() - start).toBeGreaterThanOrEqual(45);
+    expect(limiter.activeCount("https://paused.example.com/")).toBe(1);
+
+    const otherStart = Date.now();
+    await limiter.waitUntilResumed("https://other.example.com/");
+    await limiter.waitUntilResumed("not a url");
+    expect(Date.now() - otherStart).toBeLessThan(40);
+    release();
+    await busy;
+  });
+
   it("does not limit invalid URLs", async () => {
     const limiter = new HostLimiter(1);
     await expect(limiter.run("not a url", async () => "ok")).resolves.toBe("ok");

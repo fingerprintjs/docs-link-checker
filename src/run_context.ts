@@ -36,6 +36,8 @@ const METRICS = {
   // Every `fetch()` call: each redirect hop, 429 retry and HEAD-to-GET fallback counts
   httpRequests: "HTTP requests (incl. redirects, retries and HEAD-to-GET fallbacks)",
   playwrightNavigations: "Playwright navigations",
+  // Requests and navigations retried after a 502, 503 or 504 (included in the counts above)
+  serverErrorRetries: "Retries after a server error (502, 503, 504)",
   // A hash missing in the shared DOM of its page is re-checked with a dedicated navigation (included above)
   playwrightHashFallbacks: "Playwright hash fallbacks",
   // A hash missing on the page opened with it is waited for again after the full load (late-rendered anchors)

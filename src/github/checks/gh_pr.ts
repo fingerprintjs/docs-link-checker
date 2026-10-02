@@ -1,6 +1,6 @@
 import type { LinkCheckResult } from "../../types";
-import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
+import { getApiErrorResult } from "../gh_api_error";
 import { getMyOctokit } from "../github_client";
 
 /**
@@ -37,29 +37,10 @@ export const checkGitHubPullRequestLink = async (
   );
 
   if (error) {
-    const status = getErrorStatus(error);
-    if (status === 404) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: `Pull request #${prNumberPart} not found in repository ${owner}/${repo}`,
-      };
-    }
-    if (status === 429) {
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 429,
-        errorDetail: "GitHub API rate limit exceeded",
-      };
-    }
-    return {
-      ok: false,
-      error: "unexpected error",
-      status: 500,
-      errorDetail: String(error),
-    };
+    return getApiErrorResult(
+      error,
+      `Pull request #${prNumberPart} not found in repository ${owner}/${repo}`,
+    );
   }
 
   return { ok: true, status: 200 };

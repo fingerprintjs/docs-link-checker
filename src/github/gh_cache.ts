@@ -1,5 +1,5 @@
 import { incrementMetric, runCached } from "../run_context";
-import { getErrorStatus } from "../utils/errors";
+import { isNotFoundApiError } from "./gh_api_error";
 import { getMyOctokit } from "./github_client";
 
 /**
@@ -11,13 +11,15 @@ type Octokit = ReturnType<typeof getMyOctokit>;
 export type RepoResponse = Awaited<ReturnType<Octokit["repos"]["get"]>>;
 export type UserResponse = Awaited<ReturnType<Octokit["users"]["getByUsername"]>>;
 export type ContentResponse = Awaited<ReturnType<Octokit["repos"]["getContent"]>>;
+export type BlobResponse = Awaited<ReturnType<Octokit["git"]["getBlob"]>>;
+export type MatchingRef = Awaited<ReturnType<Octokit["git"]["listMatchingRefs"]>>["data"][number];
 
-// "Not found" is a definitive answer worth caching. Other errors (rate limits, 5xx) are retried on the next call.
-const isNotFound = (error: unknown) => getErrorStatus(error) === 404;
-
+// "Not found" is a definitive answer worth caching. Other errors (rate limits, 401/403, 5xx) are retried on the next
+// call.
+// `async`: a client that can't be created (no `GH_TOKEN`) rejects the promise instead of throwing
 const cachedRequest = <T>(key: string, request: () => Promise<T>): Promise<T> =>
-  runCached(`github:${key}`, request, {
-    cacheError: isNotFound,
+  runCached(`github:${key}`, async () => request(), {
+    cacheError: isNotFoundApiError,
     // Requests themselves are counted by the Octokit client (see `countRequests`)
     onHit: () => incrementMetric("githubCacheHits"),
   });
@@ -46,4 +48,30 @@ export const getContentCached = ({
   cachedRequest(
     `content:${JSON.stringify([owner.toLowerCase(), repo.toLowerCase(), ref, path])}`,
     () => getMyOctokit().repos.getContent({ owner, repo, ref, path }),
+  );
+
+/**
+ * `GET /repos/{owner}/{repo}/git/blobs/{sha}`, cached per blob (a blob never changes).
+ * For files over 1 MB, the contents API has no content, the blob API returns files up to 100 MB.
+ */
+export const getBlobCached = (owner: string, repo: string, sha: string): Promise<BlobResponse> =>
+  cachedRequest(`blob:${JSON.stringify([owner.toLowerCase(), repo.toLowerCase(), sha])}`, () =>
+    getMyOctokit().git.getBlob({ owner, repo, file_sha: sha }),
+  );
+
+/**
+ * `GET /repos/{owner}/{repo}/git/matching-refs/{ref}` (all pages): the branches (`heads/<prefix>`) or tags
+ * (`tags/<prefix>`) whose name starts with the prefix, cached per (owner, repo, ref prefix)
+ */
+export const getMatchingRefsCached = (
+  owner: string,
+  repo: string,
+  ref: string,
+): Promise<MatchingRef[]> =>
+  cachedRequest(
+    `matching-refs:${JSON.stringify([owner.toLowerCase(), repo.toLowerCase(), ref])}`,
+    () => {
+      const octokit = getMyOctokit();
+      return octokit.paginate(octokit.git.listMatchingRefs, { owner, repo, ref });
+    },
   );

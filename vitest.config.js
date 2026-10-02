@@ -24,7 +24,7 @@ export default defineConfig({
         "src/test_setup.ts",
       ],
       reporter: ["text-summary", "html"],
-      thresholds: { statements: 90, branches: 85, functions: 92, lines: 90 },
+      thresholds: { statements: 93, branches: 88, functions: 93, lines: 93 },
     },
   },
 });

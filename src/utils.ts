@@ -187,6 +187,9 @@ export const FETCH_TIMEOUT = 20000;
 export const OKAY_STATUS_CODES = [200, 301, 302, 303, 307, 308];
 // Some websites have ReCaptcha or other anti-scraping measures that prevent us from checking their links, let's ignore/collect them separately
 export const FORBIDDEN_STATUS_CODES = [403, 401];
+// The server is overloaded or restarting (or rate limiting, like github.com under load), says nothing about the link.
+// Retried with a backoff (see `getServerErrorRetryDelay`), reported as "could not check" if it persists.
+export const TRANSIENT_SERVER_ERROR_STATUS_CODES = [502, 503, 504];
 
 // Spoofed user agents to bypass some websites restrictions
 

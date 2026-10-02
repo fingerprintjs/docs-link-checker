@@ -1,6 +1,6 @@
 import type { LinkCheckResult } from "../../types";
-import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
+import { getApiErrorResult } from "../gh_api_error";
 import { getMyOctokit } from "../github_client";
 
 /**
@@ -40,22 +40,11 @@ export const checkGitHubIssueLink = async (
   );
 
   if (error) {
-    const status = getErrorStatus(error);
-    if (status === 404) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: `Issue #${issueNumber} not found in repository ${owner}/${repo}`,
-      };
-    }
-
-    return {
-      ok: false,
-      error: "unexpected error",
-      status: status,
-      errorDetail: String(error),
-    };
+    // 410: the issue was deleted
+    return getApiErrorResult(
+      error,
+      `Issue #${issueNumber} not found in repository ${owner}/${repo}`,
+    );
   }
 
   return { ok: true, status: 200 };

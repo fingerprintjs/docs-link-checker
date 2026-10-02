@@ -5,6 +5,7 @@ import { marked, type Token, type Tokens } from "marked";
 import { type Baseline, EMPTY_BASELINE } from "./baseline";
 import { getMarkdownAnchors } from "./github/checks/gh_blob";
 import { decodeHash } from "./hash";
+import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
 import { filterOutIrrelevantLinks } from "./page";
 import { getJSONReport, saveReport } from "./report/report";
@@ -139,7 +140,6 @@ const decodePath = (path: string) => {
   }
 };
 
-const GITHUB_LINE_HASH = /^L(\d+)(?:C\d+)?(?:-L(\d+)(?:C\d+)?)?$/;
 // GitHub prefixes ids in rendered markdown with `user-content-`, links work both with and without it
 const USER_CONTENT_PREFIX = "user-content-";
 
@@ -235,21 +235,15 @@ const resolveLocalTarget = (file: string, path: string, root: string): string =>
 };
 
 /** GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines */
-const checkLineAnchor = (target: string, hash: string, displayTarget: string): LinkCheckResult => {
-  const lineMatch = GITHUB_LINE_HASH.exec(hash);
-  if (!lineMatch) {
-    return { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
-  }
-  // Line numbers are 1-based, a range goes forward (`#L0`, `#L5-L0`, `#L9-L3` are not valid anchors)
-  const firstLine = Number(lineMatch[1]);
-  const lastLine = lineMatch[2] === undefined ? firstLine : Number(lineMatch[2]);
-  if (firstLine < 1 || lastLine < firstLine) {
-    return hashNotFound(`Invalid line anchor #${hash} (lines start at 1, ranges go forward)`);
-  }
-  const lineCount = readFileSync(target, "utf8").replace(/\n$/, "").split("\n").length;
-  return lastLine <= lineCount
-    ? { ok: true, status: 200 }
-    : hashNotFound(`${displayTarget} has only ${lineCount} lines`);
+const checkCodeFileHash = (
+  target: string,
+  hash: string,
+  displayTarget: string,
+): LinkCheckResult => {
+  const lineResult = parseLineAnchor(hash)
+    ? checkLineAnchor(hash, countLines(readFileSync(target, "utf8")), displayTarget)
+    : undefined;
+  return lineResult ?? { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
 };
 
 /** `#anchor` in a markdown file must match a heading (or HTML anchor), with or without GitHub's prefix */
@@ -335,7 +329,7 @@ export const checkLocalLink = (
   }
   return isMarkdownFile(target)
     ? checkMarkdownAnchor(target, hash, context)
-    : checkLineAnchor(target, hash, displayTarget);
+    : checkCodeFileHash(target, hash, displayTarget);
 };
 
 export type CollectedLinks = {

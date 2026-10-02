@@ -4,8 +4,10 @@ import { getReadmeLinks } from "./github/gh_get_links";
 import {
   fetchWithHostLimit,
   getRedirectMethod,
+  getServerErrorRetryDelay,
   MAX_RATE_LIMIT_RETRIES,
   MAX_REDIRECTS,
+  MAX_SERVER_ERROR_RETRIES,
 } from "./http";
 import { HostLimiter } from "./limiter";
 import { checkLinks } from "./link";
@@ -85,6 +87,138 @@ describe("fetchWithHostLimit()", () => {
 
     expect((await fetchWithHostLimit("https://limited.example.com/", {}, text)).status).toBe(429);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
+  /** Runs `request` with fake timers, returns the response and how long it took (simulated time) */
+  const withFakeTimers = async <T>(request: () => Promise<T>) => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.now();
+      let finishedAt = Number.NaN;
+      const promise = request().then((r) => {
+        finishedAt = Date.now();
+        return r;
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      return { response: await promise, took: finishedAt - start };
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it.each([502, 503, 504])(
+    "retries a %s with a backoff, then returns the success",
+    async (status) => {
+      setHostLimiter(new HostLimiter(2));
+      let failures = 2;
+      const fetchMock = stubFetch(() =>
+        failures-- > 0 ? new Response("busy", { status }) : new Response("ok", { status: 200 }),
+      );
+
+      const { response, took } = await withFakeTimers(() =>
+        fetchWithHostLimit("https://busy.example.com/", {}, text),
+      );
+
+      expect(response).toMatchObject({ status: 200, data: "ok" });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // 2s, then 5s
+      expect(took).toBe(7000);
+    },
+  );
+
+  it("returns the last 503 after the retries, cancelling every unread body", async () => {
+    setHostLimiter(new HostLimiter(2));
+    let cancelled = 0;
+    const fetchMock = stubFetch(
+      () =>
+        new Response(
+          new ReadableStream({
+            cancel: () => {
+              cancelled++;
+            },
+          }),
+          { status: 503 },
+        ),
+    );
+
+    const { response } = await withFakeTimers(() =>
+      fetchWithHostLimit("https://busy.example.com/", {}, async () => "not read"),
+    );
+
+    expect(response.status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_SERVER_ERROR_RETRIES + 1);
+    expect(cancelled).toBe(MAX_SERVER_ERROR_RETRIES + 1);
+  });
+
+  it("respects Retry-After (longer than the backoff) and pauses the host for queued requests", async () => {
+    setHostLimiter(new HostLimiter(1));
+    const events: Array<{ url: string; at: number }> = [];
+    let first = true;
+    stubFetch((url) => {
+      events.push({ url, at: Date.now() });
+      if (url.endsWith("/a") && first) {
+        first = false;
+        return new Response(null, { status: 503, headers: { "Retry-After": "8" } });
+      }
+      return new Response("ok", { status: 200 });
+    });
+
+    const { response, took } = await withFakeTimers(() =>
+      Promise.all([
+        fetchWithHostLimit("https://busy.example.com/a", {}, text),
+        fetchWithHostLimit("https://busy.example.com/b", {}, text),
+      ]),
+    );
+
+    expect(response.map((r) => r.status)).toEqual([200, 200]);
+    // The queued request waited for the pause too
+    expect(events.map((event) => [event.url.slice(-1), event.at - events[0]!.at])).toEqual([
+      ["a", 0],
+      ["b", 8000],
+      ["a", 8000],
+    ]);
+    expect(took).toBe(8000);
+  });
+
+  it("does not retry when Retry-After is longer than the maximum delay", async () => {
+    setHostLimiter(new HostLimiter(2));
+    const fetchMock = stubFetch(
+      () => new Response(null, { status: 503, headers: { "Retry-After": "3600" } }),
+    );
+
+    const { response, took } = await withFakeTimers(() =>
+      fetchWithHostLimit("https://busy.example.com/", {}, text),
+    );
+
+    expect(response.status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(took).toBe(0);
+  });
+
+  it("does not retry with `serverErrorRetries: 0`, or other 5xx statuses", async () => {
+    setHostLimiter(new HostLimiter(2));
+    const fetchMock = stubFetch(
+      (url) => new Response(null, { status: url.endsWith("/500") ? 500 : 503 }),
+    );
+
+    await fetchWithHostLimit("https://busy.example.com/503", { serverErrorRetries: 0 }, text);
+    await fetchWithHostLimit("https://busy.example.com/500", {}, text);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("getServerErrorRetryDelay() is bounded: backoff, Retry-After as a minimum, at most 10s", () => {
+    expect(getServerErrorRetryDelay(0, null)).toBe(2000);
+    expect(getServerErrorRetryDelay(1, null)).toBe(5000);
+    expect(getServerErrorRetryDelay(2, null)).toBeUndefined();
+    expect(getServerErrorRetryDelay(0, "0")).toBe(2000);
+    expect(getServerErrorRetryDelay(0, "7")).toBe(7000);
+    expect(getServerErrorRetryDelay(1, "10")).toBe(10_000);
+    expect(getServerErrorRetryDelay(0, "11")).toBeUndefined();
+    expect(getServerErrorRetryDelay(0, "invalid")).toBe(2000);
+    expect(getServerErrorRetryDelay(0, null, 0)).toBeUndefined();
   });
 });
 

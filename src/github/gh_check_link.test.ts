@@ -6,6 +6,8 @@ const { octokit } = vi.hoisted(() => {
   return {
     octokit: {
       notFound,
+      // Simulates a missing `GH_TOKEN`: `getMyOctokit` throws
+      noToken: false,
       users: { getByUsername: vi.fn() },
       repos: {
         get: vi.fn(),
@@ -13,29 +15,46 @@ const { octokit } = vi.hoisted(() => {
         getContent: vi.fn(),
         getCommit: vi.fn(),
       },
-      git: { getRef: vi.fn(), getCommit: vi.fn() },
+      issues: { get: vi.fn() },
+      pulls: { get: vi.fn() },
+      git: { getRef: vi.fn(), getCommit: vi.fn(), listMatchingRefs: vi.fn() },
+      // All pages of a list endpoint: the mocks return a single page
+      paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
+        (await fn(params)).data,
     },
   };
 });
 
-vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
+vi.mock("./github_client", () => ({
+  getMyOctokit: () => {
+    if (octokit.noToken) {
+      throw new Error("GH_TOKEN is not set. A GitHub token is required to check GitHub links.");
+    }
+    return octokit;
+  },
+}));
 
 import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./gh_check_link";
 import { decodePathSegment, getGithubPathSegments, isGithubReservedRoute } from "./gh_url";
 
 beforeEach(() => {
+  octokit.noToken = false;
   for (const fn of [
     octokit.users.getByUsername,
     octokit.repos.get,
     octokit.repos.getReleaseByTag,
     octokit.repos.getContent,
     octokit.repos.getCommit,
+    octokit.issues.get,
+    octokit.pulls.get,
     octokit.git.getRef,
     octokit.git.getCommit,
   ]) {
     fn.mockReset();
     fn.mockResolvedValue({ data: {} });
   }
+  octokit.git.listMatchingRefs.mockReset();
+  octokit.git.listMatchingRefs.mockResolvedValue({ data: [] });
 });
 
 describe("isGithubUrl", () => {
@@ -83,6 +102,16 @@ describe("isGithubCodeLineLink", () => {
     expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5-L10-L15")).toBe(
       false,
     );
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#L5C")).toBe(false);
+    expect(isGithubCodeLineLink("https://github.com/owner/repo/blob/main/file.js#l5")).toBe(false);
+  });
+
+  it("should return true for code line links with columns (same grammar as `parseLineAnchor`)", () => {
+    for (const hash of ["#L2C5", "#L2C5-L3C1", "#L2-L3C1", "#L2C5-L3", "#L2C5%2DL3C1"]) {
+      expect(isGithubCodeLineLink(`https://github.com/owner/repo/blob/main/file.js${hash}`)).toBe(
+        true,
+      );
+    }
   });
 });
 
@@ -341,5 +370,168 @@ describe("checkLinkWithGithubApi() with GitHub's own pages", () => {
     await checkLinkWithGithubApi("https://github.com/fingerprintjs");
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitHub API server errors", () => {
+  const serverError = (status: number) =>
+    Object.assign(new Error("Service Unavailable"), { status });
+
+  it("reports a repository check failing with a 5xx (after Octokit's retries) as unexpected error, not broken", async () => {
+    octokit.repos.get.mockRejectedValue(serverError(503));
+
+    const result = await checkLinkWithGithubApi("https://github.com/owner/busy-repo");
+
+    // Unexpected errors from the API are re-checked with Playwright (see `shouldRecheckWithPlaywright`)
+    expect(result).toMatchObject({ ok: false, error: "unexpected error", status: 503 });
+  });
+
+  it("still reports a missing repository as broken", async () => {
+    octokit.repos.get.mockRejectedValue(octokit.notFound());
+
+    const result = await checkLinkWithGithubApi("https://github.com/owner/missing-repo");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+
+  it("reports a tree check failing with a 5xx as unexpected error, not broken", async () => {
+    octokit.git.getRef.mockRejectedValue(octokit.notFound());
+    octokit.git.getCommit.mockRejectedValue(serverError(502));
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/some-branch");
+
+    expect(result).toMatchObject({ ok: false, error: "unexpected error", status: 502 });
+  });
+
+  it("still reports a missing branch or commit as broken", async () => {
+    octokit.git.getRef.mockRejectedValue(octokit.notFound());
+    octokit.git.getCommit.mockRejectedValue(
+      Object.assign(new Error("Unprocessable"), { status: 422 }),
+    );
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/missing");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+});
+
+describe("GitHub API 401 and 403 (bad token, rate limits after Octokit's retry, no access)", () => {
+  const apiError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { status });
+
+  it.each([401, 403])(
+    "reports %i as unexpected error (not broken) for every link type",
+    async (status) => {
+      octokit.users.getByUsername.mockRejectedValue(apiError(status));
+      octokit.repos.get.mockRejectedValue(apiError(status));
+      octokit.repos.getContent.mockRejectedValue(apiError(status));
+      octokit.repos.getReleaseByTag.mockRejectedValue(apiError(status));
+      octokit.repos.getCommit.mockRejectedValue(apiError(status));
+      octokit.issues.get.mockRejectedValue(apiError(status));
+      octokit.pulls.get.mockRejectedValue(apiError(status));
+      octokit.git.getRef.mockRejectedValue(apiError(status));
+      octokit.git.getCommit.mockRejectedValue(apiError(status));
+
+      for (const url of [
+        "https://github.com/someone",
+        "https://github.com/o/r",
+        "https://github.com/o/r/blob/main/a.ts",
+        "https://github.com/o/r/blob/main/a.ts#L3",
+        "https://github.com/o/r/tree/main",
+        "https://github.com/o/r/tree/main/src",
+        "https://github.com/o/r/releases/tag/v1.0.0",
+        "https://github.com/o/r/releases/download/v1.0.0/a.zip",
+        "https://github.com/o/r/commit/abc1234",
+        "https://github.com/o/r/issues/1",
+        "https://github.com/o/r/pull/1",
+      ]) {
+        // `unexpected error` is re-checked in the browser (see `shouldRecheckWithPlaywright`)
+        expect({ url, result: await checkLinkWithGithubApi(url) }).toMatchObject({
+          url,
+          result: { ok: false, error: "unexpected error", status },
+        });
+      }
+    },
+  );
+
+  it("reports a 403 of the commit lookup of a tree link as unexpected error", async () => {
+    octokit.git.getRef.mockRejectedValue(octokit.notFound());
+    octokit.git.getCommit.mockRejectedValue(apiError(403));
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/some-branch");
+
+    expect(result).toMatchObject({ ok: false, error: "unexpected error", status: 403 });
+  });
+
+  it("reports a deleted issue (410 Gone) as broken link", async () => {
+    octokit.issues.get.mockRejectedValue(apiError(410));
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/issues/1");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link", status: 410 });
+  });
+});
+
+describe("checkLinkWithGithubApi() with tree links", () => {
+  it("resolves branch names with slashes, with or without a path", async () => {
+    octokit.git.listMatchingRefs.mockImplementation(async ({ ref }: { ref: string }) => ({
+      data: ref === "heads/feature" ? [{ ref: "refs/heads/feature/a/b/c/d" }] : [],
+    }));
+    octokit.repos.getContent.mockImplementation(async ({ ref }: { ref: string }) => {
+      if (ref !== "feature/a/b/c/d") {
+        throw octokit.notFound();
+      }
+      return { data: [] };
+    });
+
+    expect(await checkLinkWithGithubApi("https://github.com/o/r/tree/feature/a/b/c/d/src")).toEqual(
+      { ok: true, status: 200 },
+    );
+    // The listing proves the branch exists
+    expect(await checkLinkWithGithubApi("https://github.com/o/r/tree/feature/a/b/c/d")).toEqual({
+      ok: true,
+      status: 200,
+    });
+    expect(
+      await checkLinkWithGithubApi("https://github.com/o/r/tree/feature/a/b/c/missing"),
+    ).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+});
+
+describe("checkLinkWithGithubApi() with code line links", () => {
+  const fileContent = (text: string) => ({
+    data: { type: "file", sha: "sha", content: Buffer.from(text).toString("base64") },
+  });
+
+  it("checks the line against the file from the API (no browser)", async () => {
+    octokit.repos.getContent.mockResolvedValue(fileContent('{\n  "name": "x"\n}\n'));
+
+    expect(
+      await checkLinkWithGithubApi("https://github.com/o/r/blob/main/package.json#L3"),
+    ).toEqual({ ok: true, status: 200 });
+    expect(
+      await checkLinkWithGithubApi("https://github.com/o/r/blob/main/package.json#L2-L4"),
+    ).toMatchObject({
+      ok: false,
+      error: "hash not found",
+      errorDetail: "package.json has only 3 lines",
+    });
+    expect(octokit.repos.getContent).toHaveBeenCalledWith({
+      owner: "o",
+      repo: "r",
+      ref: "main",
+      path: "package.json",
+    });
+  });
+
+  it("reports 'unexpected error' without a GH_TOKEN (checkLinks re-checks it in the browser)", async () => {
+    octokit.noToken = true;
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/blob/main/a.ts#L3");
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+      errorDetail: expect.stringContaining("GH_TOKEN is not set"),
+    });
   });
 });

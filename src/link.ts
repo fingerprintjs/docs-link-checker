@@ -1,12 +1,7 @@
 import { PromisePoolError } from "@supercharge/promise-pool";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
-import {
-  isGithubCodeLineLink,
-  isGithubReservedRoute,
-  isGithubUrl,
-  isGithubWikiLink,
-} from "./github/gh_url";
+import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
 import { withTimeout } from "./limiter";
 import { hasHash, stripHash } from "./link_common";
 import { checkUrlsOnPageWithPlaywright, resultFor } from "./playwright_check";
@@ -29,12 +24,12 @@ type CheckLinksArgs = {
 
 /**
  * How a link is checked in the first pass:
- * - `github-api`: GitHub links checked with the GitHub API (definitive answers)
+ * - `github-api`: GitHub links checked with the GitHub API (definitive answers). Code line links (`#L12`) too: the
+ *   file must have enough lines. github.com refuses blob pages to headless browsers on CI runners (503).
  * - `fetch`: plain `fetch`, assumes the page is server-side rendered
- * - `playwright`: needs a real browser (GitHub code line links), checked in the Playwright pass only
  * - `invalid`: the URL cannot be parsed or is not http(s), reported as broken link without any request
  */
-export type CheckMethod = "fetch" | "github-api" | "playwright" | "invalid";
+export type CheckMethod = "fetch" | "github-api" | "invalid";
 
 const getInitialCheckMethod = (href: string): CheckMethod => {
   // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
@@ -45,9 +40,6 @@ const getInitialCheckMethod = (href: string): CheckMethod => {
   try {
     if (!isGithubUrl(href)) {
       return "fetch";
-    }
-    if (isGithubCodeLineLink(href)) {
-      return "playwright";
     }
     // Wikis and GitHub's own pages (`/features`, `/topics/x`...) are not available through the API
     if (isGithubWikiLink(href) || isGithubReservedRoute(href)) {
@@ -79,15 +71,12 @@ export const shouldRecheckWithPlaywright = (
     return false;
   }
   switch (method) {
-    case "playwright":
-      // Already checked with Playwright
-      return false;
     case "invalid":
       // A URL that cannot be parsed is definitively broken
       return false;
     case "github-api":
       // "broken link" and "hash not found" from the API are definitive.
-      // Unexpected errors (unknown link type, API errors) might still work in a browser.
+      // Unexpected errors (unknown link type, API errors, rate limits, no `GH_TOKEN`) might still work in a browser.
       return result.error === "unexpected error";
     case "fetch":
       if (result.error === "broken link") {
@@ -114,9 +103,6 @@ const checkLinkFirstPass = async (
     case "invalid":
       // Every request has its own timeout (FETCH_TIMEOUT)
       return { result: await checkLinkWithFetch(href, false, pageCache), method };
-    case "playwright":
-      // Not reached from checkLinks (code line links go straight to the Playwright pass), kept for completeness
-      return { result: await checkLinkWithGithubApi(href), method };
     case "github-api":
       return {
         result: await withTimeout(
@@ -239,12 +225,6 @@ const checkLinksInRun = async ({
         // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
         taskTimeout: null,
         processFn: async (link): Promise<LinkWithResult | null> => {
-          // Links that need a browser go straight to the Playwright pass, so they respect its concurrency limit
-          // (and links to the same file with different line hashes share one navigation)
-          if (getInitialCheckMethod(link.href) === "playwright") {
-            linksToCheckWithPlaywright.push(link);
-            return null;
-          }
           const { result, method } = await checkFirstPass(link.href);
           // Failure possibly caused by the fetch method, add to Playwright queue
           if (shouldRecheckWithPlaywright(result, method)) {

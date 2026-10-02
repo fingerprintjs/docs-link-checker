@@ -8,15 +8,24 @@ import {
 import { assertDestinationAllowed, DestinationNotAllowedError } from "./destination";
 import { isGithubCodeLineLink } from "./github/gh_url";
 import { getHashSelectors } from "./hash";
+import { formatServerErrorRetry, getServerErrorRetryDelay } from "./http";
 import { withTimeout } from "./limiter";
 import {
   getBlockedDestinationResult,
+  getServerErrorResult,
   getSpecialFragmentNote,
   shouldSpoofUserAgent,
 } from "./link_common";
 import { incrementMetric } from "./run_context";
 import type { LinkCheckResult } from "./types";
-import { FORBIDDEN_STATUS_CODES, getRandomUserAgent, log, OKAY_STATUS_CODES } from "./utils";
+import {
+  FORBIDDEN_STATUS_CODES,
+  getHostLimiter,
+  getRandomUserAgent,
+  log,
+  OKAY_STATUS_CODES,
+  TRANSIENT_SERVER_ERROR_STATUS_CODES,
+} from "./utils";
 
 /** Waits up to `timeout` for an element matching `selector` to be in the DOM */
 async function waitForSelectorAttached(page: Page, selector: string, timeout: number) {
@@ -187,7 +196,6 @@ async function checkUrlsInOneNavigation(
   if (firstUrl === undefined) {
     return new Map();
   }
-  const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
 
   // Links reach Playwright after the fetch pass (which blocks private destinations), check again for direct callers.
   // Redirects and page resources to blocked IP literals and localhost names are aborted by the route handler.
@@ -195,15 +203,143 @@ async function checkUrlsInOneNavigation(
     await assertDestinationAllowed(firstUrl);
   } catch (error) {
     if (error instanceof DestinationNotAllowedError) {
-      return sameForAll(getBlockedDestinationResult(error));
+      return sameResultFor(urls, getBlockedDestinationResult(error));
     }
     throw error;
   }
 
+  const hostLimiter = getHostLimiter();
+  // Hosts to back off for: the navigated URL's, and the hosts of server errors (after a redirect, the final URL's)
+  const pausedUrls = new Set([firstUrl]);
+  for (let retries = 0; ;) {
+    // Back off while a host is paused (after a server error or a 429 of this or another check), before taking a
+    // page slot, so the other checks keep the browser busy in the meantime
+    for (const url of pausedUrls) {
+      await hostLimiter.waitUntilResumed(url);
+    }
+    const outcome = await navigateAndCheck(urls, {
+      verbose,
+      headless,
+      retries,
+      pausedUrls: [...pausedUrls],
+    });
+    if (outcome instanceof Map) {
+      return outcome;
+    }
+    if (outcome.reason === "server error") {
+      retries++;
+      pausedUrls.add(outcome.pausedUrl);
+    }
+    // "paused": a host was paused while this check waited for a page slot, the slot is released and the check waits
+    // for the pause again (not counted as a retry)
+  }
+}
+
+const sameResultFor = (urls: string[], result: LinkCheckResult) =>
+  new Map(urls.map((url) => [url, result]));
+
+/** A navigation of `navigateAndCheck` to do again, after waiting for the host pauses outside of the page slot */
+type NavigationRetry =
+  /** 502, 503 or 504, the host of `pausedUrl` (the final URL after redirects) is paused for the backoff */
+  | { reason: "server error"; pausedUrl: string }
+  /** A host was paused while waiting for the page slot, nothing was requested */
+  | { reason: "paused" };
+
+type NavigationOptions = {
+  verbose: boolean;
+  headless: boolean;
+  /** Server error retries done so far */
+  retries: number;
+  /** URLs whose host must not be paused when navigating */
+  pausedUrls: string[];
+};
+
+/**
+ * A 502, 503 or 504 navigation response: a retry (the host of the response is paused for the backoff, see
+ * `getServerErrorRetryDelay`), or the final result when the server asks to wait too long or the retries are used up
+ */
+const handleServerError = (
+  response: PlaywrightResponse,
+  firstUrl: string,
+  retries: number,
+): NavigationRetry | LinkCheckResult => {
+  const status = response.status();
+  const delayMs = getServerErrorRetryDelay(retries, response.headers()["retry-after"] ?? null);
+  if (delayMs === undefined) {
+    return getServerErrorResult(status, response.statusText());
+  }
+  // After a redirect, the server error comes from the final URL: back off for its host
+  const failedUrl = response.url() || firstUrl;
+  console.log(formatServerErrorRetry(failedUrl, status, delayMs));
+  incrementMetric("serverErrorRetries");
+  // The page is closed right away, the retry waits for the pause outside of the page slot
+  getHostLimiter().pause(failedUrl, delayMs);
+  return { reason: "server error", pausedUrl: failedUrl };
+};
+
+/** Result for a navigation response the hashes can't be checked on (blocked or failed), `undefined` if it is OK */
+const getNavigationFailure = async (
+  response: PlaywrightResponse | null,
+): Promise<LinkCheckResult | undefined> => {
+  if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
+    return {
+      ok: false,
+      error: "could not check",
+      status: response.status(),
+      errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
+    };
+  }
+  if (!response || !OKAY_STATUS_CODES.includes(response.status())) {
+    return { ok: false, error: "broken link", status: response?.status() ?? 0 };
+  }
+  return undefined;
+};
+
+/** Checks the hash of every URL in the DOM of the navigated page, in parallel */
+const checkHashesOnPage = async (
+  page: Page,
+  urls: string[],
+  { status, verbose }: { status: number; verbose: boolean },
+): Promise<Map<string, LinkCheckResult>> => {
+  const [firstUrl] = urls;
+  // The overall budget of the long wait starts with the first check, it includes the regular wait
+  const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT };
+  return new Map(
+    await Promise.all(
+      urls.map(
+        async (url) =>
+          [
+            url,
+            // Only the navigated URL gets the long wait: the page was opened with its hash
+            await getPlaywrightHashResult(page, url, {
+              status,
+              verbose,
+              lateWait: url === firstUrl ? lateWait : undefined,
+            }),
+          ] as const,
+      ),
+    ),
+  );
+};
+
+/**
+ * One navigation of `checkUrlsInOneNavigation`. Returns a retry after a 502, 503 or 504 that should be retried,
+ * or when one of the `pausedUrls` hosts got paused while waiting for the page slot.
+ */
+async function navigateAndCheck(
+  urls: string[],
+  { verbose, headless, retries, pausedUrls }: NavigationOptions,
+): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
+  const [firstUrl = ""] = urls;
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
   // Errors while navigating and checking the page are reported as broken links.
   return withPage(
-    async (page) => {
+    async (page): Promise<Map<string, LinkCheckResult> | NavigationRetry> => {
+      // A fetch or another navigation may have paused the host while this check waited for the page slot: don't
+      // sleep while holding the slot, release it and wait outside (see `checkUrlsInOneNavigation`)
+      if (pausedUrls.some((url) => getHostLimiter().isPaused(url))) {
+        return { reason: "paused" };
+      }
       try {
         incrementMetric("playwrightNavigations");
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
@@ -211,55 +347,22 @@ async function checkUrlsInOneNavigation(
           waitUntil: "domcontentloaded",
           timeout: PAGE_OPERATION_TIMEOUT,
         });
-
         log(`Navigation response: ${response?.status()}`, verbose);
-        if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
-          return sameForAll({
-            ok: false,
-            error: "could not check",
-            status: response.status(),
-            errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
-          });
+        if (response && TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status())) {
+          const outcome = handleServerError(response, firstUrl, retries);
+          return "reason" in outcome ? outcome : sameResultFor(urls, outcome);
         }
-
-        if (!response || !OKAY_STATUS_CODES.includes(response.status())) {
-          return sameForAll({
-            ok: false,
-            error: "broken link",
-            status: response?.status() ?? 0,
-          });
+        const failure = await getNavigationFailure(response);
+        if (failure || !response) {
+          return sameResultFor(urls, failure ?? { ok: false, error: "broken link", status: 0 });
         }
-
-        const status = response.status();
-        // The overall budget of the long wait starts with the first check, it includes the regular wait
-        const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT };
-        const results = new Map(
-          await Promise.all(
-            urls.map(
-              async (url) =>
-                [
-                  url,
-                  // Only the navigated URL gets the long wait: the page was opened with its hash
-                  await getPlaywrightHashResult(page, url, {
-                    status,
-                    verbose,
-                    lateWait: url === firstUrl ? lateWait : undefined,
-                  }),
-                ] as const,
-            ),
-          ),
-        );
-        return results;
+        return await checkHashesOnPage(page, urls, { status: response.status(), verbose });
       } catch (error) {
         // The browser crashed: let `withPage` relaunch it and retry
         if (page.isClosed()) {
           throw error;
         }
-        return sameForAll({
-          ok: false,
-          error: "broken link",
-          errorDetail: String(error),
-        });
+        return sameResultFor(urls, { ok: false, error: "broken link", errorDetail: String(error) });
       }
     },
     { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined, headless },

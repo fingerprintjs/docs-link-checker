@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchGlob, parseGlob } from "./glob";
+import { getGlobstarParent, matchGlob, parseGlob } from "./glob";
 
 describe("parseGlob()", () => {
   it("splits literals and wildcards, runs of 2+ stars are one globstar", () => {
@@ -49,6 +49,36 @@ describe("matchGlob()", () => {
     expect(matchGlob("*", "")).toBe(true);
     expect(matchGlob("a*a*a", "aaa")).toBe(true);
     expect(matchGlob("a*a*a", "aa")).toBe(false);
+  });
+
+  it("`x/**` also matches `x` itself (an origin with or without trailing slash)", () => {
+    const glob = "http://www.allaboutcookies.org/**";
+    expect(matchGlob(glob, "http://www.allaboutcookies.org")).toBe(true);
+    expect(matchGlob(glob, "http://www.allaboutcookies.org/")).toBe(true);
+    expect(matchGlob(glob, "http://www.allaboutcookies.org/a/b")).toBe(true);
+    // Only the parent itself, not another host sharing the prefix
+    expect(matchGlob(glob, "http://www.allaboutcookies.org.evil.com")).toBe(false);
+    expect(matchGlob(glob, "http://www.allaboutcookies.orgx")).toBe(false);
+    expect(matchGlob(glob, "https://www.allaboutcookies.org")).toBe(false);
+    // Wildcards in the parent work as usual
+    expect(matchGlob("https://*.x.com/**", "https://a.x.com")).toBe(true);
+    expect(matchGlob("https://*.x.com/**", "https://a.b.x.com")).toBe(true);
+    expect(matchGlob("docs/**", "docs")).toBe(true);
+    expect(matchGlob("docs/**", "doc")).toBe(false);
+    // Not for other wildcards at the end
+    expect(matchGlob("https://x.com/*", "https://x.com")).toBe(false);
+    expect(matchGlob("https://x.com**", "https://x.com")).toBe(true);
+  });
+
+  it("getGlobstarParent() strips a trailing `/**` (any run of 2+ stars) only", () => {
+    expect(getGlobstarParent("https://a.com/**")).toBe("https://a.com");
+    expect(getGlobstarParent("https://a.com/***")).toBe("https://a.com");
+    expect(getGlobstarParent("https://a.com/*")).toBeUndefined();
+    expect(getGlobstarParent("https://a.com**")).toBeUndefined();
+    expect(getGlobstarParent("https://a.com/")).toBeUndefined();
+    expect(getGlobstarParent("/**")).toBe("");
+    expect(getGlobstarParent("**")).toBeUndefined();
+    expect(matchGlob("/**", "")).toBe(false);
   });
 
   it("stays fast on inputs that make backtracking matchers explode", () => {

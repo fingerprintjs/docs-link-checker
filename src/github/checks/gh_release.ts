@@ -1,6 +1,6 @@
 import type { LinkCheckResult } from "../../types";
-import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
+import { getApiErrorResult } from "../gh_api_error";
 import { getMyOctokit } from "../github_client";
 
 type Octokit = ReturnType<typeof getMyOctokit>;
@@ -15,12 +15,6 @@ const brokenLink = (errorDetail: string): LinkCheckResult => ({
   errorDetail,
 });
 
-/** A 404 from the API is a broken link (with `notFoundDetail`), any other error is unexpected */
-const requestErrorResult = (error: Error, notFoundDetail: string): LinkCheckResult =>
-  getErrorStatus(error) === 404
-    ? brokenLink(notFoundDetail)
-    : { ok: false, error: "unexpected error", status: 500, errorDetail: String(error) };
-
 /** `/releases/download/{tag}/{asset}`: the release and its asset exist */
 const checkReleaseAsset = async (
   octokit: Octokit,
@@ -32,7 +26,7 @@ const checkReleaseAsset = async (
     octokit.repos.getReleaseByTag({ owner, repo, tag }),
   );
   if (error) {
-    return requestErrorResult(error, `Release tag ${tag} not found in repository ${owner}/${repo}`);
+    return getApiErrorResult(error, `Release tag ${tag} not found in repository ${owner}/${repo}`);
   }
   if (!release.data.assets.some((asset) => asset.name === assetName)) {
     return brokenLink(
@@ -51,7 +45,7 @@ const checkLatestRelease = async (
     octokit.repos.listReleases({ owner, repo, per_page: 1 }),
   );
   if (error) {
-    return { ok: false, error: "unexpected error", status: 500, errorDetail: String(error) };
+    return getApiErrorResult(error, `Repository ${owner}/${repo} not found`);
   }
   return releases.data.length === 0 ? brokenLink("No releases found in repository") : OK;
 };
@@ -64,7 +58,7 @@ const checkReleaseTag = async (
 ): Promise<LinkCheckResult> => {
   const { error } = await tryCatch(octokit.repos.getReleaseByTag({ owner, repo, tag }));
   return error
-    ? requestErrorResult(error, `Release tag ${tag} not found in repository ${owner}/${repo}`)
+    ? getApiErrorResult(error, `Release tag ${tag} not found in repository ${owner}/${repo}`)
     : OK;
 };
 
@@ -78,7 +72,7 @@ const checkReleaseId = async (
     octokit.repos.getRelease({ owner, repo, release_id: releaseId }),
   );
   return error
-    ? requestErrorResult(error, `Release #${releaseId} not found in repository ${owner}/${repo}`)
+    ? getApiErrorResult(error, `Release #${releaseId} not found in repository ${owner}/${repo}`)
     : OK;
 };
 

@@ -6,7 +6,7 @@ type Success<T> = {
 
 type Failure = {
   data: null;
-  // Octokit errors keep their `status`, read it with `getErrorStatus` (see errors.ts)
+  // Octokit errors keep their `status`, read it with `getApiErrorStatus` (see github/gh_api_error.ts)
   error: Error;
 };
 

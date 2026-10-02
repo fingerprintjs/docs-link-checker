@@ -1,8 +1,15 @@
 import type { LinkCheckResult } from "../../types";
-import { getErrorStatus } from "../../utils/errors";
 import { tryCatch } from "../../utils/tryCatch";
-import { getContentCached } from "../gh_cache";
+import { getApiErrorResult, getApiErrorStatus, isNotFoundApiError } from "../gh_api_error";
+import { getRefPathContent } from "../gh_ref";
 import { getMyOctokit } from "../github_client";
+
+/**
+ * `true` if a failed `GET /git/commits/{sha}` proves the ref is not a commit: not found, or 422 (not a valid SHA, like
+ * a branch name)
+ */
+const isNotACommitError = (error: unknown) =>
+  isNotFoundApiError(error) || getApiErrorStatus(error) === 422;
 
 /**
  * Check if a GitHub branch/tree exists
@@ -49,6 +56,15 @@ export const checkGitHubTreeLink = async (
       return { ok: true, status: 200 };
     }
 
+    // Only "not found" answers prove the link is broken. Server errors, rate limits (Octokit already retried them) and
+    // 401/403 say nothing about the branch or commit.
+    if (!isNotFoundApiError(branchResult.error)) {
+      return getApiErrorResult(branchResult.error, "");
+    }
+    if (!isNotACommitError(commitResult.error)) {
+      return getApiErrorResult(commitResult.error, "");
+    }
+
     return {
       ok: false,
       error: "broken link",
@@ -57,35 +73,10 @@ export const checkGitHubTreeLink = async (
     };
   }
 
-  // For paths, we need to check if the specific path exists
-  // Get the content directly - this is more efficient than getting the whole tree
-  const contentResult = await tryCatch(
-    getContentCached({
-      owner,
-      repo,
-      ref: branch,
-      path,
-    }),
-  );
-
-  if (contentResult.data) {
+  // For paths, check the specific path (the ref can contain slashes: `tree/feature/x/src`, see `getRefPathContent`)
+  const content = await getRefPathContent(owner, repo, pathParts.slice(1), { requirePath: false });
+  if (content.found) {
     return { ok: true, status: 200 };
   }
-
-  // Check if it was a 404 error
-  const { error } = contentResult;
-  if (getErrorStatus(error) === 404) {
-    return {
-      ok: false,
-      error: "broken link",
-      status: 404,
-      errorDetail: `Path ${path} not found in branch/commit ${branch}`,
-    };
-  }
-
-  return {
-    ok: false,
-    error: "unexpected error",
-    errorDetail: String(error),
-  };
+  return getApiErrorResult(content.error, `Path ${path} not found in branch/commit ${branch}`);
 };
