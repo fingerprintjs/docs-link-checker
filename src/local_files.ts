@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { glob } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type Baseline, EMPTY_BASELINE } from "./baseline";
+import { safeDecode } from "./github/gh_url";
 import { decodeHash } from "./hash";
 import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
@@ -62,14 +63,6 @@ export const getLinkKind = (href: string): LinkKind => {
   if (/^https?:\/\//i.test(href) || href.startsWith("//")) return "external";
   if (/^[a-z][a-z\d+.-]*:/i.test(href)) return "skip";
   return "local";
-};
-
-const decodePath = (path: string) => {
-  try {
-    return decodeURIComponent(path);
-  } catch {
-    return path;
-  }
 };
 
 type LocalCheckContext = {
@@ -152,7 +145,7 @@ const parseLocalHref = (href: string): { path: string; hash: string } => {
   const hashIndex = href.indexOf("#");
   const pathAndQuery = hashIndex === -1 ? href : href.slice(0, hashIndex);
   const hash = hashIndex === -1 ? "" : href.slice(hashIndex + 1);
-  return { path: decodePath(pathAndQuery.split("?", 1)[0] ?? ""), hash };
+  return { path: safeDecode(pathAndQuery.split("?", 1)[0] ?? ""), hash };
 };
 
 /** Absolute path of the link target: the file itself (`#anchor`), root-relative or relative to the file */

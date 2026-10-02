@@ -1,19 +1,13 @@
 import * as cheerio from "cheerio";
-import { decodeUrlHash, isGithubCodeLineLink } from "./github/gh_url";
+import { isGithubCodeLineLink, safeDecode } from "./github/gh_url";
 import { parseLineAnchor } from "./line_anchor";
 
 /**
  * Removes the leading `#` and decodes percent-encoding (`#caf%C3%A9` -> `café`).
  * Returns the hash as-is if it is not valid percent-encoding.
  */
-export const decodeHash = (hash: string): string => {
-  const withoutHash = hash.startsWith("#") ? hash.slice(1) : hash;
-  try {
-    return decodeURIComponent(withoutHash);
-  } catch {
-    return withoutHash;
-  }
-};
+export const decodeHash = (hash: string): string =>
+  safeDecode(hash.startsWith("#") ? hash.slice(1) : hash);
 
 /**
  * Serializes a value as a quoted CSS string (for attribute selectors like `[id="..."]`),
@@ -44,7 +38,7 @@ const getGithubLineNumber = (hash: string, url: string): string | undefined => {
   if (!isGithubCodeLineLink(url)) {
     return undefined;
   }
-  const lines = parseLineAnchor(decodeUrlHash(hash).replace(/^#/, ""));
+  const lines = parseLineAnchor(safeDecode(hash).replace(/^#/, ""));
   return lines ? String(lines.firstLine) : undefined;
 };
 

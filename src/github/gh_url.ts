@@ -20,37 +20,25 @@ export const isGithubCodeLineLink = (href: string) => {
   return (
     url.host === "github.com" &&
     url.pathname.includes("/blob/") &&
-    parseLineAnchor(decodeUrlHash(url.hash).replace(/^#/, "")) !== undefined
+    parseLineAnchor(safeDecode(url.hash).replace(/^#/, "")) !== undefined
   );
 };
 
 /**
- * `URL.hash` stays percent-encoded (`#%4C12` for `#L12`), decode it (keeps the raw hash if it is malformed)
+ * `decodeURIComponent`, keeping the input unchanged if it is not valid percent-encoding (a URL hash or path
+ * segment with a stray `%` that isn't an escape sequence, like `100%`).
  */
-export const decodeUrlHash = (hash: string): string => {
+export const safeDecode = (value: string): string => {
   try {
-    return decodeURIComponent(hash);
+    return decodeURIComponent(value);
   } catch {
-    return hash;
-  }
-};
-
-/**
- * Decodes a percent-encoded URL path segment (`%40fingerprint%2Fvue%402.0.0` -> `@fingerprint/vue@2.0.0`).
- * Octokit encodes request parameters itself, so they must be passed decoded (or they are encoded twice).
- * Keeps the raw segment if it is malformed (`100%` stays `100%`).
- */
-export const decodePathSegment = (segment: string): string => {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
+    return value;
   }
 };
 
 /** Decoded, non-empty path segments of a GitHub URL (`/owner/repo/` -> `["owner", "repo"]`) */
 export const getGithubPathSegments = (url: URL): string[] =>
-  url.pathname.split("/").filter(Boolean).map(decodePathSegment);
+  url.pathname.split("/").filter(Boolean).map(safeDecode);
 
 /**
  * Top-level github.com routes that are GitHub's own pages, not users or organizations (GitHub reserves these names).
