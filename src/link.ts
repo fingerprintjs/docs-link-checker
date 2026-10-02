@@ -683,6 +683,12 @@ type LateAnchorWait = {
   requests: RequestActivity;
 };
 
+/** `load` fired, and neither the DOM nor the network changed for `LATE_ANCHOR_QUIET_PERIOD` */
+async function isPageSettled(page: Page, requests: RequestActivity): Promise<boolean> {
+  const dom = await getDomActivity(page);
+  return dom?.loaded === true && dom.quietFor >= LATE_ANCHOR_QUIET_PERIOD && requests.isQuiet();
+}
+
 /**
  * Waits for an anchor rendered late, until the deadline or until the page settled: `load` fired, and neither the DOM
  * nor the network changed for `LATE_ANCHOR_QUIET_PERIOD`. A settled page is not going to add the anchor anymore.
@@ -698,15 +704,14 @@ async function waitForLateAnchor(
       return false;
     }
     // Measured before the anchor check: if the page was already settled, a missing anchor is final
-    const dom = await getDomActivity(page);
-    const settled =
-      dom?.loaded === true && dom.quietFor >= LATE_ANCHOR_QUIET_PERIOD && requests.isQuiet();
+    const settled = await isPageSettled(page, requests);
     if (
       await waitForSelectorAttached(page, selector, Math.min(LATE_ANCHOR_POLL_INTERVAL, remaining))
     ) {
       return true;
     }
-    if (settled) {
+    // Re-read after the poll: activity that started while polling means the anchor may still come
+    if (settled && (await isPageSettled(page, requests))) {
       return false;
     }
   }

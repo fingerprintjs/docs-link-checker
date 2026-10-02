@@ -1,13 +1,19 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { closeBrowser } from "./browser";
+import {
+  closeBrowser,
+  HASH_FALLBACK_WAIT_TIMEOUT,
+  HASH_WAIT_TIMEOUT,
+  PAGE_OPERATION_TIMEOUT,
+} from "./browser";
 import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeBrowser);
 
-// A missing anchor is reported once the page settled, after HASH_FALLBACK_WAIT_TIMEOUT (15s) at most, a missing
-// GitHub code line once the code view rendered (plus 3s), plus the navigation itself
-const HASH_CHECK_TEST_TIMEOUT = 30000;
+// Worst case of a missing anchor: the navigation, then the late anchor wait (a missing GitHub code line: the wait for
+// the code view plus the wait for the line), plus a margin
+const HASH_CHECK_TEST_TIMEOUT =
+  PAGE_OPERATION_TIMEOUT + HASH_FALLBACK_WAIT_TIMEOUT + HASH_WAIT_TIMEOUT + 10000;
 
 const linkCheckMethods = [
   {
