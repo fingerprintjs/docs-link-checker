@@ -14,10 +14,9 @@ import {
 } from "./local_files";
 
 vi.mock("./link", () => ({
-  checkLinks: vi.fn(async ({ links }: { links: Array<{ href: string }> }) => ({
-    results: links.map((link) => ({ ...link, result: { ok: true, status: 200 } })),
-    errors: [],
-  })),
+  checkLinks: vi.fn(async ({ links }: { links: Array<{ href: string }> }) =>
+    links.map((link) => ({ ...link, result: { ok: true, status: 200 } })),
+  ),
 }));
 
 const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");

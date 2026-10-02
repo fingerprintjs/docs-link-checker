@@ -40,7 +40,6 @@
     "@octokit/plugin-retry": "^8.1.1",
     "@octokit/plugin-throttling": "^11.0.5",
     "@octokit/rest": "^22.0.1",
-    "@supercharge/promise-pool": "^3.3.0",
     "cheerio": "^1.2.0",
     "cli-progress": "^3.12.0",
     "dotenv": "^18.0.4",

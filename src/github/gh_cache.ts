@@ -1,4 +1,4 @@
-import { incrementMetric, runCached } from "../run_context";
+import { incrementMetric, runCached } from "../run";
 import { isNotFoundApiError } from "./gh_api_error";
 import { getMyOctokit } from "./github_client";
 

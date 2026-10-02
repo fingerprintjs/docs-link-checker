@@ -51,6 +51,64 @@ export class Semaphore {
   }
 }
 
+/** An item whose processing threw, with what was thrown */
+export type ConcurrentError<T> = { item: T; error: unknown };
+
+type Outcome<T, R> = { ok: true; value: R } | { ok: false; item: T; error: unknown };
+
+/**
+ * Runs `fn` over `items` with at most `limit` concurrent calls. A throwing `fn` does not stop the other items:
+ * its error is collected instead.
+ * @returns successful results and errors, both in item order
+ */
+export const mapConcurrent = async <T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<{ results: R[]; errors: ConcurrentError<T>[] }> => {
+  const slots = new Semaphore(limit);
+  const outcomes = await Promise.all(
+    items.map((item): Promise<Outcome<T, R>> =>
+      slots.run(async () => {
+        try {
+          return { ok: true, value: await fn(item) };
+        } catch (error) {
+          return { ok: false, item, error };
+        }
+      }),
+    ),
+  );
+  const results: R[] = [];
+  const errors: ConcurrentError<T>[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.ok) {
+      results.push(outcome.value);
+    } else {
+      errors.push({ item: outcome.item, error: outcome.error });
+    }
+  }
+  return { results, errors };
+};
+
+/** Default per-host concurrency (`--host-concurrency` / `LINK_CHECK_HOST_CONCURRENCY`) */
+export const DEFAULT_HOST_CONCURRENCY = 8;
+
+/**
+ * Parses a host concurrency value (positive integer, default `DEFAULT_HOST_CONCURRENCY`): the maximum number of
+ * concurrent `fetch` requests to a single host.
+ * @throws {Error} if the value is not a positive integer
+ */
+export const parseHostConcurrency = (value: string | undefined): number => {
+  if (value === undefined || value.trim() === "") {
+    return DEFAULT_HOST_CONCURRENCY;
+  }
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`Invalid LINK_CHECK_HOST_CONCURRENCY "${value}", expected a positive integer.`);
+  }
+  return limit;
+};
+
 type HostState = { semaphore: Semaphore; pausedUntil: number };
 
 /** Waits until the pause of the host ends (a pause can be extended while waiting) */

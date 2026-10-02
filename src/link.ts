@@ -1,24 +1,18 @@
-import { PromisePoolError } from "@supercharge/promise-pool";
+import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./browser";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
+import { TASK_TIMEOUT } from "./http";
 import { withTimeout } from "./limiter";
 import { hasHash, stripHash } from "./link_common";
 import { checkUrlsOnPageWithPlaywright, resultFor } from "./playwright_check";
-import { withRun } from "./run";
-import { incrementMetric, timePhase } from "./run_context";
+import { incrementMetric, timePhase, withRun } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
-import {
-  CONCURRENCY_LIMIT,
-  log,
-  PLAYWRIGHT_CONCURRENCY_LIMIT,
-  parallelProcess,
-  TASK_TIMEOUT,
-} from "./utils";
+import { CONCURRENCY_LIMIT, parallelProcess } from "./utils";
+import { getErrorMessage } from "./utils/errors";
 
 type CheckLinksArgs = {
   links: Link[];
-  verbose?: boolean;
   fetchConcurrencyLimit?: number;
 };
 
@@ -34,23 +28,25 @@ export type CheckMethod = "fetch" | "github-api" | "invalid";
 const getInitialCheckMethod = (href: string): CheckMethod => {
   // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
   // when links are extracted, anything that gets here anyway is reported without any request.
-  if (!URL.canParse(href) || !["http:", "https:"].includes(new URL(href).protocol)) {
+  let protocol: string;
+  try {
+    protocol = new URL(href).protocol;
+  } catch {
     return "invalid";
   }
-  try {
-    if (!isGithubUrl(href)) {
-      return "fetch";
-    }
-    // Wikis and GitHub's own pages (`/features`, `/topics/x`...) are not available through the API
-    if (isGithubWikiLink(href) || isGithubReservedRoute(href)) {
-      return "fetch";
-    }
-    return "github-api";
-  } catch {
-    // Invalid URL, let fetch report it
+  if (protocol !== "http:" && protocol !== "https:") {
+    return "invalid";
+  }
+  if (!isGithubUrl(href)) {
     return "fetch";
   }
+  // Wikis and GitHub's own pages (`/features`, `/topics/x`...) are not available through the API
+  if (isGithubWikiLink(href) || isGithubReservedRoute(href)) {
+    return "fetch";
+  }
+  return "github-api";
 };
+
 // Status codes returned by fetch that might be caused by bot protection, rate limiting or the request itself
 const PLAYWRIGHT_RETRY_STATUS_CODES = new Set([401, 403, 405, 406, 408, 429]);
 
@@ -98,11 +94,18 @@ const checkLinkFirstPass = async (
 ): Promise<{ result: LinkCheckResult; method: CheckMethod }> => {
   const method = getInitialCheckMethod(href);
   switch (method) {
-    case "fetch":
-    // `invalid` URLs are reported by checkLinkWithFetch without any request
     case "invalid":
+      return {
+        result: {
+          ok: false,
+          error: "broken link",
+          errorDetail: `Unsupported or invalid URL: ${href}`,
+        },
+        method,
+      };
+    case "fetch":
       // Every request has its own timeout (FETCH_TIMEOUT)
-      return { result: await checkLinkWithFetch(href, false, pageCache), method };
+      return { result: await checkLinkWithFetch(href, pageCache), method };
     case "github-api":
       return {
         result: await withTimeout(
@@ -115,20 +118,6 @@ const checkLinkFirstPass = async (
   }
 };
 
-/**
- * Returns a function that calls `fn` at most once per key. Concurrent callers share the same promise.
- */
-const memoizeByKey = <R>(fn: (key: string) => Promise<R>) => {
-  const cache = new Map<string, Promise<R>>();
-  return (key: string): Promise<R> => {
-    let promise = cache.get(key);
-    if (!promise) {
-      promise = fn(key);
-      cache.set(key, promise);
-    }
-    return promise;
-  };
-};
 const getHostname = (href: string): string => {
   try {
     return new URL(href).hostname;
@@ -169,112 +158,112 @@ export const interleaveByHost = <T extends { href: string }>(items: T[]): T[] =>
   return result;
 };
 
-/** Links grouped by the page they point to (URL without hash), in order of first appearance */
-const groupLinksByPage = (links: Link[]): Array<{ href: string; links: Link[] }> => {
-  const groups = new Map<string, Link[]>();
-  for (const link of links) {
-    const pageUrl = stripHash(link.href);
+/** Hrefs grouped by the page they point to (URL without hash), in order of first appearance */
+const groupHrefsByPage = (hrefs: string[]): string[][] => {
+  const groups = new Map<string, string[]>();
+  for (const href of hrefs) {
+    const pageUrl = stripHash(href);
     const group = groups.get(pageUrl);
     if (group) {
-      group.push(link);
+      group.push(href);
     } else {
-      groups.set(pageUrl, [link]);
+      groups.set(pageUrl, [href]);
     }
   }
-  return [...groups.entries()].map(([href, pageLinks]) => ({ href, links: pageLinks }));
+  return [...groups.values()];
 };
 
 /**
  * Checks links. Runs as a run (see `withRun`): the shared browser is closed and metrics are logged at the end.
- * - Every href is checked once, links to the same page with different hashes share one page fetch / navigation.
+ * - Every unique href is checked once, links to the same page with different hashes share one page fetch / navigation.
  * - First pass: `fetch` (limited per host) or the GitHub API.
  * - Failures that might be caused by the check method are re-checked with Playwright.
+ * - A check that throws is reported as an "unexpected error" result, like any other failure.
  */
-export const checkLinks = (args: CheckLinksArgs) => withRun(() => checkLinksInRun(args));
+export const checkLinks = (args: CheckLinksArgs): Promise<LinkWithResult[]> =>
+  withRun({}, () => checkLinksInRun(args));
 
 const checkLinksInRun = async ({
   links,
-  verbose,
   fetchConcurrencyLimit = CONCURRENCY_LIMIT,
-}: CheckLinksArgs) => {
+}: CheckLinksArgs): Promise<LinkWithResult[]> => {
   console.log(`\nChecking ${links.length} links...`);
-  const uniqueHrefs = new Set(links.map((link) => link.href));
-  const uniquePages = new Set([...uniqueHrefs].map(stripHash));
+  const uniqueHrefs = [...new Set(links.map((link) => link.href))];
+  const uniquePages = new Set(uniqueHrefs.map(stripHash));
   incrementMetric("totalLinks", links.length);
-  incrementMetric("uniqueUrls", uniqueHrefs.size);
+  incrementMetric("uniqueUrls", uniqueHrefs.length);
   incrementMetric("uniquePages", uniquePages.size);
 
   // Pages linked with a hash need their HTML (GET). Links to the same page without a hash reuse that response.
   const pagesWithHash = new Set(
-    [...uniqueHrefs]
+    uniqueHrefs
       .filter((href) => hasHash(href) && getInitialCheckMethod(href) === "fetch")
       .map(stripHash),
   );
   const pageCache = new PageFetchCache(pagesWithHash);
 
-  const linksToCheckWithPlaywright: Link[] = [];
-  // Cache the promise (not the result), so concurrent tasks with the same href share a single check
-  const checkFirstPass = memoizeByKey((href) => checkLinkFirstPass(href, pageCache));
+  // Filled in by the two passes below, one entry per unique href
+  const results = new Map<string, LinkCheckResult>();
+  const toRecheck: string[] = [];
 
-  const { results: fetchResults, errors: fetchErrors } = await timePhase(
-    "Check links (fetch, GitHub API)",
-    () =>
-      parallelProcess({
-        items: interleaveByHost(links),
-        concurrencyLimit: fetchConcurrencyLimit,
-        // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
-        taskTimeout: null,
-        processFn: async (link): Promise<LinkWithResult | null> => {
-          const { result, method } = await checkFirstPass(link.href);
-          // Failure possibly caused by the fetch method, add to Playwright queue
-          if (shouldRecheckWithPlaywright(result, method)) {
-            linksToCheckWithPlaywright.push(link);
-            return null;
-          }
-          return { ...link, result };
-        },
-      }),
+  const { errors: fetchErrors } = await timePhase("Check links (fetch, GitHub API)", () =>
+    parallelProcess({
+      items: interleaveByHost(uniqueHrefs.map((href) => ({ href }))),
+      concurrencyLimit: fetchConcurrencyLimit,
+      // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
+      processFn: async ({ href }) => {
+        const { result, method } = await checkLinkFirstPass(href, pageCache);
+        // Failure possibly caused by the fetch method, add to the Playwright queue instead of the final results
+        if (shouldRecheckWithPlaywright(result, method)) {
+          toRecheck.push(href);
+        } else {
+          results.set(href, result);
+        }
+      },
+    }),
   );
+  for (const { item, error } of fetchErrors) {
+    results.set(item.href, {
+      ok: false,
+      error: "unexpected error",
+      errorDetail: getErrorMessage(error),
+    });
+  }
 
   // One navigation per page, all hashes pointing to that page are checked in the same DOM
-  const pageGroups = groupLinksByPage(linksToCheckWithPlaywright);
-  console.log(
-    `Checking ${linksToCheckWithPlaywright.length} links (${pageGroups.length} pages) with Playwright...`,
-  );
+  const pageGroups = groupHrefsByPage(toRecheck);
+  console.log(`Checking ${toRecheck.length} links (${pageGroups.length} pages) with Playwright...`);
 
-  const { results: playwrightGroupResults, errors: playwrightGroupErrors } = await timePhase(
-    "Re-check links with Playwright",
-    () =>
-      parallelProcess({
-        items: pageGroups,
-        concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
-        // No timeout for the whole group: it can include many per-hash fallback navigations waiting for page slots.
-        // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT,
-        // HASH_FALLBACK_WAIT_TIMEOUT).
-        taskTimeout: null,
-        processFn: async (group): Promise<LinkWithResult[]> => {
-          const hrefs = [...new Set(group.links.map((link) => link.href))];
-          const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
-          return group.links.map((link) => ({
-            ...link,
-            result: resultFor(resultsByHref, link.href),
-          }));
-        },
-      }),
+  const { errors: playwrightErrors } = await timePhase("Re-check links with Playwright", () =>
+    parallelProcess({
+      items: pageGroups,
+      concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
+      // No timeout for the whole group: it can include many per-hash fallback navigations waiting for page slots.
+      // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT,
+      // HASH_FALLBACK_WAIT_TIMEOUT).
+      processFn: async (hrefs) => {
+        const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
+        for (const href of hrefs) {
+          results.set(href, resultFor(resultsByHref, href));
+        }
+      },
+    }),
   );
-  const playwrightResults = playwrightGroupResults.flat();
-  // Report errors per link, like in the first pass
-  const playwrightErrors = playwrightGroupErrors.flatMap((error) =>
-    error.item.links.map((link) => PromisePoolError.createFrom<Link>(error, link)),
-  );
+  for (const { item: hrefs, error } of playwrightErrors) {
+    const errorDetail = getErrorMessage(error);
+    for (const href of hrefs) {
+      results.set(href, { ok: false, error: "unexpected error", errorDetail });
+    }
+  }
 
-  const finalResults = [...fetchResults.filter((r) => r !== null), ...playwrightResults];
-  const finalErrors = [...fetchErrors, ...playwrightErrors];
-
-  console.log(
-    `Checked ${finalResults.length} links (${uniqueHrefs.size} unique URLs, ${uniquePages.size} unique pages).`,
-  );
-  console.log(`Unexpected errors occurred for ${finalErrors.length} links`);
-  log(finalErrors, verbose);
-  return { results: finalResults, errors: finalErrors };
+  console.log(`Checked ${uniqueHrefs.length} unique URLs (${uniquePages.size} unique pages).`);
+  return links.map((link) => ({
+    ...link,
+    // Every unique href was given a result above (or an unexpected-error one for a throwing check)
+    result: results.get(link.href) ?? {
+      ok: false,
+      error: "unexpected error",
+      errorDetail: `No result for ${link.href}`,
+    },
+  }));
 };

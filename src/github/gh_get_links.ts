@@ -4,10 +4,9 @@ import { checkLinks } from "../link";
 import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
 import { DEFAULT_OUTPUT_DIR, getJSONReport, saveReport } from "../report/report";
-import { withRun } from "../run";
-import { timePhase } from "../run_context";
+import { type RunConfig, timePhase, withRun } from "../run";
 import type { Link } from "../types";
-import { formatPoolErrors, parallelProcess, sampleItems } from "../utils";
+import { formatConcurrentErrors, parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_cache";
 import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
@@ -123,9 +122,6 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
   const { results, errors } = await parallelProcess({
     items: files,
-    // Downloads wait for a per-host slot (all files are on raw.githubusercontent.com),
-    // every request has its own timeout instead of the task timeout
-    taskTimeout: null,
     processFn: async (file) => {
       const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
         res.ok ? res.text() : "",
@@ -143,7 +139,7 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
 
   if (errors.length > 0) {
     console.error(
-      `Errors fetching files and extracting links: ${errors.length}\n${formatPoolErrors(errors)}`,
+      `Errors fetching files and extracting links: ${errors.length}\n${formatConcurrentErrors(errors)}`,
     );
   }
   const links = results.flat();
@@ -154,7 +150,7 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
 /** Report name of an organization (`fingerprintjs` -> `fingerprintjs-github-readmes.html`) */
 export const getGithubOrgSiteName = (org: string) => `${org} GitHub readmes`;
 
-export type CheckReadmesOptions = {
+export type CheckReadmesOptions = RunConfig & {
   /** Share of README files to check (0-1), defaults to `LINK_CHECK_SAMPLE_RATE` */
   sampleRate?: number;
   /** Failing links matching the baseline are reported as ignored */
@@ -173,9 +169,11 @@ export const checkReadmesInGithubOrg = (
     sampleRate,
     baseline = EMPTY_BASELINE,
     outputDir = DEFAULT_OUTPUT_DIR,
+    hostConcurrency,
+    allowPrivateHosts,
   }: CheckReadmesOptions = {},
 ) =>
-  withRun(async () => {
+  withRun({ hostConcurrency, allowPrivateHosts }, async () => {
     const startTime = performance.now();
     await checkGitHubRateLimit(getMyOctokit());
 
@@ -186,15 +184,10 @@ export const checkReadmesInGithubOrg = (
     const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
     const filteredLinks = filterOutIrrelevantLinks(links);
 
-    const { results, errors } = await checkLinks({
-      links: filteredLinks,
-      verbose: true,
-      fetchConcurrencyLimit: 20,
-    });
+    const results = await checkLinks({ links: filteredLinks, fetchConcurrencyLimit: 20 });
 
     const report = getJSONReport({
       links: results,
-      errors,
       siteName: getGithubOrgSiteName(org),
       baseline,
     });

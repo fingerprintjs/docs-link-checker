@@ -89,11 +89,10 @@ vi.mock("playwright", () => {
   return { chromium: { launch: vi.fn(launch) } };
 });
 
-import { closeBrowser, getBrowser, withPage } from "./browser";
+import { closeBrowser, getBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
 import { withRun } from "./run";
-import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
@@ -132,9 +131,8 @@ describe("shared browser", () => {
       link(`https://blocked-${i}.example.com/page`),
     );
 
-    const { results, errors } = await checkLinks({ links });
+    const results = await checkLinks({ links });
 
-    expect(errors).toHaveLength(0);
     expect(results).toHaveLength(20);
     expect(state.visited).toHaveLength(20);
     expect(state.launches).toBe(1);
@@ -147,7 +145,7 @@ describe("shared browser", () => {
 
   it("closes the browser even when the run fails", async () => {
     await expect(
-      withRun(async () => {
+      withRun({}, async () => {
         await checkLinkWithPlaywright("https://example.com/a");
         throw new Error("run failed");
       }),
@@ -228,133 +226,57 @@ describe("shared browser", () => {
       vi.fn(async () => new Response(null, { status: 403 })),
     );
 
-    const { results, errors } = await checkLinks({
+    const results = await checkLinks({
       links: [link("https://blocked.example.com/a"), link("https://blocked.example.com/a#x")],
     });
 
-    expect(results).toHaveLength(0);
-    // One error per link, like before
-    expect(errors.map((error) => error.item.href)).toEqual([
+    // One "unexpected error" result per link, like any other failure
+    expect(results.map((result) => result.href)).toEqual([
       "https://blocked.example.com/a",
       "https://blocked.example.com/a#x",
     ]);
-    expect(errors[0]!.message).toContain("Executable doesn't exist");
-  });
-});
-
-describe("shared browser across concurrent runs", () => {
-  it("keeps the browser open until the last concurrent run ends", async () => {
-    state.gotoDelayMs = 50;
-    const playwrightRun = withRun(() => checkLinkWithPlaywright("https://example.com/slow"));
-    // Let the Playwright run launch the browser and start navigating
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(state.launches).toBe(1);
-
-    // A fetch-only run that finishes while the other run still uses the browser
-    await withRun(async () => {});
-    expect(state.closes).toBe(0);
-
-    expect(await playwrightRun).toEqual({ ok: true, status: 200 });
-    expect(state.closes).toBe(1);
-    expect(state.launches).toBe(1);
-  });
-
-  it("closes the browser when concurrent runs end in any order", async () => {
-    let finishFirst!: () => void;
-    const first = withRun(
-      () =>
-        new Promise<void>((resolve) => {
-          finishFirst = resolve;
-        }),
-    );
-    const second = withRun(() => checkLinkWithPlaywright("https://example.com/a"));
-
-    await second;
-    expect(state.closes).toBe(0);
-    finishFirst();
-    await first;
-    expect(state.closes).toBe(1);
-  });
-});
-
-describe("shared browser leases (checks outside of runs)", () => {
-  it("a standalone check still navigating when a fetch-only run ends keeps working, the browser closes after both", async () => {
-    state.gotoDelayMs = 50;
-    const standalone = checkLinkWithPlaywright("https://example.com/standalone");
-    // Let the standalone check launch the browser and start navigating
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(state.launches).toBe(1);
-
-    // An unrelated fetch-only run ends while the standalone check uses the browser
-    await withRun(async () => {});
-    expect(state.closes).toBe(0);
-    expect(state.openPages).toBe(1);
-
-    expect(await standalone).toEqual({ ok: true, status: 200 });
-    // No leak: the last user closed the shared browser
-    expect(state.closes).toBe(1);
-    expect(state.launches).toBe(1);
-    expect(state.openPages).toBe(0);
-  });
-
-  it("a run ending while standalone checks wait for a page slot does not close the browser", async () => {
-    state.gotoDelayMs = 20;
-    // More checks than page slots: some wait for a slot (they hold a lease already)
-    const checks = Promise.all(
-      Array.from({ length: PLAYWRIGHT_CONCURRENCY_LIMIT * 2 }, (_, i) =>
-        checkLinkWithPlaywright(`https://example.com/${i}`),
+    expect(
+      results.every((result) => !result.result.ok && result.result.error === "unexpected error"),
+    ).toBe(true);
+    expect(
+      results.every(
+        (result) =>
+          !result.result.ok && result.result.errorDetail?.includes("Executable doesn't exist"),
       ),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await withRun(async () => {});
-
-    const results = await checks;
-    expect(results.every((result) => result.ok)).toBe(true);
-    expect(state.launches).toBe(1);
-    expect(state.closes).toBe(1);
-  });
-
-  it("a standalone check inside the lifetime of a run leaves closing to the run", async () => {
-    let finishRun!: () => void;
-    const run = withRun(() => new Promise<void>((resolve) => (finishRun = resolve)));
-
-    await checkLinkWithPlaywright("https://example.com/during-run");
-    // The run is still active, it closes the browser when it ends
-    expect(state.closes).toBe(0);
-
-    finishRun();
-    await run;
-    expect(state.closes).toBe(1);
+    ).toBe(true);
   });
 });
 
-describe("headed debug mode (headless: false)", () => {
-  it("keeps the page open after the check, closeBrowser() closes the debug browser", async () => {
-    const result = await checkLinkWithPlaywright("https://example.com/debug", false, false);
+describe("browser belongs to the run", () => {
+  it("closes the browser at the end of its own run, independently of other concurrent runs", async () => {
+    state.gotoDelayMs = 50;
+    const first = withRun({}, () => checkLinkWithPlaywright("https://example.com/first"));
+    const second = withRun({}, () => checkLinkWithPlaywright("https://example.com/second"));
 
-    expect(result).toEqual({ ok: true, status: 200 });
-    // A separate browser, its page (context) is still open for inspection
-    expect(state.launches).toBe(1);
-    expect(state.openPages).toBe(1);
-    expect(state.closes).toBe(0);
+    expect(await first).toEqual({ ok: true, status: 200 });
+    expect(state.closes).toBe(1);
+    // The second run still has its own (separate) browser open
+    expect(state.launches).toBe(2);
 
-    await closeBrowser();
-    expect(state.closes).toBe(1);
-    // Closing again does not close it twice
-    await closeBrowser();
-    expect(state.closes).toBe(1);
+    expect(await second).toEqual({ ok: true, status: 200 });
+    expect(state.closes).toBe(2);
   });
 
-  it("is not closed at the end of a run (only the shared browser is)", async () => {
-    await withRun(async () => {
-      await checkLinkWithPlaywright("https://example.com/shared");
-      await checkLinkWithPlaywright("https://example.com/debug", false, false);
-    });
+  it("closes the run's browser even when the run fails, standalone checks are unaffected", async () => {
+    await expect(
+      withRun({}, async () => {
+        await checkLinkWithPlaywright("https://example.com/a");
+        throw new Error("run failed");
+      }),
+    ).rejects.toThrow("run failed");
+    expect(state.launches).toBe(1);
+    expect(state.closes).toBe(1);
 
-    // Shared browser closed by the run, debug browser still open
+    // A standalone check (outside of any run) uses its own (default context) browser
+    const result = await checkLinkWithPlaywright("https://example.com/standalone");
+    expect(result).toEqual({ ok: true, status: 200 });
     expect(state.launches).toBe(2);
     expect(state.closes).toBe(1);
-    expect(state.openPages).toBe(1);
 
     await closeBrowser();
     expect(state.closes).toBe(2);

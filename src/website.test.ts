@@ -27,7 +27,7 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   mocks.getWebsitePages.mockReset().mockResolvedValue(pages.toReversed());
   mocks.getLinksFromPages.mockReset().mockResolvedValue({ links: [], errors: [] });
-  mocks.checkLinks.mockReset().mockResolvedValue({ results: [], errors: [] });
+  mocks.checkLinks.mockReset().mockResolvedValue([]);
   mocks.saveReport.mockReset();
 });
 
@@ -71,17 +71,14 @@ describe("checkWebsite() options", () => {
   });
 
   it("applies the baseline to the report", async () => {
-    mocks.checkLinks.mockResolvedValue({
-      results: [
-        {
-          href: "https://example.com/broken",
-          page: pages[0],
-          text: "",
-          result: { ok: false, error: "broken link", status: 404 },
-        },
-      ],
-      errors: [],
-    });
+    mocks.checkLinks.mockResolvedValue([
+      {
+        href: "https://example.com/broken",
+        page: pages[0],
+        text: "",
+        result: { ok: false, error: "broken link", status: 404 },
+      },
+    ]);
     const report = await checkWebsite({
       websiteUrl: "https://example.com",
       baseline: createBaseline([{ pattern: "https://example.com/**" }]),

@@ -82,7 +82,6 @@ describe("parseCliArgs()", () => {
       command: "site",
       url: "https://example.com",
       include: ["https://a.com", "https://b"],
-      usePlaywright: false,
       options: defaults,
     });
   });
@@ -202,7 +201,6 @@ describe("formatFileProblems()", () => {
   it("prints one line per link to fix, collapsing and shortening error details", () => {
     const report = getJSONReport({
       siteName: "local files",
-      errors: [],
       links: [
         {
           page: "a.md",
@@ -415,24 +413,19 @@ describe("runCli()", () => {
     });
   });
 
-  it("--allow-private-hosts sets the guard's environment variable for the run only", async () => {
-    // Set to "false" for this test (restored by `unstubEnvs`), the CLI must restore it after the run
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "false");
-    mocks.checkWebsite.mockImplementation(async () => {
-      expect(process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS).toBe("true");
-      return {
-        siteName: "localhost",
-        summary: { totalLinksToFix: 0 },
-        brokenLinks: [],
-        hashNotFound: [],
-        networkErrors: [],
-        couldNotCheck: [],
-        ignored: [],
-      };
+  it("--allow-private-hosts is passed to the check as an explicit option", async () => {
+    mocks.checkWebsite.mockResolvedValue({
+      siteName: "localhost",
+      summary: { totalLinksToFix: 0 },
+      brokenLinks: [],
+      hashNotFound: [],
+      networkErrors: [],
+      couldNotCheck: [],
+      ignored: [],
     });
     expect(await runCli(["site", "http://localhost:3000", "--allow-private-hosts"], io())).toBe(0);
     expect(mocks.checkWebsite).toHaveBeenCalledTimes(1);
-    expect(process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS).toBe("false");
+    expect(mocks.checkWebsite.mock.calls[0]![0]).toMatchObject({ allowPrivateHosts: true });
   });
 
   it("baseline: returns 2 with a clear message for an invalid file", async () => {
@@ -475,6 +468,8 @@ describe("runCli()", () => {
       sampleRate: 1,
       baseline: expect.anything(),
       outputDir: "out",
+      hostConcurrency: undefined,
+      allowPrivateHosts: false,
     });
   });
 
