@@ -9,7 +9,7 @@ vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 import { withRun } from "../run";
 import { getRunContext } from "../run_context";
 import { checkGitHubBlobLink } from "./checks/gh_blob";
-import { checkIfRepositoryExists } from "./checks/gh_repo";
+import { checkIfRepositoryExists } from "./checks/gh_simple";
 import { getContentCached, getRepoCached } from "./gh_cache";
 
 const delayed = <T>(value: T, ms = 10) =>

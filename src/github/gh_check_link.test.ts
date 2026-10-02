@@ -34,8 +34,14 @@ vi.mock("./github_client", () => ({
   },
 }));
 
-import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./gh_check_link";
-import { getGithubPathSegments, isGithubReservedRoute, safeDecode } from "./gh_url";
+import { checkLinkWithGithubApi } from "./gh_check_link";
+import {
+  getGithubPathSegments,
+  isGithubCodeLineLink,
+  isGithubReservedRoute,
+  isGithubUrl,
+  safeDecode,
+} from "./gh_url";
 
 beforeEach(() => {
   octokit.noToken = false;
