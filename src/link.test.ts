@@ -108,6 +108,7 @@ import {
   checkLinks,
   checkLinkWithFetch,
   checkLinkWithPlaywright,
+  getSpecialFragmentNote,
   interleaveByHost,
   shouldRecheckWithPlaywright,
 } from "./link";
@@ -427,6 +428,31 @@ describe("checkLinkWithFetch()", () => {
     },
   );
 
+  it("still checks zippy fragments on other hosts", async () => {
+    stubFetch(() => new Response("<html><body></body></html>", { status: 200 }));
+
+    const result = await checkLinkWithFetch("https://example.com/help#zippy=%2Csection");
+
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+
+  it("getSpecialFragmentNote() accepts zippy fragments on Google Help only", () => {
+    expect(getSpecialFragmentNote("zippy=,a", "https://support.google.com/x#zippy=,a")).toBe(
+      "Google Help accordion state",
+    );
+    expect(getSpecialFragmentNote("zippy=,a", "https://SUPPORT.Google.com/x")).toBe(
+      "Google Help accordion state",
+    );
+    expect(getSpecialFragmentNote("zippy=,a", "https://example.com/x")).toBeUndefined();
+    expect(
+      getSpecialFragmentNote("zippy=,a", "https://support.google.com.evil.com/x"),
+    ).toBeUndefined();
+    expect(getSpecialFragmentNote("zippy=,a", "https://google.com/x")).toBeUndefined();
+    // Not host-specific
+    expect(getSpecialFragmentNote("/", "https://example.com/x")).toBe("Accidental hash");
+    expect(getSpecialFragmentNote(":~:text=a", "https://example.com/x")).toBe("Text Fragment");
+  });
+
   it("still checks hashes that only contain 'zippy' later on", async () => {
     stubFetch(() => new Response("<html><body></body></html>", { status: 200 }));
 
@@ -497,6 +523,13 @@ describe("checkLinkWithPlaywright() hash check", () => {
 
     expect(result).toEqual({ ok: true, status: 200, note: "Google Help accordion state" });
     expect(playwrightState.selectors).toEqual([]);
+  });
+
+  it("still checks zippy fragments on other hosts", async () => {
+    const result = await checkLinkWithPlaywright("https://example.com/help#zippy=%2Csection");
+
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(playwrightState.selectors).not.toEqual([]);
   });
 
   it("finds a fast anchor with the short wait, without waiting for the full load", async () => {

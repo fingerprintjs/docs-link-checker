@@ -488,12 +488,16 @@ export class PageFetchCache {
   }
 }
 
+// Google Help Center hosts, their `#zippy=` fragments expand accordion sections
+const GOOGLE_HELP_HOSTS = new Set(["support.google.com"]);
+
 /**
  * Fragments that are not element ids, so they are accepted without looking for an anchor
  * @param fragment the URL hash without `#`
+ * @param url the full URL (some fragments are only special on some hosts)
  * @returns a note for the report, or `undefined` for a regular anchor
  */
-export const getSpecialFragmentNote = (fragment: string): string | undefined => {
+export const getSpecialFragmentNote = (fragment: string, url: string): string | undefined => {
   if (fragment === "/") {
     return "Accidental hash";
   }
@@ -504,7 +508,7 @@ export const getSpecialFragmentNote = (fragment: string): string | undefined => 
      **/
     return "Text Fragment";
   }
-  if (fragment.startsWith("zippy=")) {
+  if (fragment.startsWith("zippy=") && GOOGLE_HELP_HOSTS.has(new URL(url).hostname)) {
     // Google Help Center: `#zippy=,section` expands accordion sections, there is no element with that id
     return "Google Help accordion state";
   }
@@ -521,7 +525,7 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
     return { ok: true, status: page.status };
   }
 
-  const note = getSpecialFragmentNote(hash.slice(1));
+  const note = getSpecialFragmentNote(hash.slice(1), url);
   if (note) {
     return { ok: true, status: page.status, note };
   }
@@ -609,7 +613,7 @@ const getPlaywrightHashResult = async (
     return { ok: true, status };
   }
 
-  const note = getSpecialFragmentNote(hash);
+  const note = getSpecialFragmentNote(hash, url);
   if (note) {
     return { ok: true, status, note };
   }
