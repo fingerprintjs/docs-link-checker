@@ -79,7 +79,7 @@ A baseline (ignore) file lists known false positives and accepted broken links. 
 
 * Every entry has exactly one of:
   * `href`: the exact link, as reported (the resolved URL for websites and GitHub, the link as written for local files).
-  * `pattern`: a glob. `**` matches anything, `*` anything except `/`, everything else (including `?`, `.`, `+`, `(`, `[`) is literal. A plain string entry is a shorthand for `{ "pattern": "..." }`. At most 2048 characters.
+  * `pattern`: a glob. `**` matches anything, `*` anything except `/`, everything else (including `?`, `.`, `+`, `(`, `[`) is literal. A pattern ending with `/**` also matches what comes before it: `https://example.com/**` matches `https://example.com` (no trailing slash) too. A plain string entry is a shorthand for `{ "pattern": "..." }`. At most 2048 characters.
 * `page` (optional): only ignore the link on this page (an exact value or a glob, for example `docs/**`).
 * `reason` (optional): shown in the report.
 * Regular expressions are not supported on purpose (a `regex` key is rejected): the file is user input, and a pattern like `(a+)+$` could make the check hang ([ReDoS](https://owasp.org/www-community/attacks/Regular_expression_Denial_of_Service_-_ReDoS)). Globs are matched without regular expressions, in linear time.

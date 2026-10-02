@@ -88,6 +88,19 @@ describe("createBaseline().findEntry()", () => {
     expect(baseline.findEntry(broken("https://aaa.com/x"))).toBeUndefined();
     expect(baseline.findEntry(broken("https://other.com/glob.com/"))).toBeUndefined();
   });
+
+  it("matches the bare origin with an `<origin>/**` pattern (with or without trailing slash)", () => {
+    expect(baseline.findEntry(broken("https://glob.com"))?.reason).toBe("glob");
+    expect(baseline.findEntry(broken("https://glob.com/"))?.reason).toBe("glob");
+    expect(baseline.findEntry(broken("https://glob.community"))).toBeUndefined();
+  });
+
+  it("ignores the bare origins of the repository baseline (linkcheck.baseline.json)", () => {
+    const repoBaseline = loadBaseline(join(import.meta.dirname, "..", "linkcheck.baseline.json"));
+    expect(repoBaseline.findEntry(broken("http://www.allaboutcookies.org"))).toBeDefined();
+    expect(repoBaseline.findEntry(broken("http://www.allaboutcookies.org/"))).toBeDefined();
+    expect(repoBaseline.findEntry(broken("https://nordvpn.com"))).toBeDefined();
+  });
 });
 
 describe("getJSONReport() with a baseline", () => {
