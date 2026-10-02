@@ -1,6 +1,11 @@
 import { PromisePoolError } from "@supercharge/promise-pool";
 import type { Page } from "playwright";
-import { HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
+import {
+  HASH_FALLBACK_WAIT_TIMEOUT,
+  HASH_WAIT_TIMEOUT,
+  PAGE_OPERATION_TIMEOUT,
+  withPage,
+} from "./browser";
 import { assertDestinationAllowed, DestinationNotAllowedError } from "./destination";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
@@ -297,7 +302,8 @@ const checkLinksInRun = async ({
         items: pageGroups,
         concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
         // No timeout for the whole group: it can include many per-hash fallback navigations waiting for page slots.
-        // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT).
+        // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT,
+        // HASH_FALLBACK_WAIT_TIMEOUT).
         taskTimeout: null,
         processFn: async (group): Promise<LinkWithResult[]> => {
           const hrefs = [...new Set(group.links.map((link) => link.href))];
@@ -334,8 +340,13 @@ function shouldSpoofUserAgent(url: string) {
   return true;
 }
 
-// When a HEAD request returns one of these, retry once with GET before failing
-const HEAD_FALLBACK_STATUS_CODES = [403, 405, 501];
+/**
+ * A failed HEAD request is retried once with GET: some servers refuse HEAD (403, 405, 501) and some answer it
+ * differently than GET (support.google.com and chatgpt.com return 404 to HEAD and 200 to GET).
+ * Not on 429: the host is rate limiting, another request would not help (see `fetchWithHostLimit`).
+ */
+export const shouldRetryHeadWithGet = (status: number): boolean =>
+  !OKAY_STATUS_CODES.includes(status) && status !== 429;
 
 /**
  * Result of fetching a page (URL without hash): either a final failure, or the status and the anchors of the page.
@@ -358,7 +369,8 @@ const lazyAnchorIndex = (html: string) => {
 };
 
 /**
- * Fetches a page with `GET` (if its HTML is needed) or `HEAD` (falls back to `GET` if the server refuses HEAD).
+ * Fetches a page with `GET` (if its HTML is needed) or `HEAD` (falls back to `GET` if HEAD fails, see
+ * `shouldRetryHeadWithGet`).
  * Limited per host, honours `Retry-After` on 429 (pauses the whole host). Never throws.
  */
 export const fetchPage = async (
@@ -383,8 +395,8 @@ export const fetchPage = async (
 
   try {
     let response = await request(needBody ? "GET" : "HEAD");
-    // Some servers don't support (or block) HEAD requests, retry once with GET
-    if (!needBody && HEAD_FALLBACK_STATUS_CODES.includes(response.status)) {
+    // Some servers don't support (or block) HEAD requests, or answer them differently, retry once with GET
+    if (!needBody && shouldRetryHeadWithGet(response.status)) {
       log(`HEAD returned ${response.status}, retrying with GET`, verbose);
       response = await request("GET");
     }
@@ -469,6 +481,29 @@ export class PageFetchCache {
   }
 }
 
+/**
+ * Fragments that are not element ids, so they are accepted without looking for an anchor
+ * @param fragment the URL hash without `#`
+ * @returns a note for the report, or `undefined` for a regular anchor
+ */
+export const getSpecialFragmentNote = (fragment: string): string | undefined => {
+  if (fragment === "/") {
+    return "Accidental hash";
+  }
+  if (fragment.includes(":~:")) {
+    /**
+     * The link includes a [Text Fragment](https://developer.mozilla.org/en-US/docs/Web/Text_fragments)
+     * Checking this properly is not trivial, let's ignore them for now
+     **/
+    return "Text Fragment";
+  }
+  if (fragment.startsWith("zippy=")) {
+    // Google Help Center: `#zippy=,section` expands accordion sections, there is no element with that id
+    return "Google Help accordion state";
+  }
+  return undefined;
+};
+
 /** Result for a URL (possibly with a hash) based on its fetched page */
 const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
   if (!page.ok) {
@@ -479,16 +514,9 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
     return { ok: true, status: page.status };
   }
 
-  if (hash === "#/") {
-    return { ok: true, status: page.status, note: "Accidental hash" };
-  }
-
-  if (hash.includes(":~:")) {
-    /**
-     * The link includes a [Text Fragment](https://developer.mozilla.org/en-US/docs/Web/Text_fragments)
-     * Checking this properly is not trivial, let's ignore them for now
-     **/
-    return { ok: true, status: page.status, note: "Text Fragment" };
+  const note = getSpecialFragmentNote(hash.slice(1));
+  if (note) {
+    return { ok: true, status: page.status, note };
   }
 
   // Note: GitHub `#L12` line links no longer work server-side, since GitHub switched to client-side rendering 🤦
@@ -567,27 +595,40 @@ const getPlaywrightHashResult = async (
   url: string,
   status: number,
   verbose: boolean,
+  hashTimeout = HASH_WAIT_TIMEOUT,
 ): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash.replace("#", "");
   if (!hash) {
     return { ok: true, status };
   }
 
-  if (hash === "/") {
-    return { ok: true, status, note: "Accidental hash" };
+  const note = getSpecialFragmentNote(hash);
+  if (note) {
+    return { ok: true, status, note };
   }
 
-  if (hash.includes(":~:")) {
-    return { ok: true, status, note: "Text Fragment" };
-  }
-
-  if (!(await isHashPresentPlaywright(page, hash, url))) {
+  if (!(await isHashPresentPlaywright(page, hash, url, hashTimeout))) {
     log(`Hash not found`, verbose);
     return { ok: false, status, error: "hash not found" };
   }
 
   log(`OK`, verbose);
   return { ok: true, status };
+};
+
+const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
+  result?.ok === false && result.error === "hash not found";
+
+/** Waits for the `load` event (bounded), a page that never finishes loading is still checked */
+const waitForFullLoad = async (page: Page) => {
+  try {
+    await page.waitForLoadState("load", { timeout: HASH_FALLBACK_WAIT_TIMEOUT });
+  } catch (error) {
+    // The browser crashed: let the caller handle it
+    if (page.isClosed()) {
+      throw error;
+    }
+  }
 };
 
 /** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
@@ -599,6 +640,8 @@ const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkChec
  * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
  * Some pages render different content per hash (e.g. SPA tabs), so a hash not found in the shared DOM gets
  * a dedicated navigation to its exact URL before it is reported as "hash not found".
+ * The anchor of the navigated URL is waited for `HASH_WAIT_TIMEOUT` first, and if it is missing, again after the
+ * full page load for up to `HASH_FALLBACK_WAIT_TIMEOUT` (anchors rendered late, see `checkUrlsInOneNavigation`).
  * @returns results by URL
  */
 export async function checkUrlsOnPageWithPlaywright(
@@ -608,10 +651,8 @@ export async function checkUrlsOnPageWithPlaywright(
 ): Promise<Map<string, LinkCheckResult>> {
   const results = await checkUrlsInOneNavigation(urls, verbose, headless);
   const [firstUrl] = urls;
-  const notFound = urls.filter((url) => {
-    const result = results.get(url);
-    return url !== firstUrl && result?.ok === false && result.error === "hash not found";
-  });
+  // The first URL already had the long wait in the shared navigation
+  const notFound = urls.filter((url) => url !== firstUrl && isHashNotFound(results.get(url)));
   // After the shared navigation (its page slot is released), so the fallbacks can't deadlock waiting for slots
   await Promise.all(
     notFound.map(async (url) => {
@@ -673,13 +714,32 @@ async function checkUrlsInOneNavigation(
         }
 
         const status = response.status();
-        const results = await Promise.all(
-          urls.map(
-            async (url) =>
-              [url, await getPlaywrightHashResult(page, url, status, verbose)] as const,
+        const results = new Map(
+          await Promise.all(
+            urls.map(
+              async (url) =>
+                [url, await getPlaywrightHashResult(page, url, status, verbose)] as const,
+            ),
           ),
         );
-        return new Map(results);
+        // The page was opened with the first URL's hash: if its anchor is still missing, it might be rendered late
+        // (client-side rendered docs, sections expanded on hash navigation). Wait for the full load and give it more
+        // time. Only for anchors not found yet, found anchors return as soon as they appear.
+        if (isHashNotFound(results.get(firstUrl))) {
+          incrementMetric("playwrightLongHashWaits");
+          await waitForFullLoad(page);
+          results.set(
+            firstUrl,
+            await getPlaywrightHashResult(
+              page,
+              firstUrl,
+              status,
+              verbose,
+              HASH_FALLBACK_WAIT_TIMEOUT,
+            ),
+          );
+        }
+        return results;
       } catch (error) {
         // The browser crashed: let `withPage` relaunch it and retry
         if (page.isClosed()) {

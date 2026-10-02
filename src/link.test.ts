@@ -25,6 +25,12 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     // Timeouts passed to `goto` and set as page defaults
     gotoTimeouts: [] as Array<number | undefined>,
     pageTimeouts: [] as number[],
+    // HTML per navigated URL once the `load` event was awaited (anchors rendered late), falls back to the above
+    htmlAfterLoadByUrl: {} as Record<string, string>,
+    // `waitForLoadState` calls and timeouts of hash waits
+    loadStateWaits: [] as string[],
+    loadStateTimesOut: false,
+    hashTimeouts: [] as Array<number | undefined>,
   },
 }));
 
@@ -44,13 +50,24 @@ vi.mock("playwright", () => ({
         close: async () => {},
         newPage: async () => {
           let currentUrl = "";
+          let loaded = false;
           return {
             isClosed: () => false,
             setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
             setDefaultNavigationTimeout: (timeout: number) =>
               playwrightState.pageTimeouts.push(timeout),
+            waitForLoadState: async (state: string) => {
+              playwrightState.loadStateWaits.push(state);
+              if (playwrightState.loadStateTimesOut) {
+                const error = new Error("Timeout");
+                error.name = "TimeoutError";
+                throw error;
+              }
+              loaded = true;
+            },
             goto: async (url: string, options?: { timeout?: number }) => {
               currentUrl = url;
+              loaded = false;
               playwrightState.visited.push(url);
               playwrightState.gotoTimeouts.push(options?.timeout);
               if (playwrightState.gotoDelayMs > 0) {
@@ -64,10 +81,14 @@ vi.mock("playwright", () => ({
             },
             locator: (selector: string) => ({
               first: () => ({
-                waitFor: async () => {
+                waitFor: async (options?: { timeout?: number }) => {
                   playwrightState.selectors.push(selector);
+                  playwrightState.hashTimeouts.push(options?.timeout);
                   // Throws for invalid selectors, like Playwright would
-                  const html = playwrightState.htmlByUrl[currentUrl] ?? playwrightState.html;
+                  const html =
+                    (loaded ? playwrightState.htmlAfterLoadByUrl[currentUrl] : undefined) ??
+                    playwrightState.htmlByUrl[currentUrl] ??
+                    playwrightState.html;
                   if (cheerio.load(html)(selector).length === 0) {
                     const error = new Error("Timeout");
                     error.name = "TimeoutError";
@@ -115,6 +136,10 @@ beforeEach(() => {
   playwrightState.gotoDelayMs = 0;
   playwrightState.gotoTimeouts = [];
   playwrightState.pageTimeouts = [];
+  playwrightState.htmlAfterLoadByUrl = {};
+  playwrightState.loadStateWaits = [];
+  playwrightState.loadStateTimesOut = false;
+  playwrightState.hashTimeouts = [];
   playwrightState.status = 200;
   checkLinkWithGithubApiMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -336,13 +361,66 @@ describe("checkLinkWithFetch()", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry with GET on 404", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 404 }));
+  it.each([400, 404, 410, 500, 503])(
+    "retries once with GET when HEAD returns %s (servers answering HEAD differently)",
+    async (status) => {
+      // support.google.com and chatgpt.com answer 404 to HEAD and 200 to GET
+      const fetchMock = stubFetch((_url, init) =>
+        init.method === "HEAD"
+          ? new Response(null, { status })
+          : new Response("ok", { status: 200 }),
+      );
+
+      const result = await checkLinkWithFetch("https://support.example.com/answer/1");
+
+      expect(result).toEqual({ ok: true, status: 200 });
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
+    },
+  );
+
+  it("reports 404 when GET also returns 404 after HEAD", async () => {
+    const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
 
     const result = await checkLinkWithFetch("https://example.com/missing");
 
     expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
+  });
+
+  it("does not retry with GET when HEAD succeeds", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+
+    await checkLinkWithFetch("https://example.com/ok");
+
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
+  });
+
+  it("does not retry with GET when HEAD is rate limited (429)", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
+
+    const result = await checkLinkWithFetch("https://example.com/limited");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link", status: 429 });
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
+  });
+
+  it.each(["#zippy=%2Cdata-sharing", "#zippy="])(
+    "accepts Google Help accordion fragment %s without an element id",
+    async (hash) => {
+      stubFetch(() => new Response("<html><body></body></html>", { status: 200 }));
+
+      const result = await checkLinkWithFetch(`https://support.google.com/answer/10787469${hash}`);
+
+      expect(result).toEqual({ ok: true, status: 200, note: "Google Help accordion state" });
+    },
+  );
+
+  it("still checks hashes that only contain 'zippy' later on", async () => {
+    stubFetch(() => new Response("<html><body></body></html>", { status: 200 }));
+
+    const result = await checkLinkWithFetch("https://example.com/page#not-zippy=1");
+
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
   });
 
   const existingHashes = [
@@ -398,6 +476,57 @@ describe("checkLinkWithPlaywright() hash check", () => {
     const result = await checkLinkWithPlaywright("https://example.com/docs#it's-%22missing%22");
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+
+  it("accepts Google Help accordion fragments without waiting for an element", async () => {
+    const result = await checkLinkWithPlaywright(
+      "https://support.google.com/answer/10787469#zippy=%2Cdata-sharing",
+    );
+
+    expect(result).toEqual({ ok: true, status: 200, note: "Google Help accordion state" });
+    expect(playwrightState.selectors).toEqual([]);
+  });
+
+  it("finds a fast anchor with the short wait, without waiting for the full load", async () => {
+    playwrightState.html = '<div id="fast"></div>';
+
+    const result = await checkLinkWithPlaywright("https://example.com/docs#fast");
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.loadStateWaits).toEqual([]);
+    expect(playwrightState.hashTimeouts).toEqual([3000]);
+  });
+
+  it("waits for the full load and longer for an anchor rendered late (same navigation)", async () => {
+    const url = "https://docs.example.com/reference/get-event#response-ip-info-v6-address";
+    // Only added after hydration (e.g. Mintlify expands nested response fields on hash navigation)
+    playwrightState.htmlAfterLoadByUrl = { [url]: '<div id="response-ip-info-v6-address"></div>' };
+
+    const result = await checkLinkWithPlaywright(url);
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toEqual([url]);
+    expect(playwrightState.loadStateWaits).toEqual(["load"]);
+    expect(playwrightState.hashTimeouts).toEqual([3000, 15000]);
+  });
+
+  it("reports a hash still missing after the long wait as 'hash not found'", async () => {
+    const result = await checkLinkWithPlaywright("https://example.com/docs#never");
+
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(playwrightState.visited).toEqual(["https://example.com/docs#never"]);
+    expect(playwrightState.hashTimeouts).toEqual([3000, 15000]);
+  });
+
+  it("still checks the anchor when the page never fires `load`", async () => {
+    playwrightState.loadStateTimesOut = true;
+
+    const result = await checkLinkWithPlaywright("https://example.com/slow#missing");
+
+    // The `load` timeout is not reported as a broken page, the hash is checked anyway
+    expect(playwrightState.loadStateWaits).toEqual(["load"]);
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(playwrightState.hashTimeouts).toEqual([3000, 15000]);
   });
 });
 
@@ -589,6 +718,40 @@ describe("checkLinks() Playwright hash fallback", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("waits for late anchors of every hash of a page (shared navigation and dedicated fallbacks)", async () => {
+    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
+    const page = "https://docs.example.com/reference/get-event";
+    const hashes = ["#response-a", "#response-b", "#response-c", "#missing"];
+    // Every field is only expanded (and gets its id) when the page is opened with its hash, after the load
+    playwrightState.htmlAfterLoadByUrl = Object.fromEntries(
+      hashes.slice(0, 3).map((hash) => [`${page}${hash}`, `<div id="${hash.slice(1)}"></div>`]),
+    );
+
+    const { results } = await withRun(async () => {
+      const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
+      expect(getRunContext()!.metrics.counters).toMatchObject({
+        playwrightNavigations: 4,
+        playwrightHashFallbacks: 3,
+        playwrightLongHashWaits: 4,
+      });
+      return checked;
+    });
+
+    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
+    for (const hash of hashes.slice(0, 3)) {
+      expect(resultByHref.get(`${page}${hash}`)).toEqual({ ok: true, status: 200 });
+    }
+    expect(resultByHref.get(`${page}#missing`)).toEqual({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+    // One navigation per hash, no extra navigation for the long wait
+    expect(playwrightState.visited.toSorted()).toEqual(
+      hashes.map((hash) => `${page}${hash}`).toSorted(),
+    );
   });
 
   it("does not add navigations when every hash is in the shared DOM", async () => {

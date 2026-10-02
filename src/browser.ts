@@ -8,6 +8,9 @@ import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 export const PAGE_OPERATION_TIMEOUT = 30000;
 // How long a hash is waited for after the page loaded (client-side rendered anchors)
 export const HASH_WAIT_TIMEOUT = 3000;
+// A hash still missing after HASH_WAIT_TIMEOUT is waited for again after the `load` event, up to this long
+// (e.g. Mintlify docs expand collapsed sections and add their ids several seconds after hydration)
+export const HASH_FALLBACK_WAIT_TIMEOUT = 15000;
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
