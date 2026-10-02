@@ -18,7 +18,7 @@ export const checkGitHubReleaseLink = async (
   const octokit = getMyOctokit();
   // If pathParts[1] is "download", check if the release asset exists
   if (pathParts[1] === "download") {
-    const [, , tag = "", assetName] = pathParts;
+    const [, , tag = "", assetName = ""] = pathParts;
 
     const { data: release, error: releaseError } = await tryCatch(
       octokit.repos.getReleaseByTag({
