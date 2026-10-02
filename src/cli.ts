@@ -203,21 +203,12 @@ const parseOrThrow = <T>(parse: () => T, [envName, flag]: [string?, string?] = [
   }
 };
 
-const parseArgv = (argv: string[]) => {
-  try {
-    return parseArgs({
-      args: argv,
-      options: OPTIONS,
-      allowPositionals: true,
-      allowNegative: true,
-      strict: true,
-    });
-  } catch (error) {
-    throw new UsageError(getErrorMessage(error), { cause: error });
-  }
-};
-
-const validateOptionValues = (values: ParsedValues, command: CommandName) => {
+/** Options shared by all commands, also checks that no option of another command is used */
+const parseCommonOptions = (
+  command: CommandName,
+  values: ParsedValues,
+  env: Env,
+): CommonOptions => {
   for (const [option, onlyFor] of COMMAND_OPTIONS) {
     if (values[option] !== undefined && onlyFor !== command) {
       throw new UsageError(`--${option} can only be used with the ${onlyFor} command.`);
@@ -228,38 +219,26 @@ const validateOptionValues = (values: ParsedValues, command: CommandName) => {
       throw new UsageError(`--${option} must not be empty.`);
     }
   }
-};
-
-const parseSampleRate = (value: string | undefined, env: Env): number =>
-  value === undefined
-    ? parseOrThrow(() => getSampleRate(env.LINK_CHECK_SAMPLE_RATE))
-    : parseOrThrow(() => getSampleRate(value), ["LINK_CHECK_SAMPLE_RATE", "--sample-rate"]);
-
-const parseHostConcurrency = (value: string | undefined, env: Env): number | undefined => {
-  if (value === undefined) {
+  const sampleRateValue = values["sample-rate"];
+  const sampleRate =
+    sampleRateValue === undefined
+      ? parseOrThrow(() => getSampleRate(env.LINK_CHECK_SAMPLE_RATE))
+      : parseOrThrow(
+          () => getSampleRate(sampleRateValue),
+          ["LINK_CHECK_SAMPLE_RATE", "--sample-rate"],
+        );
+  const hostConcurrencyValue = values["host-concurrency"];
+  const hostConcurrency =
+    hostConcurrencyValue === undefined
+      ? undefined
+      : parseOrThrow(
+          () => getHostConcurrencyLimit(hostConcurrencyValue),
+          ["LINK_CHECK_HOST_CONCURRENCY", "--host-concurrency"],
+        );
+  if (hostConcurrency === undefined) {
     // Validate the environment variable early instead of failing on the first request
     parseOrThrow(() => getHostConcurrencyLimit(env.LINK_CHECK_HOST_CONCURRENCY));
-    return undefined;
   }
-  return parseOrThrow(
-    () => getHostConcurrencyLimit(value),
-    ["LINK_CHECK_HOST_CONCURRENCY", "--host-concurrency"],
-  );
-};
-
-const parseAllowPrivateHosts = (value: boolean | undefined, env: Env): boolean => {
-  const envValue = env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
-  if (envValue && envValue !== "true" && envValue !== "false") {
-    throw new UsageError(
-      `Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "${envValue}", expected "true" or "false".`,
-    );
-  }
-  return value ?? envValue === "true";
-};
-
-const parseCommonOptions = (values: ParsedValues, env: Env): CommonOptions => {
-  const sampleRate = parseSampleRate(values["sample-rate"], env);
-  const hostConcurrency = parseHostConcurrency(values["host-concurrency"], env);
   const isUpdatingBaseline = values["update-baseline"] ?? false;
   const pruneBaseline = values["prune-baseline"] ?? false;
   if (pruneBaseline && !isUpdatingBaseline) {
@@ -268,6 +247,12 @@ const parseCommonOptions = (values: ParsedValues, env: Env): CommonOptions => {
   if (pruneBaseline && sampleRate < 1) {
     throw new UsageError(
       "--prune-baseline needs a full run (sample rate 1), entries of pages that were not checked would be removed.",
+    );
+  }
+  const allowPrivateHostsEnv = env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
+  if (allowPrivateHostsEnv && allowPrivateHostsEnv !== "true" && allowPrivateHostsEnv !== "false") {
+    throw new UsageError(
+      `Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "${allowPrivateHostsEnv}", expected "true" or "false".`,
     );
   }
   // An empty LINK_CHECK_BASELINE means no baseline
@@ -281,7 +266,7 @@ const parseCommonOptions = (values: ParsedValues, env: Env): CommonOptions => {
     pruneBaseline,
     outputDir: values["output-dir"] ?? DEFAULT_OUTPUT_DIR,
     json: values.json ?? false,
-    allowPrivateHosts: parseAllowPrivateHosts(values["allow-private-hosts"], env),
+    allowPrivateHosts: values["allow-private-hosts"] ?? allowPrivateHostsEnv === "true",
     ...(hostConcurrency === undefined ? {} : { hostConcurrency }),
   };
 };
@@ -315,40 +300,24 @@ const parseSiteCommand = (
   };
 };
 
-const parseGithubOrgCommand = (args: string[], options: CommonOptions): CliCommand => {
-  const [org] = args;
-  if (org === undefined || args.length !== 1) {
-    throw new UsageError(`github-org expects exactly one organization, got ${args.length}.`);
-  }
-  if (!/^[A-Za-z\d](?:[A-Za-z\d-]*[A-Za-z\d])?$/.test(org)) {
-    throw new UsageError(`Invalid GitHub organization "${org}".`);
-  }
-  return { command: "github-org", org, options };
-};
-
-const parseFilesCommand = (
-  args: string[],
-  values: ParsedValues,
-  options: CommonOptions,
-): CliCommand => {
-  if (args.length === 0) {
-    throw new UsageError("files expects at least one glob pattern or file.");
-  }
-  return {
-    command: "files",
-    patterns: args,
-    dryRun: values["dry-run"] ?? false,
-    annotations: values.annotations ?? true,
-    options,
-  };
-};
-
 /**
  * Parses command line arguments (without `node` and the script). Environment variables are used as defaults.
  * @throws {UsageError} for unknown commands or options, missing arguments and invalid values
  */
 export const parseCliArgs = (argv: string[], env: Env = process.env): CliCommand => {
-  const { values, positionals } = parseArgv(argv);
+  let parsed: ReturnType<typeof parseArgs<{ options: typeof OPTIONS; allowPositionals: true }>>;
+  try {
+    parsed = parseArgs({
+      args: argv,
+      options: OPTIONS,
+      allowPositionals: true,
+      allowNegative: true,
+      strict: true,
+    });
+  } catch (error) {
+    throw new UsageError(getErrorMessage(error), { cause: error });
+  }
+  const { values, positionals } = parsed;
   const [first, ...args] = positionals;
 
   if (first === "help") {
@@ -364,15 +333,31 @@ export const parseCliArgs = (argv: string[], env: Env = process.env): CliCommand
     throw new UsageError(`Unknown command "${first}", expected one of: ${COMMANDS.join(", ")}.`);
   }
 
-  validateOptionValues(values, first);
-  const options = parseCommonOptions(values, env);
+  const options = parseCommonOptions(first, values, env);
   switch (first) {
     case "site":
       return parseSiteCommand(args, values, options);
-    case "github-org":
-      return parseGithubOrgCommand(args, options);
+    case "github-org": {
+      const [org] = args;
+      if (org === undefined || args.length !== 1) {
+        throw new UsageError(`github-org expects exactly one organization, got ${args.length}.`);
+      }
+      if (!/^[A-Za-z\d](?:[A-Za-z\d-]*[A-Za-z\d])?$/.test(org)) {
+        throw new UsageError(`Invalid GitHub organization "${org}".`);
+      }
+      return { command: "github-org", org, options };
+    }
     case "files":
-      return parseFilesCommand(args, values, options);
+      if (args.length === 0) {
+        throw new UsageError("files expects at least one glob pattern or file.");
+      }
+      return {
+        command: "files",
+        patterns: args,
+        dryRun: values["dry-run"] ?? false,
+        annotations: values.annotations ?? true,
+        options,
+      };
   }
 };
 
@@ -472,53 +457,6 @@ const runDryRun = async (
   );
 };
 
-/** Annotations (files command), job summary and step outputs */
-const publishReport = (
-  command: CheckCommand,
-  report: LinkCheckReport,
-  { env, stdout, stderr }: RunContext,
-) => {
-  const { options } = command;
-  const reportPaths = getReportPaths(report.siteName, options.outputDir);
-  if (command.command === "files" && command.annotations) {
-    // Workflow commands (annotations) are read from stdout, keep them off it only in --json mode
-    const annotationOut = options.json ? stderr : stdout;
-    const problems =
-      env.GITHUB_ACTIONS === "true" ? getFileAnnotations(report) : formatFileProblems(report);
-    for (const line of problems) {
-      annotationOut(`${line}\n`);
-    }
-  }
-  writeJobSummary(report, { reportPaths }, env.GITHUB_STEP_SUMMARY);
-  writeGithubOutputs(
-    {
-      "links-to-fix": report.summary.totalLinksToFix,
-      "report-path": reportPaths.json,
-      "report-html-path": reportPaths.html,
-    },
-    env.GITHUB_OUTPUT,
-  );
-};
-
-const saveUpdatedBaseline = (
-  path: string,
-  baseline: Baseline,
-  report: LinkCheckReport,
-  prune: boolean,
-) => {
-  const file = updateBaseline({
-    baseline,
-    failures: [...getLinksToFix(report), ...report.ignored],
-    // A run can check only part of what the baseline covers (file globs, --include, sampling),
-    // entries are only removed when asked for
-    prune,
-  });
-  writeBaseline(path, file);
-  console.log(
-    `Updated baseline ${path}: ${file.ignore.length} entries (was ${baseline.entries.length}).`,
-  );
-};
-
 /** Exit code for the links to fix: 1 only when failing on broken links and not updating the baseline */
 const getExitCode = (linksToFix: number, options: CommonOptions): number => {
   if (linksToFix === 0) {
@@ -538,32 +476,26 @@ const getExitCode = (linksToFix: number, options: CommonOptions): number => {
   return 0;
 };
 
-/** Loads the baseline file of the options (empty without one) */
-const loadCommandBaseline = (options: CommonOptions): Baseline => {
-  if (!options.baseline) {
-    return EMPTY_BASELINE;
-  }
-  const baseline = loadBaseline(options.baseline, { allowMissing: options.updateBaseline });
-  console.log(`Using baseline ${options.baseline} (${baseline.entries.length} entries).`);
-  return baseline;
-};
-
 const runCheckCommand = async (command: CheckCommand, context: RunContext): Promise<number> => {
   const { options } = command;
+  const { env, stdout, stderr } = context;
   if (options.hostConcurrency !== undefined) {
     // Read when the shared per-host limiter is created (on the first request)
     process.env.LINK_CHECK_HOST_CONCURRENCY = String(options.hostConcurrency);
   }
 
-  let baseline: Baseline;
-  try {
-    baseline = loadCommandBaseline(options);
-  } catch (error) {
-    if (error instanceof BaselineError) {
-      context.stderr(`Error: ${error.message}\n`);
-      return 2;
+  let baseline = EMPTY_BASELINE;
+  if (options.baseline) {
+    try {
+      baseline = loadBaseline(options.baseline, { allowMissing: options.updateBaseline });
+    } catch (error) {
+      if (error instanceof BaselineError) {
+        stderr(`Error: ${error.message}\n`);
+        return 2;
+      }
+      throw error;
     }
-    throw error;
+    console.log(`Using baseline ${options.baseline} (${baseline.entries.length} entries).`);
   }
 
   if (command.command === "files" && command.dryRun) {
@@ -571,15 +503,48 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
     return 0;
   }
 
-  const report = await runCommand(command, baseline, context.cwd, context.env);
-  publishReport(command, report, context);
+  const report = await runCommand(command, baseline, context.cwd, env);
+  const reportPaths = getReportPaths(report.siteName, options.outputDir);
+  const linksToFix = report.summary.totalLinksToFix;
+
+  if (command.command === "files" && command.annotations) {
+    // Workflow commands (annotations) are read from stdout, keep them off it only in --json mode
+    const annotationOut = options.json ? stderr : stdout;
+    const problems =
+      env.GITHUB_ACTIONS === "true" ? getFileAnnotations(report) : formatFileProblems(report);
+    for (const line of problems) {
+      annotationOut(`${line}\n`);
+    }
+  }
+  writeJobSummary(report, { reportPaths }, env.GITHUB_STEP_SUMMARY);
+  writeGithubOutputs(
+    {
+      "links-to-fix": linksToFix,
+      "report-path": reportPaths.json,
+      "report-html-path": reportPaths.html,
+    },
+    env.GITHUB_OUTPUT,
+  );
+
   if (options.updateBaseline && options.baseline) {
-    saveUpdatedBaseline(options.baseline, baseline, report, options.pruneBaseline);
+    const file = updateBaseline({
+      baseline,
+      failures: [...getLinksToFix(report), ...report.ignored],
+      // A run can check only part of what the baseline covers (file globs, --include, sampling),
+      // entries are only removed when asked for
+      prune: options.pruneBaseline,
+    });
+    writeBaseline(options.baseline, file);
+    console.log(
+      `Updated baseline ${options.baseline}: ${file.ignore.length} entries (was ${baseline.entries.length}).`,
+    );
   }
+
   if (options.json) {
-    context.stdout(`${JSON.stringify(report, null, 2)}\n`);
+    stdout(`${JSON.stringify(report, null, 2)}\n`);
   }
-  return getExitCode(report.summary.totalLinksToFix, options);
+
+  return getExitCode(linksToFix, options);
 };
 
 /**

@@ -160,7 +160,7 @@ jobs:
 - The project is ESM (`"type": "module"`). TypeScript runs directly with `tsx` (link checks) and vitest (tests), `tsc` only type-checks.
 - `pnpm install`, `pnpm run tsc`, `pnpm test` (single run) or `pnpm run test:watch`.
 
-* Format with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`.oxfmtrc.json`, also sorts imports) and lint with [oxlint](https://oxc.rs/docs/guide/usage/linter) (`.oxlintrc.json`). The linter runs type-aware rules (floating promises, `any` leaks, unsafe type assertions, deprecated APIs), limits function complexity (`sonarjs/cognitive-complexity`) and size, and bans skipped and focused tests. Warnings fail too.
+* Format with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`.oxfmtrc.json`, also sorts imports) and lint with [oxlint](https://oxc.rs/docs/guide/usage/linter) (`.oxlintrc.json`). The linter runs type-aware rules (floating promises, `any` leaks, unsafe type assertions, deprecated APIs), limits function complexity (`sonarjs/cognitive-complexity`, max 20), and bans skipped and focused tests. Warnings fail too.
   - `pnpm run check` runs everything CI runs except tests: formatter check, linter, suppression check, `tsc` and [knip](https://knip.dev/) (unused files, exports and dependencies).
   - `pnpm run check:fix` formats and applies safe lint fixes, `pnpm run lint` only lints, `pnpm run format` only formats.
   - Fix findings instead of suppressing them. A suppression (`// oxlint-disable-next-line rule -- reason`) needs a reason, and their number is capped (`pnpm run lint:suppressions`, `checks/lint_suppressions.ts`).

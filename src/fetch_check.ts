@@ -4,7 +4,6 @@ import {
   fetchWithHostLimit,
   formatServerErrorRetry,
   getServerErrorRetryDelay,
-  type LimitedResponse,
   MAX_SERVER_ERROR_RETRIES,
 } from "./http";
 import {
@@ -54,65 +53,6 @@ const lazyAnchorIndex = (html: string) => {
   };
 };
 
-/** Final failure of a page response after the retries, `undefined` for a successful response */
-const getResponseFailure = (
-  response: LimitedResponse<string>,
-  url: string,
-): FetchedPage | undefined => {
-  // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
-  const retryAfter = response.headers.get("Retry-After");
-  if (response.status === 429 && retryAfter) {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        error: "unexpected error",
-        status: response.status,
-        // Raw header without a unit: it can be seconds or an HTTP date
-        errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
-      },
-    };
-  }
-  // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
-  if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-    return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
-  }
-  if (!OKAY_STATUS_CODES.includes(response.status)) {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        error: "broken link",
-        status: response.status,
-        errorDetail: `${response.statusText} ${response.data}`,
-      },
-    };
-  }
-  return undefined;
-};
-
-/**
- * A server error on HEAD follows the server error retry policy before the GET fallback: wait for `Retry-After` (or the
- * backoff) with the whole host paused, or give up when it asks for too long. The GET is its first retry.
- * @returns the server error retries left for the GET, or the final failure
- */
-const handleHeadServerError = (
-  response: LimitedResponse<string>,
-  url: string,
-): { getRetries: number | undefined } | FetchedPage => {
-  if (!TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-    return { getRetries: undefined };
-  }
-  const delayMs = getServerErrorRetryDelay(0, response.headers.get("Retry-After"));
-  if (delayMs === undefined) {
-    return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
-  }
-  console.log(formatServerErrorRetry(url, response.status, delayMs));
-  incrementMetric("serverErrorRetries");
-  getHostLimiter().pause(url, delayMs);
-  return { getRetries: MAX_SERVER_ERROR_RETRIES - 1 };
-};
-
 /**
  * Fetches a page with `GET` (if its HTML is needed) or `HEAD` (falls back to `GET` if HEAD fails, see
  * `shouldRetryHeadWithGet`).
@@ -147,20 +87,60 @@ const fetchPage = async (
     let response = await request(needBody ? "GET" : "HEAD");
     // Some servers don't support (or block) HEAD requests, or answer them differently, retry once with GET
     if (!needBody && shouldRetryHeadWithGet(response.status)) {
-      const retry = handleHeadServerError(response, url);
-      if ("ok" in retry) {
-        return retry;
+      // A server error on HEAD follows the server error retry policy before the GET: wait for `Retry-After` (or the
+      // backoff) with the whole host paused, or give up when it asks for too long. The GET is its first retry.
+      let getServerErrorRetries: number | undefined;
+      if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+        const delayMs = getServerErrorRetryDelay(0, response.headers.get("Retry-After"));
+        if (delayMs === undefined) {
+          return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
+        }
+        console.log(formatServerErrorRetry(url, response.status, delayMs));
+        incrementMetric("serverErrorRetries");
+        getHostLimiter().pause(url, delayMs);
+        getServerErrorRetries = MAX_SERVER_ERROR_RETRIES - 1;
       }
       log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-      response = await request("GET", retry.getRetries);
+      response = await request("GET", getServerErrorRetries);
     }
-    return (
-      getResponseFailure(response, url) ?? {
-        ok: true,
-        status: response.status,
-        getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
-      }
-    );
+
+    // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
+    const retryAfter = response.headers.get("Retry-After");
+    if (response.status === 429 && retryAfter) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: "unexpected error",
+          status: response.status,
+          // Raw header without a unit: it can be seconds or an HTTP date
+          errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
+        },
+      };
+    }
+
+    // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
+    if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+      return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
+    }
+
+    if (!OKAY_STATUS_CODES.includes(response.status)) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: "broken link",
+          status: response.status,
+          errorDetail: `${response.statusText} ${response.data}`,
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      status: response.status,
+      getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
+    };
   } catch (error) {
     if (error instanceof DestinationNotAllowedError) {
       return { ok: false, result: getBlockedDestinationResult(error) };

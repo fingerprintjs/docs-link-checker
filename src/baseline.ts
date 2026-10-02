@@ -55,40 +55,9 @@ export class BaselineError extends Error {
 const ENTRY_KEYS = ["href", "pattern", "page", "reason"] as const;
 const ALLOWED_KEYS = new Set<string>(ENTRY_KEYS);
 
-/** The list of entries: `{ "ignore": [...] }` or a bare array */
-const getIgnoreList = (data: unknown): readonly unknown[] => {
-  if (Array.isArray(data)) {
-    return data;
-  }
-  if (!data || typeof data !== "object") {
-    throw new BaselineError(`expected an object with an "ignore" array, or an array`);
-  }
-  const unknownKeys = Object.keys(data).filter((key) => key !== "ignore" && key !== "$schema");
-  if (unknownKeys.length > 0) {
-    throw new BaselineError(`unknown top-level key(s): ${unknownKeys.join(", ")}`);
-  }
-  if (!("ignore" in data)) {
-    throw new BaselineError(`expected an "ignore" array`);
-  }
-  if (!Array.isArray(data.ignore)) {
-    throw new BaselineError(`"ignore" must be an array`);
-  }
-  return data.ignore;
-};
-
-/** A plain string entry, shorthand for `{ "pattern": ... }` */
-const validatePatternShorthand = (pattern: string, where: string): BaselineEntry => {
-  if (pattern === "") {
-    throw new BaselineError(`${where}: pattern must not be empty`);
-  }
-  if (pattern.length > MAX_GLOB_LENGTH) {
-    throw new BaselineError(`${where}: pattern is longer than ${MAX_GLOB_LENGTH} characters`);
-  }
-  return { pattern };
-};
-
-const validateEntryKeys = (keys: string[], where: string) => {
-  for (const key of keys) {
+const validateObjectEntry = (item: object, where: string): BaselineEntry => {
+  const values: Record<string, unknown> = Object.fromEntries(Object.entries(item));
+  for (const key of Object.keys(values)) {
     if (key === "regex") {
       throw new BaselineError(
         `${where}: "regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`,
@@ -98,11 +67,6 @@ const validateEntryKeys = (keys: string[], where: string) => {
       throw new BaselineError(`${where}: unknown key "${key}" (allowed: ${ENTRY_KEYS.join(", ")})`);
     }
   }
-};
-
-const validateObjectEntry = (item: object, where: string): BaselineEntry => {
-  const values: Record<string, unknown> = Object.fromEntries(Object.entries(item));
-  validateEntryKeys(Object.keys(values), where);
   const entry: BaselineEntry = {};
   for (const key of ENTRY_KEYS) {
     const value = values[key];
@@ -130,10 +94,36 @@ const validateObjectEntry = (item: object, where: string): BaselineEntry => {
  * @throws {BaselineError} with a message pointing to the invalid entry
  */
 export const validateBaseline = (data: unknown): BaselineFile => {
-  const entries = getIgnoreList(data).map((item, index): BaselineEntry => {
+  let list: readonly unknown[];
+  if (Array.isArray(data)) {
+    list = data;
+  } else if (data && typeof data === "object") {
+    const unknownKeys = Object.keys(data).filter((key) => key !== "ignore" && key !== "$schema");
+    if (unknownKeys.length > 0) {
+      throw new BaselineError(`unknown top-level key(s): ${unknownKeys.join(", ")}`);
+    }
+    if (!("ignore" in data)) {
+      throw new BaselineError(`expected an "ignore" array`);
+    }
+    if (!Array.isArray(data.ignore)) {
+      throw new BaselineError(`"ignore" must be an array`);
+    }
+    list = data.ignore;
+  } else {
+    throw new BaselineError(`expected an object with an "ignore" array, or an array`);
+  }
+
+  const entries = list.map((item, index): BaselineEntry => {
     const where = `ignore[${index}]`;
+    // A plain string is a shorthand for `{ "pattern": ... }`
     if (typeof item === "string") {
-      return validatePatternShorthand(item, where);
+      if (item === "") {
+        throw new BaselineError(`${where}: pattern must not be empty`);
+      }
+      if (item.length > MAX_GLOB_LENGTH) {
+        throw new BaselineError(`${where}: pattern is longer than ${MAX_GLOB_LENGTH} characters`);
+      }
+      return { pattern: item };
     }
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new BaselineError(`${where}: expected a string pattern or an object`);

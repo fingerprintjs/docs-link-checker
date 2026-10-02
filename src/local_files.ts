@@ -118,13 +118,6 @@ export type LinkKind = "local" | "external" | "skip";
  * - `skip`: other schemes (`mailto:`, `tel:`, `data:`...) and empty links.
  * - `local`: everything else (relative paths, root-relative paths, `#anchors`), checked on the filesystem.
  */
-/** The group of `CollectedLinks` each kind of link goes to */
-const LINK_GROUPS = {
-  local: "local",
-  external: "external",
-  skip: "skipped",
-} as const satisfies Record<LinkKind, keyof CollectedLinks>;
-
 export const getLinkKind = (href: string): LinkKind => {
   if (href.trim() === "") return "skip";
   if (/^https?:\/\//i.test(href) || href.startsWith("//")) return "external";
@@ -211,41 +204,6 @@ const isRealPathInsideRoot = (root: string, path: string): boolean => {
   }
 };
 
-const hashNotFound = (errorDetail: string): LinkCheckResult => ({
-  ok: false,
-  error: "hash not found",
-  status: 200,
-  errorDetail,
-});
-
-/** Splits a local link into its decoded path (without the query string) and its hash (without `#`) */
-const parseLocalHref = (href: string): { path: string; hash: string } => {
-  const hashIndex = href.indexOf("#");
-  const pathAndQuery = hashIndex === -1 ? href : href.slice(0, hashIndex);
-  const hash = hashIndex === -1 ? "" : href.slice(hashIndex + 1);
-  return { path: decodePath(pathAndQuery.split("?", 1)[0] ?? ""), hash };
-};
-
-/** Absolute path of the link target: the file itself (`#anchor`), root-relative or relative to the file */
-const resolveLocalTarget = (file: string, path: string, root: string): string => {
-  if (path === "") {
-    return file;
-  }
-  return path.startsWith("/") ? join(root, path) : resolve(dirname(file), path);
-};
-
-/** GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines */
-const checkCodeFileHash = (
-  target: string,
-  hash: string,
-  displayTarget: string,
-): LinkCheckResult => {
-  const lineResult = parseLineAnchor(hash)
-    ? checkLineAnchor(hash, countLines(readFileSync(target, "utf8")), displayTarget)
-    : undefined;
-  return lineResult ?? { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
-};
-
 /** `#anchor` in a markdown file must match a heading (or HTML anchor), with or without GitHub's prefix */
 const checkMarkdownAnchor = (
   markdownFile: string,
@@ -260,26 +218,12 @@ const checkMarkdownAnchor = (
   if (anchors.has(anchor) || anchors.has(withoutPrefix)) {
     return { ok: true, status: 200 };
   }
-  return hashNotFound(
-    `No heading matching #${hash} in ${toPosixPath(relative(root, markdownFile))}`,
-  );
-};
-
-/** Checks the hash of a link to a directory: GitHub renders its README, anchors point to its headings */
-const checkDirectoryAnchor = (
-  directory: string,
-  hash: string,
-  context: LocalCheckContext,
-  outside: LinkCheckResult,
-): LinkCheckResult => {
-  const readme = findReadme(directory);
-  if (!readme) {
-    return { ok: true, status: 200, note: "Hash not checked (directory without README)" };
-  }
-  if (!isRealPathInsideRoot(context.root, readme)) {
-    return outside;
-  }
-  return checkMarkdownAnchor(readme, hash, context);
+  return {
+    ok: false,
+    error: "hash not found",
+    status: 200,
+    errorDetail: `No heading matching #${hash} in ${toPosixPath(relative(root, markdownFile))}`,
+  };
 };
 
 /**
@@ -293,8 +237,15 @@ export const checkLocalLink = (
   context: LocalCheckContext,
 ): LinkCheckResult => {
   const { root } = context;
-  const { path, hash } = parseLocalHref(href);
-  const target = resolveLocalTarget(file, path, root);
+  const hashIndex = href.indexOf("#");
+  const pathAndQuery = hashIndex === -1 ? href : href.slice(0, hashIndex);
+  const hash = hashIndex === -1 ? "" : href.slice(hashIndex + 1);
+  const path = decodePath(pathAndQuery.split("?", 1)[0] ?? "");
+
+  let target = file;
+  if (path !== "") {
+    target = path.startsWith("/") ? join(root, path) : resolve(dirname(file), path);
+  }
   // A link can't point to a file outside the checked repository (`../../../etc/passwd`): reject it before touching
   // the filesystem, so files of the machine running the check are never read and can't make such a link pass
   const outside: LinkCheckResult = {
@@ -324,12 +275,25 @@ export const checkLocalLink = (
   if (hash.includes(":~:")) {
     return { ok: true, status: 200, note: "Text Fragment" };
   }
+
   if (stats.isDirectory()) {
-    return checkDirectoryAnchor(target, hash, context, outside);
+    // GitHub renders the README of a directory, anchors point to its headings
+    const readme = findReadme(target);
+    if (!readme) {
+      return { ok: true, status: 200, note: "Hash not checked (directory without README)" };
+    }
+    return isRealPathInsideRoot(root, readme)
+      ? checkMarkdownAnchor(readme, hash, context)
+      : outside;
   }
-  return isMarkdownFile(target)
-    ? checkMarkdownAnchor(target, hash, context)
-    : checkCodeFileHash(target, hash, displayTarget);
+  if (isMarkdownFile(target)) {
+    return checkMarkdownAnchor(target, hash, context);
+  }
+  // GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines
+  const lineResult = parseLineAnchor(hash)
+    ? checkLineAnchor(hash, countLines(readFileSync(target, "utf8")), displayTarget)
+    : undefined;
+  return lineResult ?? { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
 };
 
 export type CollectedLinks = {
@@ -370,13 +334,16 @@ export const collectLinksFromFiles = async ({
     const markdown = readFileSync(resolve(cwd, file), "utf8");
     for (const { href, text, line } of extractMarkdownLinks(markdown)) {
       const kind = getLinkKind(href);
-      collected[LINK_GROUPS[kind]].push({
+      const link: Link = {
         page: file,
         // Protocol-relative links (`//example.com`) are checked over https
         href: kind === "external" && href.startsWith("//") ? `https:${href}` : href,
         text,
         ...(line ? { line } : {}),
-      });
+      };
+      if (kind === "local") collected.local.push(link);
+      else if (kind === "external") collected.external.push(link);
+      else collected.skipped.push(link);
     }
   }
   return collected;
