@@ -54,7 +54,6 @@ export type CliCommand =
       command: "site";
       url: string;
       include: string[];
-      usePlaywright: boolean;
       options: CommonOptions;
     }
   | { command: "github-org"; org: string; options: CommonOptions }
@@ -116,11 +115,10 @@ Exit codes: 0 no links to fix (or not failing), 1 links to fix or the check cras
   site: `Checks links on all pages of a website, found in its sitemap (sitemap.xml or robots.txt).
 
 Usage:
-  ${BIN} site <url> [--include <prefix>...] [--use-playwright] [options]
+  ${BIN} site <url> [--include <prefix>...] [options]
 
 Options:
   --include <prefix>         Only check links starting with this prefix (repeatable)
-  --use-playwright           Extract links from pages with a browser (client-side rendered pages)
 
 ${COMMON_HELP}
 
@@ -161,7 +159,6 @@ export const getHelp = (topic?: CommandName) => HELP[topic ?? "main"];
 const OPTIONS = {
   help: { type: "boolean", short: "h" },
   include: { type: "string", multiple: true },
-  "use-playwright": { type: "boolean" },
   "dry-run": { type: "boolean" },
   annotations: { type: "boolean" },
   "sample-rate": { type: "string" },
@@ -183,7 +180,6 @@ type Env = Record<string, string | undefined>;
 /** Options that only make sense for one command */
 const COMMAND_OPTIONS = [
   ["include", "site"],
-  ["use-playwright", "site"],
   ["dry-run", "files"],
   ["annotations", "files"],
 ] as const satisfies ReadonlyArray<readonly [keyof typeof OPTIONS, CommandName]>;
@@ -306,13 +302,7 @@ const parseSiteCommand = (
   if (include.includes("")) {
     throw new UsageError("--include must not be empty.");
   }
-  return {
-    command: "site",
-    url,
-    include,
-    usePlaywright: values["use-playwright"] ?? false,
-    options,
-  };
+  return { command: "site", url, include, options };
 };
 
 const parseGithubOrgCommand = (args: string[], options: CommonOptions): CliCommand => {
@@ -410,7 +400,6 @@ const runCommand = (
       return checkWebsite({
         websiteUrl: command.url,
         linkFilter: command.include.length > 0 ? createPrefixFilter(command.include) : undefined,
-        usePlaywright: command.usePlaywright,
         sampleRate,
         baseline,
         outputDir,

@@ -11,7 +11,6 @@ import { sampleItems } from "./utils";
 export type CheckWebsiteArgs = {
   websiteUrl: string;
   linkFilter?: (link: Link) => boolean;
-  usePlaywright?: boolean;
   /** Share of sitemap pages to check (0-1), defaults to `LINK_CHECK_SAMPLE_RATE` */
   sampleRate?: number;
   /** Failing links matching the baseline are reported as ignored */
@@ -33,7 +32,6 @@ export const createPrefixFilter =
 export const checkWebsite = ({
   websiteUrl,
   linkFilter,
-  usePlaywright,
   sampleRate,
   baseline = EMPTY_BASELINE,
   outputDir = DEFAULT_OUTPUT_DIR,
@@ -50,7 +48,7 @@ export const checkWebsite = ({
     });
 
     const { links } = await timePhase("Extract links", () =>
-      getLinksFromPages({ pages, linkFilter, usePlaywright }),
+      getLinksFromPages({ pages, linkFilter }),
     );
     console.log(`Fetched ${links.length} links.`);
 

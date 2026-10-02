@@ -82,7 +82,6 @@ describe("parseCliArgs()", () => {
       command: "site",
       url: "https://example.com",
       include: ["https://a.com", "https://b"],
-      usePlaywright: false,
       options: defaults,
     });
   });

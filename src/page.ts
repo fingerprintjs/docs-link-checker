@@ -1,9 +1,7 @@
 import * as cheerio from "cheerio";
-import { PAGE_OPERATION_TIMEOUT, withPage } from "./browser";
 import { fetchWithHostLimit } from "./http";
-import { incrementMetric } from "./run_context";
 import type { Link } from "./types";
-import { getRandomUserAgent, PLAYWRIGHT_CONCURRENCY_LIMIT, parallelProcess } from "./utils";
+import { getRandomUserAgent, parallelProcess } from "./utils";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
 const isHttpUrl = (href: string) => {
@@ -77,17 +75,8 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
   links.each((_index, value) => {
     const href = value.attribs.href;
     if (href) {
-      if (href.startsWith("http")) {
-        // Handle absolute links
-        result.push({ href, text: $(value).text(), page: pageUrl });
-      } else {
-        // Handle relative links
-        result.push({
-          href: new URL(href, pageUrl).href,
-          text: $(value).text(),
-          page: pageUrl,
-        });
-      }
+      // Resolves both absolute and relative links (relative to pageUrl)
+      result.push({ href: new URL(href, pageUrl).href, text: $(value).text(), page: pageUrl });
     }
   });
 
@@ -99,30 +88,24 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
  * @param pages
  * @param verbose
  * @param linkFilter Filter function to apply to links
- * @param usePlaywright
  * @returns
  */
 export const getLinksFromPages = async ({
   pages,
   verbose = false,
   linkFilter,
-  usePlaywright = false,
 }: {
   pages: string[];
   verbose?: boolean;
   linkFilter?: (link: Link) => boolean;
-  usePlaywright?: boolean;
 }) => {
   console.log(`Retrieving links from ${pages.length} pages...`);
   // Parse links from pages
   const { results, errors } = await parallelProcess({
     items: pages,
-    processFn: async (page: string) => {
-      return usePlaywright ? parseLinksFromPageWithPlaywright(page) : parseLinksFromPage(page);
-    },
-    concurrencyLimit: usePlaywright ? PLAYWRIGHT_CONCURRENCY_LIMIT : undefined,
-    // With fetch, tasks can wait for a per-host slot, every request has its own timeout instead
-    taskTimeout: usePlaywright ? undefined : null,
+    processFn: async (page: string) => parseLinksFromPage(page),
+    // Tasks can wait for a per-host slot, every request has its own timeout instead
+    taskTimeout: null,
   });
 
   // Flatten and filter results if a link filter is provided
@@ -145,50 +128,4 @@ export const getLinksFromPages = async ({
   }
 
   return { links, errors };
-};
-
-/**
- * Not used right now, might be useful if you need to parse links from a client-rendered page.
- * Uses the shared browser (see `withPage`), call `closeBrowser()` when done if you use it outside of a run.
- * @param pageUrl
- * @returns
- */
-const parseLinksFromPageWithPlaywright = async (pageUrl: string): Promise<Link[]> => {
-  try {
-    return await withPage(async (page) => {
-      incrementMetric("playwrightNavigations");
-      // Navigate to the URL (heavy resources are blocked, the content is waited for below)
-      const response = await page.goto(pageUrl, {
-        timeout: PAGE_OPERATION_TIMEOUT,
-        waitUntil: "domcontentloaded",
-      });
-
-      if (!response?.ok()) {
-        console.error(`Could not fetch ${pageUrl} status: ${response?.status()}`);
-        return [];
-      }
-
-      await page.waitForSelector(".markdown-body");
-
-      // Extract all links using page.evaluate
-      const links = await page.evaluate((linkPage) => {
-        // Get all 'a' elements (but not anchor icons) inside article content
-        const anchors = document.querySelectorAll<HTMLAnchorElement>(
-          ".markdown-body a:not(.fa-anchor)",
-        );
-
-        // Convert NodeList to array and map to desired format
-        return Array.from(anchors).map((anchor) => ({
-          page: linkPage,
-          href: anchor.href,
-          text: anchor.textContent.trim(),
-        }));
-      }, pageUrl);
-
-      return filterOutIrrelevantLinks(links);
-    });
-  } catch (error) {
-    console.error("Error occurred while scraping:", error);
-    throw error;
-  }
 };

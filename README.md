@@ -34,7 +34,7 @@ pnpm cli files "**/*.md" --dry-run   # only list the links
 
 Commands:
 
-- `site <url> [--include <prefix>...] [--use-playwright]`: links on all pages of the website's sitemap. `--include` (repeatable) keeps only links starting with one of the prefixes.
+- `site <url> [--include <prefix>...]`: links on all pages of the website's sitemap. `--include` (repeatable) keeps only links starting with one of the prefixes.
 - `github-org <org>`: links in README files of the organization's public repositories.
 - `files <glob...> [--dry-run] [--no-annotations]`: links in local markdown files (`.md`, `.markdown`, `node_modules` and `.git` are skipped). Quote the globs so the CLI expands them (`**` works in every shell).
   - Relative links (`docs/a.md`, `../b/`, `a.md?plain=1`) are resolved against the file, root-relative links (`/docs/a.md`) against the current directory. The target file or directory must exist (file names are case-sensitive on Linux, like on GitHub), inside the current directory: links leaving it, also through symlinks, are broken and the file is never read.
