@@ -40,7 +40,8 @@ export const getMarkdownAnchors = (markdown: string): Set<string> => {
   const slugger = new GithubSlugger();
   const anchors = new Set<string>();
 
-  marked.walkTokens(marked.lexer(markdown), (token: Token) => {
+  // The callback is synchronous, walkTokens returns its (empty) results
+  void marked.walkTokens(marked.lexer(markdown), (token: Token) => {
     if (token.type === "heading") {
       // Slug is based on the rendered text content of the heading (no markdown syntax, link URLs or HTML tags)
       const headingHtml = Parser.parseInline(token.tokens ?? []);

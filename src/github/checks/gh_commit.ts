@@ -9,7 +9,7 @@ export const checkGitHubCommitLink = async (
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
-  const [, commit] = pathParts;
+  const [, commit = ""] = pathParts;
   const { data, error } = await tryCatch(octokit.repos.getCommit({ owner, repo, ref: commit }));
 
   if (data) {

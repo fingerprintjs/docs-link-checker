@@ -17,7 +17,8 @@ export const checkGitHubPullRequestLink = async (
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
-  const prNumber = parseInt(pathParts[1], 10);
+  const [, prNumberPart = ""] = pathParts;
+  const prNumber = parseInt(prNumberPart, 10);
   if (Number.isNaN(prNumber)) {
     return {
       ok: false,
@@ -38,7 +39,7 @@ export const checkGitHubPullRequestLink = async (
   if (error) {
     return getApiErrorResult(
       error,
-      `Pull request #${pathParts[1]} not found in repository ${owner}/${repo}`,
+      `Pull request #${prNumberPart} not found in repository ${owner}/${repo}`,
     );
   }
 

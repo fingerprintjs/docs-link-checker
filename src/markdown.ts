@@ -22,15 +22,11 @@ const extractGitHubRepoUrl = (url: string) => {
 // Helper function to resolve relative URLs
 function resolveUrl(base: string, relative: string): string {
   // If it's already an absolute URL, return as-is
-  try {
-    new URL(relative);
+  if (URL.canParse(relative)) {
     return relative;
-  } catch {
-    // Not an absolute URL, so resolve it
-    const baseUrl = new URL(base);
-    const resolvedUrl = new URL(relative, baseUrl);
-    return resolvedUrl.toString();
   }
+  // Not an absolute URL, so resolve it
+  return new URL(relative, new URL(base)).toString();
 }
 
 export function extractLinksFromMarkdown(markdown: string, page: string): Link[] {
@@ -78,7 +74,7 @@ export function extractLinksFromMarkdown(markdown: string, page: string): Link[]
   };
 
   // Parse the markdown with our custom renderer
-  marked.parse(markdown, { renderer });
+  marked.parse(markdown, { renderer, async: false });
 
   return links;
 }

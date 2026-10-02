@@ -90,7 +90,8 @@ vi.mock("playwright", () => {
 });
 
 import { closeBrowser, getBrowser, withPage } from "./browser";
-import { checkLinks, checkLinkWithPlaywright } from "./link";
+import { checkLinks } from "./link";
+import { checkLinkWithPlaywright } from "./playwright_check";
 import { withRun } from "./run";
 import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 
@@ -216,7 +217,7 @@ describe("shared browser", () => {
     const result = await checkLinkWithPlaywright("https://does-not-exist.example.com");
 
     expect(result).toMatchObject({ ok: false, error: "broken link" });
-    expect(result.ok === false && result.errorDetail).toContain("ERR_NAME_NOT_RESOLVED");
+    expect(!result.ok && result.errorDetail).toContain("ERR_NAME_NOT_RESOLVED");
     expect(state.launches).toBe(1);
   });
 
@@ -237,7 +238,7 @@ describe("shared browser", () => {
       "https://blocked.example.com/a",
       "https://blocked.example.com/a#x",
     ]);
-    expect(errors[0].message).toContain("Executable doesn't exist");
+    expect(errors[0]!.message).toContain("Executable doesn't exist");
   });
 });
 

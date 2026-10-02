@@ -69,7 +69,7 @@ describe("getReadmesFromOrg()", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     const first = await getReadmesFromOrg("org");
-    octokit.paginate.mockResolvedValue([...repos].reverse());
+    octokit.paginate.mockResolvedValue(repos.toReversed());
     const second = await getReadmesFromOrg("org");
 
     expect(first).toHaveLength(2);

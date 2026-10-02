@@ -267,6 +267,21 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
   });
 });
 
+describe("checkLinkWithGithubApi() with unknown sections", () => {
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "reports /owner/repo/%s/x as an unknown link type (no inherited object property)",
+    async (section) => {
+      const result = await checkLinkWithGithubApi(`https://github.com/o/r/${section}/x`);
+      expect(result).toEqual({
+        ok: false,
+        error: "unexpected error",
+        status: 400,
+        errorDetail: `Unknown link type: ${section}/x`,
+      });
+    },
+  );
+});
+
 describe("isGithubReservedRoute()", () => {
   it.each([
     "https://github.com/features",
@@ -314,7 +329,7 @@ describe("checkLinkWithGithubApi() with GitHub's own pages", () => {
     const result = await checkLinkWithGithubApi(url);
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(String(fetchMock.mock.calls[0][0])).toBe(url);
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(url);
     expect(octokit.users.getByUsername).not.toHaveBeenCalled();
     expect(octokit.repos.get).not.toHaveBeenCalled();
   });

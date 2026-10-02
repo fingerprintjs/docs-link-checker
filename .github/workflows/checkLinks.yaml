@@ -10,7 +10,7 @@ on:
       - main
   # Every day at 03:17 UTC (off-peak minute, scheduled runs at the top of the hour are often delayed)
   schedule:
-    - cron: '17 3 * * *'
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +31,7 @@ jobs:
     name: dev.fingerprint.com
     timeout-minutes: 15
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-environment
@@ -39,7 +39,7 @@ jobs:
         with:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
-      
+
       - name: Run link checker
         run: pnpm run checkLinks:docs
         env:
@@ -57,7 +57,7 @@ jobs:
     name: public GitHub READMEs in `fingerprintjs` org
     timeout-minutes: 15
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-environment
@@ -65,7 +65,7 @@ jobs:
         with:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
-      
+
       - name: Run link checker
         run: pnpm run checkLinks:github
         env:
@@ -83,7 +83,7 @@ jobs:
     name: fingerprint.com (just links to our resources)
     timeout-minutes: 20
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-environment
@@ -91,7 +91,7 @@ jobs:
         with:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
-      
+
       - name: Run link checker
         run: pnpm run checkLinks:web
         env:
@@ -110,12 +110,12 @@ jobs:
     needs: [docs, githubReadmes, web]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }}
-    
+
     steps:
       - name: Download reports
         uses: actions/download-artifact@v8
         with:
-          pattern: '*.html'
+          pattern: "*.html"
           path: reports
           merge-multiple: true
       - name: Create combined archive
@@ -129,7 +129,7 @@ jobs:
           cd reports
           zip -r ../combined-reports.zip ./*
           echo "created=true" >> "$GITHUB_OUTPUT"
-          
+
       - name: Upload combined artifact
         if: steps.archive.outputs.created == 'true'
         uses: actions/upload-artifact@v7
@@ -150,12 +150,12 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    
+
     steps:
       - name: Download reports
         uses: actions/download-artifact@v8
         with:
-          pattern: '*.html'
+          pattern: "*.html"
           path: reports
           merge-multiple: true
 

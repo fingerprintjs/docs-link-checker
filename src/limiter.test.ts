@@ -41,7 +41,7 @@ describe("Semaphore", () => {
   });
 
   it("rejects invalid limits", () => {
-    expect(() => new Semaphore(0)).toThrow();
+    expect(() => new Semaphore(0)).toThrow("Semaphore limit must be a positive integer");
   });
 });
 
@@ -205,7 +205,7 @@ describe("checkLinks() per-host limit", () => {
         : new Response(null, { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const { checkLinkWithFetch } = await import("./link");
+    const { checkLinkWithFetch } = await import("./fetch_check");
 
     expect(await checkLinkWithFetch("https://rate-limited.example.com/")).toEqual({
       ok: true,
@@ -219,7 +219,7 @@ describe("checkLinks() per-host limit", () => {
       async () => new Response(null, { status: 429, headers: { "Retry-After": "0" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { checkLinkWithFetch } = await import("./link");
+    const { checkLinkWithFetch } = await import("./fetch_check");
 
     expect(await checkLinkWithFetch("https://always-limited.example.com/")).toMatchObject({
       ok: false,

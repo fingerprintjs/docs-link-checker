@@ -171,7 +171,7 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
   });
 
   it("reads files over 1 MB with the blob API (no content in the contents API)", async () => {
-    const big = `${"x\n".repeat(200_000)}`;
+    const big = "x\n".repeat(200_000);
     getContent.mockResolvedValue({
       data: { type: "file", sha: "bigsha", size: big.length, encoding: "none", content: "" },
     });
@@ -226,7 +226,7 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
     const result = await checkBlob("main/src/a.ts", "#L1");
 
     expect(result).toMatchObject({ ok: false, error: "unexpected error" });
-    expect(result.ok === false && result.status).toBe(status);
+    expect(!result.ok && result.status).toBe(status);
   });
 
   it("reports a failing blob API request (large file) as 'unexpected error'", async () => {
@@ -287,10 +287,11 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
       ["a/b/c/d/e", "src/f.ts"],
     ]);
     // One listing of branches and one of tags for the repository and first segment, cached for the run
-    expect(listMatchingRefs.mock.calls.map(([params]) => params.ref).sort()).toEqual([
-      "heads/a",
-      "tags/a",
-    ]);
+    expect(
+      listMatchingRefs.mock.calls
+        .map(([params]) => params.ref)
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["heads/a", "tags/a"]);
   });
 
   it("resolves tag names with slashes (`@scope/pkg@1.0.0`)", async () => {

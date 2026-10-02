@@ -83,7 +83,7 @@ export const getWebsitePages = async (url: string, verbose = false) => {
  * @param {boolean} [verbose=false] - Whether to log the progress.
  * @return {Promise<string[]>} - A promise that resolves to an array of sitemap URLs.
  */
-export const getWebsiteSitemaps = async (url: string, verbose = false): Promise<string[]> => {
+const getWebsiteSitemaps = async (url: string, verbose = false): Promise<string[]> => {
   const sitemapExists = isSuccess((await fetchSitemap(`${url}/sitemap.xml`, false)).status);
   if (sitemapExists) {
     log("Sitemap.xml exists, parsing pages from it", verbose);
@@ -108,7 +108,7 @@ export const getWebsiteSitemaps = async (url: string, verbose = false): Promise<
  * @return {string[]} An array of sitemap URLs.
  */
 function getSitemapsFromSitemapIndex(sitemapIndexXml: string) {
-  const $ = cheerio.load(sitemapIndexXml, { xmlMode: true });
+  const $ = cheerio.load(sitemapIndexXml, { xml: true });
   const sitemaps: string[] = [];
   $("sitemap").each((_, sitemapElem) => {
     const location = $(sitemapElem).find("loc").text().trim();
@@ -151,7 +151,7 @@ export const getPagesFromSitemap = async (
     throw new Error(`Could not fetch sitemap ${sitemapUrl}: status ${sitemapResponse.status}`);
   }
   const response = sitemapResponse.data;
-  const $ = cheerio.load(response, { xmlMode: true });
+  const $ = cheerio.load(response, { xml: true });
 
   if ($("sitemapindex").length > 0) {
     if (depth >= MAX_SITEMAP_DEPTH) {

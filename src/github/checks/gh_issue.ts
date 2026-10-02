@@ -17,7 +17,7 @@ export const checkGitHubIssueLink = async (
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
-  const [, issueNumberPart] = pathParts;
+  const [, issueNumberPart = ""] = pathParts;
   if (issueNumberPart === "new") {
     return { ok: true, status: 200 };
   }

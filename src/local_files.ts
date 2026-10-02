@@ -12,9 +12,9 @@ import { getJSONReport, saveReport } from "./report/report";
 import { withRun } from "./run";
 import { timePhase } from "./run_context";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
-import { sampleItems } from "./utils";
+import { compareStrings, sampleItems } from "./utils";
 
-export const LOCAL_FILES_SITE_NAME = "local files";
+const LOCAL_FILES_SITE_NAME = "local files";
 
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
 const IGNORED_DIRECTORIES = new Set(["node_modules", ".git"]);
@@ -22,7 +22,7 @@ const IGNORED_DIRECTORIES = new Set(["node_modules", ".git"]);
 const isMarkdownFile = (path: string) => MARKDOWN_EXTENSIONS.has(extname(path).toLowerCase());
 
 /** Relative path with `/` separators (used as the page of local links, in reports and annotations) */
-export const toPosixPath = (path: string) => path.split(sep).join("/");
+const toPosixPath = (path: string) => path.split(sep).join("/");
 
 /**
  * Expands glob patterns (and plain file paths) to markdown files, relative to `cwd`, sorted and deduplicated.
@@ -41,10 +41,13 @@ export const findMarkdownFiles = async (patterns: string[], cwd: string): Promis
       }
     }
   }
-  return [...files].sort();
+  return [...files].toSorted();
 };
 
 export type MarkdownLink = { href: string; text: string; line?: number };
+
+// `Token` includes a generic token with any `type`, so checking `type` alone does not narrow it
+const isLinkToken = (token: Token): token is Tokens.Link => token.type === "link";
 
 const stripFormatting = (text: string) => text.replace(/\*\*|__|\*|_|~~|`/g, "");
 
@@ -61,7 +64,7 @@ const lineAt = (lineStarts: number[], offset: number): number => {
   let [low, high] = [0, lineStarts.length - 1];
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
-    if (lineStarts[middle] <= offset) {
+    if ((lineStarts[middle] ?? 0) <= offset) {
       low = middle;
     } else {
       high = middle - 1;
@@ -84,7 +87,7 @@ export const extractMarkdownLinks = (markdown: string): MarkdownLink[] => {
 
   const findLine = (raw: string): number | undefined => {
     // Links inside blockquotes and lists can span lines that were re-indented by the lexer, search the first line
-    const candidates = [raw, raw.split("\n")[0]];
+    const candidates = [raw, raw.split("\n", 1)[0] ?? raw];
     for (const candidate of candidates) {
       const offset = source.indexOf(candidate, cursor);
       if (offset !== -1) {
@@ -95,10 +98,14 @@ export const extractMarkdownLinks = (markdown: string): MarkdownLink[] => {
     return undefined;
   };
 
-  marked.walkTokens(marked.lexer(source), (token: Token) => {
-    if (token.type === "link") {
-      const link = token as Tokens.Link;
-      links.push({ href: link.href, text: stripFormatting(link.text), line: findLine(link.raw) });
+  // The callback is synchronous, walkTokens returns its (empty) results
+  void marked.walkTokens(marked.lexer(source), (token: Token) => {
+    if (isLinkToken(token)) {
+      links.push({
+        href: token.href,
+        text: stripFormatting(token.text),
+        line: findLine(token.raw),
+      });
     }
   });
   return links;
@@ -111,6 +118,13 @@ export type LinkKind = "local" | "external" | "skip";
  * - `skip`: other schemes (`mailto:`, `tel:`, `data:`...) and empty links.
  * - `local`: everything else (relative paths, root-relative paths, `#anchors`), checked on the filesystem.
  */
+/** The group of `CollectedLinks` each kind of link goes to */
+const LINK_GROUPS = {
+  local: "local",
+  external: "external",
+  skip: "skipped",
+} as const satisfies Record<LinkKind, keyof CollectedLinks>;
+
 export const getLinkKind = (href: string): LinkKind => {
   if (href.trim() === "") return "skip";
   if (/^https?:\/\//i.test(href) || href.startsWith("//")) return "external";
@@ -170,16 +184,17 @@ export const findReadme = (directory: string): string | undefined => {
         (entry.isFile() || (entry.isSymbolicLink() && isFileTarget(join(directory, entry.name)))),
     )
     .map((entry) => entry.name)
-    .sort((a, b) => {
-      const byExtension =
-        README_NAMES.indexOf(a.toLowerCase()) - README_NAMES.indexOf(b.toLowerCase());
-      return byExtension !== 0 ? byExtension : a < b ? -1 : a > b ? 1 : 0;
-    });
-  return candidates.length > 0 ? join(directory, candidates[0]) : undefined;
+    .toSorted(
+      (a, b) =>
+        README_NAMES.indexOf(a.toLowerCase()) - README_NAMES.indexOf(b.toLowerCase()) ||
+        compareStrings(a, b),
+    );
+  const [first] = candidates;
+  return first === undefined ? undefined : join(directory, first);
 };
 
 /** Is `path` the root or inside it (lexically, `path` and `root` are absolute) */
-export const isInsideRoot = (root: string, path: string): boolean => {
+const isInsideRoot = (root: string, path: string): boolean => {
   const fromRoot = relative(root, path);
   return (
     fromRoot === "" ||
@@ -196,6 +211,77 @@ const isRealPathInsideRoot = (root: string, path: string): boolean => {
   }
 };
 
+const hashNotFound = (errorDetail: string): LinkCheckResult => ({
+  ok: false,
+  error: "hash not found",
+  status: 200,
+  errorDetail,
+});
+
+/** Splits a local link into its decoded path (without the query string) and its hash (without `#`) */
+const parseLocalHref = (href: string): { path: string; hash: string } => {
+  const hashIndex = href.indexOf("#");
+  const pathAndQuery = hashIndex === -1 ? href : href.slice(0, hashIndex);
+  const hash = hashIndex === -1 ? "" : href.slice(hashIndex + 1);
+  return { path: decodePath(pathAndQuery.split("?", 1)[0] ?? ""), hash };
+};
+
+/** Absolute path of the link target: the file itself (`#anchor`), root-relative or relative to the file */
+const resolveLocalTarget = (file: string, path: string, root: string): string => {
+  if (path === "") {
+    return file;
+  }
+  return path.startsWith("/") ? join(root, path) : resolve(dirname(file), path);
+};
+
+/** GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines */
+const checkCodeFileHash = (
+  target: string,
+  hash: string,
+  displayTarget: string,
+): LinkCheckResult => {
+  const lineResult = parseLineAnchor(hash)
+    ? checkLineAnchor(hash, countLines(readFileSync(target, "utf8")), displayTarget)
+    : undefined;
+  return lineResult ?? { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
+};
+
+/** `#anchor` in a markdown file must match a heading (or HTML anchor), with or without GitHub's prefix */
+const checkMarkdownAnchor = (
+  markdownFile: string,
+  hash: string,
+  { root, anchorCache }: LocalCheckContext,
+): LinkCheckResult => {
+  const anchor = decodeHash(hash).toLowerCase();
+  const anchors = getAnchorsOfFile(markdownFile, anchorCache);
+  const withoutPrefix = anchor.startsWith(USER_CONTENT_PREFIX)
+    ? anchor.slice(USER_CONTENT_PREFIX.length)
+    : anchor;
+  if (anchors.has(anchor) || anchors.has(withoutPrefix)) {
+    return { ok: true, status: 200 };
+  }
+  return hashNotFound(
+    `No heading matching #${hash} in ${toPosixPath(relative(root, markdownFile))}`,
+  );
+};
+
+/** Checks the hash of a link to a directory: GitHub renders its README, anchors point to its headings */
+const checkDirectoryAnchor = (
+  directory: string,
+  hash: string,
+  context: LocalCheckContext,
+  outside: LinkCheckResult,
+): LinkCheckResult => {
+  const readme = findReadme(directory);
+  if (!readme) {
+    return { ok: true, status: 200, note: "Hash not checked (directory without README)" };
+  }
+  if (!isRealPathInsideRoot(context.root, readme)) {
+    return outside;
+  }
+  return checkMarkdownAnchor(readme, hash, context);
+};
+
 /**
  * Checks a local link (relative path, root-relative path or `#anchor`) found in `file`:
  * the target file or directory must exist, `#anchors` in markdown files must match a heading (or HTML anchor).
@@ -204,15 +290,11 @@ const isRealPathInsideRoot = (root: string, path: string): boolean => {
 export const checkLocalLink = (
   file: string,
   href: string,
-  { root, anchorCache }: LocalCheckContext,
+  context: LocalCheckContext,
 ): LinkCheckResult => {
-  const hashIndex = href.indexOf("#");
-  const pathAndQuery = hashIndex === -1 ? href : href.slice(0, hashIndex);
-  const hash = hashIndex === -1 ? "" : href.slice(hashIndex + 1);
-  const path = decodePath(pathAndQuery.split("?")[0]);
-
-  const target =
-    path === "" ? file : path.startsWith("/") ? join(root, path) : resolve(dirname(file), path);
+  const { root } = context;
+  const { path, hash } = parseLocalHref(href);
+  const target = resolveLocalTarget(file, path, root);
   // A link can't point to a file outside the checked repository (`../../../etc/passwd`): reject it before touching
   // the filesystem, so files of the machine running the check are never read and can't make such a link pass
   const outside: LinkCheckResult = {
@@ -242,46 +324,12 @@ export const checkLocalLink = (
   if (hash.includes(":~:")) {
     return { ok: true, status: 200, note: "Text Fragment" };
   }
-
-  let markdownFile: string | undefined;
   if (stats.isDirectory()) {
-    // GitHub renders the README of a directory, anchors point to its headings
-    markdownFile = findReadme(target);
-    if (!markdownFile) {
-      return { ok: true, status: 200, note: "Hash not checked (directory without README)" };
-    }
-    if (!isRealPathInsideRoot(root, markdownFile)) {
-      return outside;
-    }
-  } else if (isMarkdownFile(target)) {
-    markdownFile = target;
+    return checkDirectoryAnchor(target, hash, context, outside);
   }
-
-  if (!markdownFile) {
-    // GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines
-    const lineResult = parseLineAnchor(hash)
-      ? checkLineAnchor(hash, countLines(readFileSync(target, "utf8")), displayTarget)
-      : undefined;
-    if (lineResult) {
-      return lineResult;
-    }
-    return { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
-  }
-
-  const anchor = decodeHash(hash).toLowerCase();
-  const anchors = getAnchorsOfFile(markdownFile, anchorCache);
-  const withoutPrefix = anchor.startsWith(USER_CONTENT_PREFIX)
-    ? anchor.slice(USER_CONTENT_PREFIX.length)
-    : anchor;
-  if (anchors.has(anchor) || anchors.has(withoutPrefix)) {
-    return { ok: true, status: 200 };
-  }
-  return {
-    ok: false,
-    error: "hash not found",
-    status: 200,
-    errorDetail: `No heading matching #${hash} in ${toPosixPath(relative(root, markdownFile))}`,
-  };
+  return isMarkdownFile(target)
+    ? checkMarkdownAnchor(target, hash, context)
+    : checkCodeFileHash(target, hash, displayTarget);
 };
 
 export type CollectedLinks = {
@@ -322,15 +370,13 @@ export const collectLinksFromFiles = async ({
     const markdown = readFileSync(resolve(cwd, file), "utf8");
     for (const { href, text, line } of extractMarkdownLinks(markdown)) {
       const kind = getLinkKind(href);
-      const link: Link = {
+      collected[LINK_GROUPS[kind]].push({
         page: file,
+        // Protocol-relative links (`//example.com`) are checked over https
         href: kind === "external" && href.startsWith("//") ? `https:${href}` : href,
         text,
         ...(line ? { line } : {}),
-      };
-      if (kind === "local") collected.local.push(link);
-      else if (kind === "external") collected.external.push(link);
-      else collected.skipped.push(link);
+      });
     }
   }
   return collected;

@@ -1,44 +1,20 @@
 import { PromisePoolError } from "@supercharge/promise-pool";
-import type { Page, Response as PlaywrightResponse } from "playwright";
-import {
-  HASH_FALLBACK_WAIT_TIMEOUT,
-  HASH_WAIT_TIMEOUT,
-  PAGE_OPERATION_TIMEOUT,
-  withPage,
-} from "./browser";
-import { assertDestinationAllowed, DestinationNotAllowedError } from "./destination";
+import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
-import {
-  isGithubCodeLineLink,
-  isGithubReservedRoute,
-  isGithubUrl,
-  isGithubWikiLink,
-} from "./github/gh_url";
-import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
-import {
-  fetchWithHostLimit,
-  formatServerErrorRetry,
-  getServerErrorRetryDelay,
-  MAX_SERVER_ERROR_RETRIES,
-} from "./http";
+import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
 import { withTimeout } from "./limiter";
+import { hasHash, stripHash } from "./link_common";
+import { checkUrlsOnPageWithPlaywright, resultFor } from "./playwright_check";
 import { withRun } from "./run";
 import { incrementMetric, timePhase } from "./run_context";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import {
   CONCURRENCY_LIMIT,
-  FORBIDDEN_STATUS_CODES,
-  getHostLimiter,
-  getRandomUserAgent,
   log,
-  OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
   parallelProcess,
   TASK_TIMEOUT,
-  TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./utils";
-
-export { closeBrowser } from "./browser";
 
 type CheckLinksArgs = {
   links: Link[];
@@ -55,7 +31,7 @@ type CheckLinksArgs = {
  */
 export type CheckMethod = "fetch" | "github-api" | "invalid";
 
-export const getInitialCheckMethod = (href: string): CheckMethod => {
+const getInitialCheckMethod = (href: string): CheckMethod => {
   // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
   // when links are extracted, anything that gets here anyway is reported without any request.
   if (!URL.canParse(href) || !["http:", "https:"].includes(new URL(href).protocol)) {
@@ -75,30 +51,8 @@ export const getInitialCheckMethod = (href: string): CheckMethod => {
     return "fetch";
   }
 };
-
-/** Result for a link to a private or local address: never requested, not counted as broken */
-export const getBlockedDestinationResult = (
-  error: DestinationNotAllowedError,
-): LinkCheckResult => ({
-  ok: false,
-  error: "could not check",
-  errorDetail: error.message,
-  destinationBlocked: true,
-});
-
-/**
- * Result for a 502, 503 or 504 that persisted after the retries (`TRANSIENT_SERVER_ERROR_STATUS_CODES`): the server
- * is overloaded or rate limiting (github.com returns 503 under load), it says nothing about the link
- */
-export const getServerErrorResult = (status: number, statusText: string): LinkCheckResult => ({
-  ok: false,
-  error: "could not check",
-  status,
-  errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
-});
-
 // Status codes returned by fetch that might be caused by bot protection, rate limiting or the request itself
-export const PLAYWRIGHT_RETRY_STATUS_CODES = [401, 403, 405, 406, 408, 429];
+const PLAYWRIGHT_RETRY_STATUS_CODES = new Set([401, 403, 405, 406, 408, 429]);
 
 /**
  * Decides if a failed first-pass result should be re-checked with Playwright.
@@ -129,7 +83,7 @@ export const shouldRecheckWithPlaywright = (
         // No status means a network error or a timeout
         return (
           result.status === undefined ||
-          PLAYWRIGHT_RETRY_STATUS_CODES.includes(result.status) ||
+          PLAYWRIGHT_RETRY_STATUS_CODES.has(result.status) ||
           result.status >= 500
         );
       }
@@ -175,26 +129,6 @@ const memoizeByKey = <R>(fn: (key: string) => Promise<R>) => {
     return promise;
   };
 };
-
-/** The URL without its hash (`https://example.com/page#section` -> `https://example.com/page`) */
-export const stripHash = (href: string): string => {
-  try {
-    const url = new URL(href);
-    url.hash = "";
-    return url.href;
-  } catch {
-    return href;
-  }
-};
-
-const hasHash = (href: string): boolean => {
-  try {
-    return new URL(href).hash !== "";
-  } catch {
-    return false;
-  }
-};
-
 const getHostname = (href: string): string => {
   try {
     return new URL(href).hostname;
@@ -224,7 +158,11 @@ export const interleaveByHost = <T extends { href: string }>(items: T[]): T[] =>
   const result: T[] = [];
   for (let i = 0; queues.length > 0; i++) {
     for (const queue of queues) {
-      result.push(queue[i]);
+      // Queues shorter than i + 1 were dropped in the previous round
+      const item = queue[i];
+      if (item !== undefined) {
+        result.push(item);
+      }
     }
     queues = queues.filter((queue) => queue.length > i + 1);
   }
@@ -232,7 +170,7 @@ export const interleaveByHost = <T extends { href: string }>(items: T[]): T[] =>
 };
 
 /** Links grouped by the page they point to (URL without hash), in order of first appearance */
-export const groupLinksByPage = (links: Link[]): Array<{ href: string; links: Link[] }> => {
+const groupLinksByPage = (links: Link[]): Array<{ href: string; links: Link[] }> => {
   const groups = new Map<string, Link[]>();
   for (const link of links) {
     const pageUrl = stripHash(link.href);
@@ -243,7 +181,7 @@ export const groupLinksByPage = (links: Link[]): Array<{ href: string; links: Li
       groups.set(pageUrl, [link]);
     }
   }
-  return [...groups.entries()].map(([href, links]) => ({ href, links }));
+  return [...groups.entries()].map(([href, pageLinks]) => ({ href, links: pageLinks }));
 };
 
 /**
@@ -340,597 +278,3 @@ const checkLinksInRun = async ({
   log(finalErrors, verbose);
   return { results: finalResults, errors: finalErrors };
 };
-
-function shouldSpoofUserAgent(url: string) {
-  // Android.com blocks you if you spoof the user agent
-  if (url.includes("android.com")) {
-    return false;
-  }
-  return true;
-}
-
-/**
- * A failed HEAD request is retried once with GET: some servers refuse HEAD (403, 405, 501) and some answer it
- * differently than GET (support.google.com and chatgpt.com return 404 to HEAD and 200 to GET).
- * Not on 429: the host is rate limiting, another request would not help (see `fetchWithHostLimit`).
- */
-export const shouldRetryHeadWithGet = (status: number): boolean =>
-  !OKAY_STATUS_CODES.includes(status) && status !== 429;
-
-/**
- * Result of fetching a page (URL without hash): either a final failure, or the status and the anchors of the page.
- */
-export type FetchedPage =
-  | { ok: true; status: number; getAnchors?: () => AnchorIndex }
-  | { ok: false; result: LinkCheckResult };
-
-/** Parses the HTML on first use and then drops it, so cached pages only keep their (much smaller) anchor index */
-const lazyAnchorIndex = (html: string) => {
-  let source: string | undefined = html;
-  let index: AnchorIndex | undefined;
-  return () => {
-    if (!index) {
-      index = buildAnchorIndex(source ?? "");
-      source = undefined;
-    }
-    return index;
-  };
-};
-
-/**
- * Fetches a page with `GET` (if its HTML is needed) or `HEAD` (falls back to `GET` if HEAD fails, see
- * `shouldRetryHeadWithGet`).
- * Limited per host, honours `Retry-After` on 429 (pauses the whole host). Never throws.
- */
-export const fetchPage = async (
-  url: string,
-  { needBody, verbose = false }: { needBody: boolean; verbose?: boolean },
-): Promise<FetchedPage> => {
-  const headers = new Headers();
-  if (shouldSpoofUserAgent(url)) {
-    headers.set("User-Agent", getRandomUserAgent());
-  }
-
-  // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
-  // unread bodies are cancelled (see `fetchWithHostLimit`)
-  // A HEAD request is not retried after a server error: the GET fallback is (see `shouldRetryHeadWithGet`), and the
-  // HEAD counts as the first attempt, so a failing server gets at most `1 + MAX_SERVER_ERROR_RETRIES` requests
-  const request = (method: "GET" | "HEAD", serverErrorRetries?: number) =>
-    fetchWithHostLimit(
-      url,
-      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : serverErrorRetries },
-      async (response) =>
-        // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
-        // An error page body is kept for the error detail (HEAD responses have none).
-        method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status))
-          ? response.text()
-          : "",
-    );
-
-  try {
-    let response = await request(needBody ? "GET" : "HEAD");
-    // Some servers don't support (or block) HEAD requests, or answer them differently, retry once with GET
-    if (!needBody && shouldRetryHeadWithGet(response.status)) {
-      // A server error on HEAD follows the server error retry policy before the GET: wait for `Retry-After` (or the
-      // backoff) with the whole host paused, or give up when it asks for too long. The GET is its first retry.
-      let getServerErrorRetries: number | undefined;
-      if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-        const delayMs = getServerErrorRetryDelay(0, response.headers.get("Retry-After"));
-        if (delayMs === undefined) {
-          return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
-        }
-        console.log(formatServerErrorRetry(url, response.status, delayMs));
-        incrementMetric("serverErrorRetries");
-        getHostLimiter().pause(url, delayMs);
-        getServerErrorRetries = MAX_SERVER_ERROR_RETRIES - 1;
-      }
-      log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-      response = await request("GET", getServerErrorRetries);
-    }
-
-    // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
-    const retryAfter = response.headers.get("Retry-After");
-    if (response.status === 429 && retryAfter) {
-      return {
-        ok: false,
-        result: {
-          ok: false,
-          error: "unexpected error",
-          status: response.status,
-          // Raw header without a unit: it can be seconds or an HTTP date
-          errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
-        },
-      };
-    }
-
-    // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
-    if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-      return {
-        ok: false,
-        result: getServerErrorResult(response.status, response.statusText),
-      };
-    }
-
-    if (OKAY_STATUS_CODES.includes(response.status) === false) {
-      return {
-        ok: false,
-        result: {
-          ok: false,
-          error: "broken link",
-          status: response.status,
-          errorDetail: `${response.statusText} ${response.data}`,
-        },
-      };
-    }
-
-    return {
-      ok: true,
-      status: response.status,
-      getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
-    };
-  } catch (error) {
-    if (error instanceof DestinationNotAllowedError) {
-      return { ok: false, result: getBlockedDestinationResult(error) };
-    }
-    log(`Something went wrong: ${error}`, verbose);
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        error: "broken link",
-        errorDetail: String(error),
-      },
-    };
-  }
-};
-
-/**
- * Page fetches of a single `checkLinks` call, keyed by URL without hash: each page is fetched once,
- * no matter how many links (with different hashes) point to it.
- */
-export class PageFetchCache {
-  private readonly pages = new Map<string, Promise<FetchedPage>>();
-
-  /**
-   * @param pagesWithHash pages (URLs without hash) that are linked with a hash somewhere. They are fetched with GET
-   * right away, also for links without a hash, so the page is not fetched twice (HEAD and GET).
-   */
-  constructor(private readonly pagesWithHash: ReadonlySet<string> = new Set()) {}
-
-  get(pageUrl: string, needBody: boolean, verbose = false): Promise<FetchedPage> {
-    const getKey = `GET ${pageUrl}`;
-    const useGet = needBody || this.pagesWithHash.has(pageUrl) || this.pages.has(getKey);
-    const key = useGet ? getKey : `HEAD ${pageUrl}`;
-    let page = this.pages.get(key);
-    if (!page) {
-      incrementMetric("uniquePagesFetched");
-      page = fetchPage(pageUrl, { needBody: useGet, verbose });
-      this.pages.set(key, page);
-    }
-    return page;
-  }
-
-  /** Number of distinct page fetches */
-  get size() {
-    return this.pages.size;
-  }
-}
-
-// Google Help Center hosts, their `#zippy=` fragments expand accordion sections
-const GOOGLE_HELP_HOSTS = new Set(["support.google.com"]);
-
-/**
- * Fragments that are not element ids, so they are accepted without looking for an anchor
- * @param fragment the URL hash without `#`
- * @param url the full URL (some fragments are only special on some hosts)
- * @returns a note for the report, or `undefined` for a regular anchor
- */
-export const getSpecialFragmentNote = (fragment: string, url: string): string | undefined => {
-  if (fragment === "/") {
-    return "Accidental hash";
-  }
-  if (fragment.includes(":~:")) {
-    /**
-     * The link includes a [Text Fragment](https://developer.mozilla.org/en-US/docs/Web/Text_fragments)
-     * Checking this properly is not trivial, let's ignore them for now
-     **/
-    return "Text Fragment";
-  }
-  if (fragment.startsWith("zippy=") && GOOGLE_HELP_HOSTS.has(new URL(url).hostname)) {
-    // Google Help Center: `#zippy=,section` expands accordion sections, there is no element with that id
-    return "Google Help accordion state";
-  }
-  return undefined;
-};
-
-/** Result for a URL (possibly with a hash) based on its fetched page */
-const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
-  if (!page.ok) {
-    return page.result;
-  }
-  const hash = new URL(url).hash;
-  if (!hash) {
-    return { ok: true, status: page.status };
-  }
-
-  const note = getSpecialFragmentNote(hash.slice(1), url);
-  if (note) {
-    return { ok: true, status: page.status, note };
-  }
-
-  // Note: GitHub `#L12` line links no longer work server-side, since GitHub switched to client-side rendering 🤦
-  // Playwright fallback still works. The check is kept in case GitHub switches back to server-side rendering.
-  if (!page.getAnchors || !isHashInAnchorIndex(page.getAnchors(), hash, url)) {
-    return { ok: false, status: page.status, error: "hash not found" };
-  }
-  return { ok: true, status: page.status };
-};
-
-/**
- * Check a link with fetch, assuming page is server-side rendered
- * @param url link URL
- * @param verbose log details
- * @param pageCache share page fetches between links (links to the same page with different hashes fetch it once)
- * @returns LinkCheckResult, a URL that cannot be parsed is reported as a broken link
- */
-export const checkLinkWithFetch = async (
-  url: string,
-  verbose = false,
-  pageCache?: PageFetchCache,
-): Promise<LinkCheckResult> => {
-  // A URL that cannot be parsed (or is not http(s)) is a broken link, not an exception
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(url);
-  } catch (error) {
-    return { ok: false, error: "broken link", errorDetail: `Invalid URL: ${String(error)}` };
-  }
-  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-    return {
-      ok: false,
-      error: "broken link",
-      errorDetail: `Unsupported URL scheme: ${parsedUrl.protocol}`,
-    };
-  }
-  const needBody = hasHash(url);
-  const pageUrl = stripHash(url);
-  const page = pageCache
-    ? await pageCache.get(pageUrl, needBody, verbose)
-    : await fetchPage(pageUrl, { needBody, verbose });
-  const result = getResultFromPage(page, url);
-  if (result.ok) {
-    log(`OK`, verbose);
-  }
-  return result;
-};
-
-/** Waits up to `timeout` for an element matching `selector` to be in the DOM */
-async function waitForSelectorAttached(page: Page, selector: string, timeout: number) {
-  try {
-    // Wait for the element to be in the DOM (client-side rendered pages add it later).
-    // Anchors like `<a id="x"></a>` are valid targets but never "visible", so visibility is not required.
-    await page.locator(selector).first().waitFor({ state: "attached", timeout });
-    return true;
-  } catch (error) {
-    // If the timeout is reached, return false instead of throwing an error
-    if (error instanceof Error && error.name === "TimeoutError") {
-      return false;
-    }
-    // Re-throw any other errors
-    throw error;
-  }
-}
-
-// Line numbers of the GitHub code view (`<div data-line-number="12">`)
-const GITHUB_CODE_LINE_SELECTOR = "[data-line-number]";
-
-/**
- * Body of a navigation response, `""` if it can't be read within `PAGE_OPERATION_TIMEOUT` (Playwright has no timeout
- * for response bodies, a body that never ends would hold the page slot). The page is closed afterwards anyway.
- */
-const readResponseText = (response: PlaywrightResponse): Promise<string> =>
-  withTimeout(response.text(), PAGE_OPERATION_TIMEOUT, "Reading the response timed out").catch(
-    () => "",
-  );
-
-/** Settings of the long wait for the anchor of the navigated URL (see `waitForLateAnchor`) */
-type LateAnchorWait = {
-  /** End of the overall budget (`Date.now()` based) */
-  deadline: number;
-};
-
-/**
- * Waits for an anchor rendered late until the deadline. A quiet page is no proof the anchor is absent (a timer can
- * add it any time), so a missing anchor always takes the whole budget.
- * The wait is bounded by its own timeout (enforced by Playwright, even if the page blocks its main thread).
- */
-async function waitForLateAnchor(
-  page: Page,
-  selector: string,
-  { deadline }: LateAnchorWait,
-): Promise<boolean> {
-  const remaining = deadline - Date.now();
-  // A timeout of 0 would mean "no timeout" to Playwright
-  if (remaining <= 0) {
-    return false;
-  }
-  return waitForSelectorAttached(page, selector, remaining);
-}
-
-/**
- * GitHub code line links (`#L12`, `#L12-L15`) are checked against the line numbers of the code view, not an anchor:
- * once the code view is rendered, the line is there or the file is shorter. No long wait for late anchors.
- */
-async function isGithubCodeLinePresent(page: Page, lineSelector: string) {
-  // The code view (any line number) or the line itself, the page might take a while to render the code view
-  if (
-    !(await waitForSelectorAttached(
-      page,
-      `${lineSelector}, ${GITHUB_CODE_LINE_SELECTOR}`,
-      HASH_FALLBACK_WAIT_TIMEOUT,
-    ))
-  ) {
-    return false;
-  }
-  // The code view is rendered: give the line a moment (long files are rendered progressively around the linked line)
-  return waitForSelectorAttached(page, lineSelector, HASH_WAIT_TIMEOUT);
-}
-
-/**
- * Checks the hash of `url` in the page DOM: waits `HASH_WAIT_TIMEOUT` for its anchor, then (with `lateWait`, for the
- * navigated URL only) longer for an anchor rendered late, see `waitForLateAnchor`.
- */
-async function isHashPresentPlaywright(
-  page: Page,
-  hash: string,
-  url: string,
-  lateWait?: LateAnchorWait,
-) {
-  // All values are escaped, so any hash produces a valid selector
-  const selector = getHashSelectors(hash, url).join(", ");
-  if (isGithubCodeLineLink(url)) {
-    return isGithubCodeLinePresent(page, selector);
-  }
-  if (await waitForSelectorAttached(page, selector, HASH_WAIT_TIMEOUT)) {
-    return true;
-  }
-  if (!lateWait) {
-    return false;
-  }
-  // The page was opened with this URL's hash: the anchor might be rendered late (client-side rendered docs,
-  // sections expanded on hash navigation)
-  incrementMetric("playwrightLongHashWaits");
-  return waitForLateAnchor(page, selector, lateWait);
-}
-
-const getPlaywrightHashResult = async (
-  page: Page,
-  url: string,
-  status: number,
-  verbose: boolean,
-  lateWait?: LateAnchorWait,
-): Promise<LinkCheckResult> => {
-  const hash = new URL(url).hash.replace("#", "");
-  if (!hash) {
-    return { ok: true, status };
-  }
-
-  const note = getSpecialFragmentNote(hash, url);
-  if (note) {
-    return { ok: true, status, note };
-  }
-
-  if (!(await isHashPresentPlaywright(page, hash, url, lateWait))) {
-    log(`Hash not found`, verbose);
-    return { ok: false, status, error: "hash not found" };
-  }
-
-  log(`OK`, verbose);
-  return { ok: true, status };
-};
-
-const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
-  result?.ok === false && result.error === "hash not found";
-
-/** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
-const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkCheckResult =>
-  results.get(url) ?? { ok: false, error: "unexpected error", errorDetail: `No result for ${url}` };
-
-/**
- * Checks URLs pointing to the same page (same URL without hash) with a single Playwright navigation:
- * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
- * Some pages render different content per hash (e.g. SPA tabs), so a hash not found in the shared DOM gets
- * a dedicated navigation to its exact URL before it is reported as "hash not found".
- * The anchor of the navigated URL is waited for `HASH_WAIT_TIMEOUT` first, and if it is missing, longer,
- * `HASH_FALLBACK_WAIT_TIMEOUT` in total (anchors rendered late, see `waitForLateAnchor`).
- * GitHub code line links are checked against the rendered code view instead (see `isGithubCodeLinePresent`).
- * @returns results by URL
- */
-export async function checkUrlsOnPageWithPlaywright(
-  urls: string[],
-  verbose = false,
-  headless = true,
-): Promise<Map<string, LinkCheckResult>> {
-  const results = await checkUrlsInOneNavigation(urls, verbose, headless);
-  const [firstUrl] = urls;
-  // The first URL already had the long wait in the shared navigation
-  const notFound = urls.filter((url) => url !== firstUrl && isHashNotFound(results.get(url)));
-  // After the shared navigation (its page slot is released), so the fallbacks can't deadlock waiting for slots
-  await Promise.all(
-    notFound.map(async (url) => {
-      incrementMetric("playwrightHashFallbacks");
-      const fallback = await checkUrlsInOneNavigation([url], verbose, headless);
-      results.set(url, resultFor(fallback, url));
-    }),
-  );
-  return results;
-}
-
-async function checkUrlsInOneNavigation(
-  urls: string[],
-  verbose: boolean,
-  headless: boolean,
-): Promise<Map<string, LinkCheckResult>> {
-  const [firstUrl] = urls;
-  const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
-
-  // Links reach Playwright after the fetch pass (which blocks private destinations), check again for direct callers.
-  // Redirects and page resources to blocked IP literals and localhost names are aborted by the route handler.
-  try {
-    await assertDestinationAllowed(firstUrl);
-  } catch (error) {
-    if (error instanceof DestinationNotAllowedError) {
-      return sameForAll(getBlockedDestinationResult(error));
-    }
-    throw error;
-  }
-
-  const hostLimiter = getHostLimiter();
-  // Hosts to back off for: the navigated URL's, and the hosts of server errors (after a redirect, the final URL's)
-  const pausedUrls = new Set([firstUrl]);
-  for (let retries = 0; ; ) {
-    // Back off while a host is paused (after a server error or a 429 of this or another check), before taking a
-    // page slot, so the other checks keep the browser busy in the meantime
-    for (const url of pausedUrls) {
-      await hostLimiter.waitUntilResumed(url);
-    }
-    const outcome = await navigateAndCheck(urls, verbose, headless, retries, [...pausedUrls]);
-    if (outcome instanceof Map) {
-      return outcome;
-    }
-    if (outcome.reason === "server error") {
-      retries++;
-      pausedUrls.add(outcome.pausedUrl);
-    }
-    // "paused": a host was paused while this check waited for a page slot, the slot is released and the check waits
-    // for the pause again (not counted as a retry)
-  }
-}
-
-/** A navigation of `navigateAndCheck` to do again, after waiting for the host pauses outside of the page slot */
-type NavigationRetry =
-  /** 502, 503 or 504, the host of `pausedUrl` (the final URL after redirects) is paused for the backoff */
-  | { reason: "server error"; pausedUrl: string }
-  /** A host was paused while waiting for the page slot, nothing was requested */
-  | { reason: "paused" };
-
-/**
- * One navigation of `checkUrlsInOneNavigation`. Returns a retry after a 502, 503 or 504 that should be retried
- * (the host of the response is paused for the backoff, see `getServerErrorRetryDelay`), or when one of the
- * `pausedUrls` hosts got paused while waiting for the page slot.
- * @param retries server error retries done so far
- * @param pausedUrls URLs whose host must not be paused when navigating
- */
-async function navigateAndCheck(
-  urls: string[],
-  verbose: boolean,
-  headless: boolean,
-  retries: number,
-  pausedUrls: string[],
-): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
-  const [firstUrl] = urls;
-  const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
-
-  // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
-  // Errors while navigating and checking the page are reported as broken links.
-  return withPage(
-    async (page): Promise<Map<string, LinkCheckResult> | NavigationRetry> => {
-      // A fetch or another navigation may have paused the host while this check waited for the page slot: don't
-      // sleep while holding the slot, release it and wait outside (see `checkUrlsInOneNavigation`)
-      if (pausedUrls.some((url) => getHostLimiter().isPaused(url))) {
-        return { reason: "paused" };
-      }
-      try {
-        incrementMetric("playwrightNavigations");
-        // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
-        const response = await page.goto(firstUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: PAGE_OPERATION_TIMEOUT,
-        });
-
-        log(`Navigation response: ${response?.status()}`, verbose);
-        if (response && TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status())) {
-          const status = response.status();
-          const delayMs = getServerErrorRetryDelay(
-            retries,
-            response.headers()["retry-after"] ?? null,
-          );
-          if (delayMs === undefined) {
-            return sameForAll(getServerErrorResult(status, response.statusText()));
-          }
-          // After a redirect, the server error comes from the final URL: back off for its host
-          const failedUrl = response.url() || firstUrl;
-          console.log(formatServerErrorRetry(failedUrl, status, delayMs));
-          incrementMetric("serverErrorRetries");
-          // The page is closed right away, the retry waits for the pause outside of the page slot
-          getHostLimiter().pause(failedUrl, delayMs);
-          return { reason: "server error", pausedUrl: failedUrl };
-        }
-
-        if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
-          return sameForAll({
-            ok: false,
-            error: "could not check",
-            status: response.status(),
-            errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
-          });
-        }
-
-        if (!response || !OKAY_STATUS_CODES.includes(response.status())) {
-          return sameForAll({
-            ok: false,
-            error: "broken link",
-            status: response?.status() ?? 0,
-          });
-        }
-
-        const status = response.status();
-        // The overall budget of the long wait starts with the first check, it includes the regular wait
-        const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT };
-        const results = new Map(
-          await Promise.all(
-            urls.map(
-              async (url) =>
-                [
-                  url,
-                  // Only the navigated URL gets the long wait: the page was opened with its hash
-                  await getPlaywrightHashResult(
-                    page,
-                    url,
-                    status,
-                    verbose,
-                    url === firstUrl ? lateWait : undefined,
-                  ),
-                ] as const,
-            ),
-          ),
-        );
-        return results;
-      } catch (error) {
-        // The browser crashed: let `withPage` relaunch it and retry
-        if (page.isClosed()) {
-          throw error;
-        }
-        return sameForAll({
-          ok: false,
-          error: "broken link",
-          errorDetail: String(error),
-        });
-      }
-    },
-    { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined, headless },
-  );
-}
-
-/**
- * Checks a link with a real browser (the shared browser, see `withPage`).
- * Outside of a run (`checkLinks`, `checkWebsite`...), call `closeBrowser()` when done.
- */
-export async function checkLinkWithPlaywright(
-  url: string,
-  verbose = false,
-  headless = true,
-): Promise<LinkCheckResult> {
-  const results = await checkUrlsOnPageWithPlaywright([url], verbose, headless);
-  return resultFor(results, url);
-}

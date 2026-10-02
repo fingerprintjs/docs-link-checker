@@ -120,16 +120,12 @@ vi.mock("playwright", () => ({
   },
 }));
 
+import { checkLinkWithFetch } from "./fetch_check";
 import { setServerErrorRetryDelays } from "./http";
 import { HostLimiter } from "./limiter";
-import {
-  checkLinks,
-  checkLinkWithFetch,
-  checkLinkWithPlaywright,
-  getSpecialFragmentNote,
-  interleaveByHost,
-  shouldRecheckWithPlaywright,
-} from "./link";
+import { checkLinks, interleaveByHost, shouldRecheckWithPlaywright } from "./link";
+import { getSpecialFragmentNote } from "./link_common";
+import { checkLinkWithPlaywright } from "./playwright_check";
 import { withRun } from "./run";
 import { getRunContext } from "./run_context";
 import { setHostLimiter } from "./utils";
@@ -242,10 +238,10 @@ describe("checkLinks() Playwright escalation", () => {
 
       expect(playwrightState.visited).toEqual(escalate ? [href] : []);
       expect(results).toHaveLength(1);
-      if (!escalate) {
-        // The definitive API result is reported as-is
-        expect(results[0].result).toEqual(apiResult);
-      }
+      // The definitive API result is reported as-is.
+      // Escalated links get the Playwright result (the fake page has no hash to look for)
+      const expected = escalate ? { ok: true, status: 200 } : apiResult;
+      expect(results[0]!.result).toEqual(expected);
     },
   );
 
@@ -279,7 +275,7 @@ describe("checkLinks() Playwright escalation", () => {
     const { results } = await checkLinks({ links: [link(href)] });
 
     expect(playwrightState.visited).toEqual([href]);
-    expect(results[0].result).toEqual({ ok: true, status: 200 });
+    expect(results[0]!.result).toEqual({ ok: true, status: 200 });
   });
 
   it("reports unparsable URLs as broken without any request or Playwright re-check", async () => {
@@ -289,7 +285,7 @@ describe("checkLinks() Playwright escalation", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(playwrightState.visited).toEqual([]);
-    expect(results[0].result).toMatchObject({ ok: false, error: "broken link" });
+    expect(results[0]!.result).toMatchObject({ ok: false, error: "broken link" });
   });
 
   it.each(["tel:+123", "javascript:void(0)", "data:text/plain,hi"])(
@@ -301,7 +297,7 @@ describe("checkLinks() Playwright escalation", () => {
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(playwrightState.visited).toEqual([]);
-      expect(results[0].result).toMatchObject({ ok: false, error: "broken link" });
+      expect(results[0]!.result).toMatchObject({ ok: false, error: "broken link" });
     },
   );
 
@@ -344,7 +340,7 @@ describe("checkLinks() Playwright escalation", () => {
     const { results } = await checkLinks({ links: [link(href)] });
 
     expect(playwrightState.visited).toEqual([href]);
-    expect(results[0].result).toEqual({ ok: true, status: 200 });
+    expect(results[0]!.result).toEqual({ ok: true, status: 200 });
   });
 
   it("checks GitHub wiki links with fetch", async () => {
@@ -381,7 +377,7 @@ describe("checkLinkWithFetch()", () => {
     const result = await checkLinkWithFetch("not a url");
 
     expect(result).toMatchObject({ ok: false, error: "broken link" });
-    expect(result.ok === false && result.errorDetail).toContain("Invalid URL");
+    expect(!result.ok && result.errorDetail).toContain("Invalid URL");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -392,7 +388,7 @@ describe("checkLinkWithFetch()", () => {
     await checkLinkWithFetch("https://example.com");
 
     expect(timeoutSpy).toHaveBeenCalledWith(20000);
-    expect(fetchMock.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchMock.mock.calls[0]![1]?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("reports a timed out request as broken link", async () => {
@@ -403,7 +399,7 @@ describe("checkLinkWithFetch()", () => {
     const result = await checkLinkWithFetch("https://example.com/slow");
 
     expect(result).toMatchObject({ ok: false, error: "broken link" });
-    expect(result.ok === false && result.errorDetail).toContain("TimeoutError");
+    expect(!result.ok && result.errorDetail).toContain("TimeoutError");
   });
 
   it.each([405, 403, 501])("retries once with GET when HEAD returns %s", async (status) => {
@@ -740,7 +736,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     expect(errors).toHaveLength(0);
     // One GET for the page, also used by the link without a hash (no extra HEAD request)
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][1]?.method).toBe("GET");
+    expect(fetchMock.mock.calls[0]![1]?.method).toBe("GET");
     expect(results).toHaveLength(10);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     expect(resultByHref.get("https://example.com/docs#version-1.2.3")).toEqual({
@@ -1044,7 +1040,7 @@ describe("server errors (502, 503, 504)", () => {
       );
 
       expect(result).toMatchObject({ ok: false, error: "could not check", status });
-      expect(result.ok === false && result.errorDetail).toContain(`Server error ${status}`);
+      expect(!result.ok && result.errorDetail).toContain(`Server error ${status}`);
       // 1 HEAD, then (after 2s) a GET as its first retry and one more GET retry (after 2s)
       expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET", "GET"]);
       expect(took).toBe(4000);
@@ -1123,7 +1119,7 @@ describe("server errors (502, 503, 504)", () => {
     const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].result).toMatchObject({
+    expect(result.results[0]!.result).toMatchObject({
       ok: false,
       error: "could not check",
       status: 503,
@@ -1139,7 +1135,7 @@ describe("server errors (502, 503, 504)", () => {
 
     const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
-    expect(result.results[0].result).toMatchObject({ ok: false, error: "could not check" });
+    expect(result.results[0]!.result).toMatchObject({ ok: false, error: "could not check" });
     expect(playwrightState.visited).toEqual([href, href, href]);
   });
 
@@ -1180,9 +1176,9 @@ describe("server errors (502, 503, 504)", () => {
     expect(result.every((r) => r.ok)).toBe(true);
     // Navigated once, after the pause (not right when the slot opened at 1s)
     expect(playwrightState.visited.filter((url) => url.includes("busy"))).toHaveLength(1);
-    expect(playwrightState.visitedAt["https://busy.example.com/page"] - start).toBe(5100);
+    expect(playwrightState.visitedAt["https://busy.example.com/page"]! - start).toBe(5100);
     // The slot was released in the meantime: the check queued behind it did not wait for the pause
-    expect(playwrightState.visitedAt["https://other.example.com/page"] - start).toBe(1000);
+    expect(playwrightState.visitedAt["https://other.example.com/page"]! - start).toBe(1000);
     expect(took).toBe(6100);
   });
 
@@ -1251,9 +1247,9 @@ describe("interleaveByHost() with uneven hosts", () => {
     expect(result).toHaveLength(items.length);
     expect(new Set(result).size).toBe(items.length);
     // First round: one item of every host, then only the big host is left
-    expect(result[0].href).toBe("https://big.example.com/0");
-    expect(result[1].href).toBe("https://host-0.example.com/");
-    expect(result[10_001].href).toBe("https://big.example.com/1");
+    expect(result[0]!.href).toBe("https://big.example.com/0");
+    expect(result[1]!.href).toBe("https://host-0.example.com/");
+    expect(result[10_001]!.href).toBe("https://big.example.com/1");
     expect(result.at(-1)!.href).toBe("https://big.example.com/99999");
   });
 });

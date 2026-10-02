@@ -27,7 +27,7 @@ export const runInContext = <T>(context: RunContext, fn: () => Promise<T>): Prom
   storage.run(context, fn);
 
 /** Metric names used in the summary log */
-export const METRICS = {
+const METRICS = {
   totalLinks: "Total links",
   uniqueUrls: "Unique URLs",
   uniquePages: "Unique pages (URLs without hash)",
@@ -54,13 +54,6 @@ export const incrementMetric = (name: MetricName, by = 1) => {
   const metrics = getRunContext()?.metrics;
   if (metrics) {
     metrics.counters[name] = (metrics.counters[name] ?? 0) + by;
-  }
-};
-
-export const setMetric = (name: MetricName, value: number) => {
-  const metrics = getRunContext()?.metrics;
-  if (metrics) {
-    metrics.counters[name] = value;
   }
 };
 
@@ -117,6 +110,7 @@ export const runCached = <T>(
   if (!context) {
     return fn();
   }
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the cache holds promises of any type, keys are namespaced by the callers so a key always has the same type
   const cached = context.cache.get(key) as Promise<T> | undefined;
   if (cached) {
     options.onHit?.();

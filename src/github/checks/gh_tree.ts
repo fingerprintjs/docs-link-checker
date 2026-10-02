@@ -24,7 +24,7 @@ export const checkGitHubTreeLink = async (
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
-  const [, branch, ...restOfPath] = pathParts;
+  const [, branch = "", ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
 
   // If there's no path specified, we just check if the branch/commit exists

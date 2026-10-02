@@ -22,7 +22,7 @@ import { runCached } from "./run_context";
  * dev server. Only do that for trusted documents.
  */
 
-export const DESTINATION_NOT_ALLOWED = "Destination not allowed (private or local address)";
+const DESTINATION_NOT_ALLOWED = "Destination not allowed (private or local address)";
 
 export const isPrivateHostsAllowed = (value = process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS) =>
   value === "true";
@@ -42,8 +42,8 @@ const parseIPv4 = (address: string): number[] | undefined => {
   return bytes.every((byte) => byte >= 0 && byte <= 255) ? bytes : undefined;
 };
 
-/** Non-public IPv4 ranges, by the first bytes of the address */
-const isNonPublicIPv4 = ([a, b, c]: number[]): boolean =>
+/** Non-public IPv4 ranges, by the first bytes of the address (4 bytes, see `parseIPv4`) */
+const isNonPublicIPv4 = ([a = 0, b = 0, c = 0]: number[]): boolean =>
   a === 0 || // "this network" 0.0.0.0/8 (unspecified)
   a === 10 || // private 10/8
   a === 127 || // loopback 127/8
@@ -74,7 +74,8 @@ export const parseIPv6 = (address: string): number[] | undefined => {
   if (text.slice(lastColon + 1).includes(".")) {
     const ipv4 = parseIPv4(text.slice(lastColon + 1));
     if (!ipv4) return undefined;
-    tail = [(ipv4[0] << 8) | ipv4[1], (ipv4[2] << 8) | ipv4[3]];
+    const [b0 = 0, b1 = 0, b2 = 0, b3 = 0] = ipv4;
+    tail = [(b0 << 8) | b1, (b2 << 8) | b3];
     text = text.slice(0, lastColon + 1);
     if (!text.endsWith("::")) text = text.slice(0, -1);
   }
@@ -82,11 +83,12 @@ export const parseIPv6 = (address: string): number[] | undefined => {
   const halves = text.split("::");
   if (halves.length > 2) return undefined;
   let groups: number[];
-  if (halves.length === 2) {
-    const [head, rest] = [toGroups(halves[0]), toGroups(halves[1])];
+  const [headText = "", restText] = halves;
+  if (restText !== undefined) {
+    const [head, rest] = [toGroups(headText), toGroups(restText)];
     const missing = 8 - tail.length - head.length - rest.length;
     if (missing < 0) return undefined;
-    groups = [...head, ...new Array<number>(missing).fill(0), ...rest];
+    groups = [...head, ...Array.from({ length: missing }, () => 0), ...rest];
   } else {
     groups = toGroups(text);
   }
@@ -98,8 +100,9 @@ export const parseIPv6 = (address: string): number[] | undefined => {
 
 const embeddedIPv4 = (high: number, low: number) => [high >> 8, high & 0xff, low >> 8, low & 0xff];
 
+/** @param groups the 8 groups of the address (see `parseIPv6`) */
 const isNonPublicIPv6 = (groups: number[]): boolean => {
-  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups;
   const firstSixZero = g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0;
   if (firstSixZero && g5 === 0 && g6 === 0 && (g7 === 0 || g7 === 1)) {
     return true; // unspecified :: and loopback ::1
@@ -167,7 +170,7 @@ export const isBlockedUrlLiteral = (url: string, allowPrivateHosts = isPrivateHo
 };
 
 type LookupAll = (hostname: string) => Promise<Array<{ address: string }>>;
-const lookupAll: LookupAll = (hostname) => lookup(hostname, { all: true, verbatim: true });
+const lookupAll: LookupAll = (hostname) => lookup(hostname, { all: true, order: "verbatim" });
 
 /**
  * Throws `DestinationNotAllowedError` if the URL's host is blocked: a blocked literal, or a name with ANY

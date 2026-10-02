@@ -22,16 +22,28 @@ jobs:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      # Lint, formatting and import order (fails on any difference, never writes)
-      - name: Run Biome
-        run: pnpm exec biome ci
+      # Formatting and import order (fails on any difference, never writes)
+      - name: Check formatting
+        run: pnpm run format:check
+
+      # Includes type-aware rules (oxlint-tsgolint), warnings fail too
+      - name: Run linter
+        run: pnpm run lint
+
+      # Every suppression needs a reason, their number is capped (see checks/lint_suppressions.ts)
+      - name: Check lint suppressions
+        run: pnpm run lint:suppressions
 
       - name: Run type check
         run: pnpm run tsc
 
-      # Offline, no network or GH_TOKEN needed
+      # Unused files, exports and dependencies
+      - name: Run knip
+        run: pnpm run knip
+
+      # Offline, no network or GH_TOKEN needed. Fails when coverage drops below the thresholds in vitest.config.js.
       - name: Run unit tests
-        run: pnpm run test
+        run: pnpm run test:coverage
 
       # Hit real websites and the GitHub API. Runs even if unit tests fail, so both results are visible.
       - name: Run integration tests

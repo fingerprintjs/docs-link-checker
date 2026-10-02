@@ -8,7 +8,7 @@ import type { Link, LinkWithResult } from "../types";
 export type LinkCheckReport = ReturnType<typeof getJSONReport>;
 
 /** A failing link that matched an entry of the baseline file */
-export type IgnoredLink = LinkWithResult & { ignoreReason?: string };
+type IgnoredLink = LinkWithResult & { ignoreReason?: string };
 
 type GetReportArgs = {
   links: LinkWithResult[];
@@ -46,7 +46,7 @@ export const getJSONReport = ({
     }
   }
   const withError = (error: string) =>
-    notIgnored.filter((link) => link.result.ok === false && link.result.error === error);
+    notIgnored.filter((link) => !link.result.ok && link.result.error === error);
 
   const brokenLinks = withError("broken link");
   const hashNotFound = withError("hash not found");
@@ -110,7 +110,7 @@ const insideBase = (url: URL, base: string): string | undefined =>
 const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
 /** URL of a local file (the page of a link), with its line: `<base>docs/a.md#L7` */
-export const getLocalFileUrl = (
+const getLocalFileUrl = (
   base: string | undefined,
   path: string,
   line?: number,
@@ -126,7 +126,7 @@ export const getLocalFileUrl = (
 };
 
 /** URL of a local link (relative, root-relative or `#anchor`) found in the local file `page` */
-export const getLocalLinkUrl = (
+const getLocalLinkUrl = (
   base: string | undefined,
   page: string,
   href: string,
@@ -219,17 +219,25 @@ const PageCell = ({ link, options }: { link: Link; options: RenderOptions }) => 
   );
 };
 
+/** Where the link cell links to: the link itself, its target file next to the checked file, or nowhere */
+const getLinkCellUrl = (link: LinkWithResult, options: RenderOptions): string | undefined => {
+  if (isHttpUrl(link.href)) {
+    return link.href;
+  }
+  // A relative link on a web page has no known source file
+  if (isHttpUrl(link.page)) {
+    return undefined;
+  }
+  return getLocalLinkUrl(options.sourceBaseUrl, link.page, link.href);
+};
+
 const LinkCell = ({ link, options }: { link: LinkWithResult; options: RenderOptions }) => {
   const content = (
     <>
       🔗"{link.text}" ➡️ <HrefRenderer link={link} />
     </>
   );
-  const url = isHttpUrl(link.href)
-    ? link.href
-    : isHttpUrl(link.page)
-      ? undefined
-      : getLocalLinkUrl(options.sourceBaseUrl, link.page, link.href);
+  const url = getLinkCellUrl(link, options);
   return url ? (
     <a href={url} target="_blank" rel="noopener">
       {content}
@@ -256,7 +264,7 @@ const LinksTable = ({
     </thead>
     <tbody>
       {links.map((link, index) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: rendered once to static HTML, rows are never reordered, and the same link can appear twice
+        // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
         <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
           <td className="py-2 px-4 border-b break-all sm:break-words">
             <PageCell link={link} options={options} />
@@ -360,7 +368,7 @@ export function renderReportToHTML(
   `;
 }
 
-export function renderReportToHTMLFile(
+function renderReportToHTMLFile(
   jsonReport: LinkCheckReport,
   filePath: string,
   options: RenderOptions = {},

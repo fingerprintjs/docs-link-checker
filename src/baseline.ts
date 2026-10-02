@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createGlobMatcher, MAX_GLOB_LENGTH } from "./glob";
 import type { LinkWithResult } from "./types";
+import { getErrorMessage } from "./utils/errors";
 
 /**
  * A baseline (ignore) file lists known false positives and accepted broken links.
@@ -51,75 +52,93 @@ export class BaselineError extends Error {
   override name = "BaselineError";
 }
 
-const ALLOWED_KEYS = new Set(["href", "pattern", "page", "reason"]);
-const URL_KEYS = ["href", "pattern"] as const;
+const ENTRY_KEYS = ["href", "pattern", "page", "reason"] as const;
+const ALLOWED_KEYS = new Set<string>(ENTRY_KEYS);
+
+/** The list of entries: `{ "ignore": [...] }` or a bare array */
+const getIgnoreList = (data: unknown): readonly unknown[] => {
+  if (Array.isArray(data)) {
+    return data;
+  }
+  if (!data || typeof data !== "object") {
+    throw new BaselineError(`expected an object with an "ignore" array, or an array`);
+  }
+  const unknownKeys = Object.keys(data).filter((key) => key !== "ignore" && key !== "$schema");
+  if (unknownKeys.length > 0) {
+    throw new BaselineError(`unknown top-level key(s): ${unknownKeys.join(", ")}`);
+  }
+  if (!("ignore" in data)) {
+    throw new BaselineError(`expected an "ignore" array`);
+  }
+  if (!Array.isArray(data.ignore)) {
+    throw new BaselineError(`"ignore" must be an array`);
+  }
+  return data.ignore;
+};
+
+/** A plain string entry, shorthand for `{ "pattern": ... }` */
+const validatePatternShorthand = (pattern: string, where: string): BaselineEntry => {
+  if (pattern === "") {
+    throw new BaselineError(`${where}: pattern must not be empty`);
+  }
+  if (pattern.length > MAX_GLOB_LENGTH) {
+    throw new BaselineError(`${where}: pattern is longer than ${MAX_GLOB_LENGTH} characters`);
+  }
+  return { pattern };
+};
+
+const validateEntryKeys = (keys: string[], where: string) => {
+  for (const key of keys) {
+    if (key === "regex") {
+      throw new BaselineError(
+        `${where}: "regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`,
+      );
+    }
+    if (!ALLOWED_KEYS.has(key)) {
+      throw new BaselineError(`${where}: unknown key "${key}" (allowed: ${ENTRY_KEYS.join(", ")})`);
+    }
+  }
+};
+
+const validateObjectEntry = (item: object, where: string): BaselineEntry => {
+  const values: Record<string, unknown> = Object.fromEntries(Object.entries(item));
+  validateEntryKeys(Object.keys(values), where);
+  const entry: BaselineEntry = {};
+  for (const key of ENTRY_KEYS) {
+    const value = values[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== "string" || value === "") {
+      throw new BaselineError(`${where}: "${key}" must be a non-empty string`);
+    }
+    entry[key] = value;
+  }
+  if ((entry.href === undefined) === (entry.pattern === undefined)) {
+    throw new BaselineError(`${where}: expected exactly one of "href" or "pattern"`);
+  }
+  for (const key of ["pattern", "page"] as const) {
+    if ((entry[key]?.length ?? 0) > MAX_GLOB_LENGTH) {
+      throw new BaselineError(`${where}: "${key}" is longer than ${MAX_GLOB_LENGTH} characters`);
+    }
+  }
+  return entry;
+};
 
 /**
  * Validates the parsed JSON of a baseline file. Accepts `{ "ignore": [...] }` or a bare array of entries.
  * @throws {BaselineError} with a message pointing to the invalid entry
  */
 export const validateBaseline = (data: unknown): BaselineFile => {
-  let list: unknown;
-  if (Array.isArray(data)) {
-    list = data;
-  } else if (data && typeof data === "object") {
-    const unknownKeys = Object.keys(data).filter((key) => key !== "ignore" && key !== "$schema");
-    if (unknownKeys.length > 0) {
-      throw new BaselineError(`unknown top-level key(s): ${unknownKeys.join(", ")}`);
-    }
-    list = (data as { ignore?: unknown }).ignore;
-    if (list === undefined) {
-      throw new BaselineError(`expected an "ignore" array`);
-    }
-  } else {
-    throw new BaselineError(`expected an object with an "ignore" array, or an array`);
-  }
-  if (!Array.isArray(list)) {
-    throw new BaselineError(`"ignore" must be an array`);
-  }
-
-  const entries = list.map((item, index): BaselineEntry => {
+  const entries = getIgnoreList(data).map((item, index): BaselineEntry => {
     const where = `ignore[${index}]`;
     if (typeof item === "string") {
-      if (item === "") {
-        throw new BaselineError(`${where}: pattern must not be empty`);
-      }
-      if (item.length > MAX_GLOB_LENGTH) {
-        throw new BaselineError(`${where}: pattern is longer than ${MAX_GLOB_LENGTH} characters`);
-      }
-      return { pattern: item };
+      return validatePatternShorthand(item, where);
     }
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new BaselineError(`${where}: expected a string pattern or an object`);
     }
-    for (const key of Object.keys(item)) {
-      if (key === "regex") {
-        throw new BaselineError(
-          `${where}: "regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`,
-        );
-      }
-      if (!ALLOWED_KEYS.has(key)) {
-        throw new BaselineError(
-          `${where}: unknown key "${key}" (allowed: ${[...ALLOWED_KEYS].join(", ")})`,
-        );
-      }
-    }
-    const entry = item as Record<string, unknown>;
-    for (const key of ALLOWED_KEYS) {
-      if (entry[key] !== undefined && (typeof entry[key] !== "string" || entry[key] === "")) {
-        throw new BaselineError(`${where}: "${key}" must be a non-empty string`);
-      }
-    }
-    if (URL_KEYS.filter((key) => entry[key] !== undefined).length !== 1) {
-      throw new BaselineError(`${where}: expected exactly one of "href" or "pattern"`);
-    }
-    for (const key of ["pattern", "page"] as const) {
-      const value = entry[key];
-      if (typeof value === "string" && value.length > MAX_GLOB_LENGTH) {
-        throw new BaselineError(`${where}: "${key}" is longer than ${MAX_GLOB_LENGTH} characters`);
-      }
-    }
-    return item as BaselineEntry;
+    return validateObjectEntry(item, where);
   });
   return { ignore: entries };
 };
@@ -161,16 +180,13 @@ export const loadBaseline = (path: string, { allowMissing = false } = {}): Basel
     }
     throw new BaselineError(`Baseline file not found: ${path}`);
   }
-  let data: unknown;
   try {
-    data = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new BaselineError(`Invalid baseline file ${path}: ${(error as Error).message}`);
-  }
-  try {
+    const data: unknown = JSON.parse(readFileSync(path, "utf8"));
     return createBaseline(validateBaseline(data).ignore);
   } catch (error) {
-    throw new BaselineError(`Invalid baseline file ${path}: ${(error as Error).message}`);
+    throw new BaselineError(`Invalid baseline file ${path}: ${getErrorMessage(error)}`, {
+      cause: error,
+    });
   }
 };
 
@@ -223,7 +239,7 @@ export const updateBaseline = ({
   const kept = baseline.entries.filter(
     (entry) => entry.href === undefined || !prune || matched.has(entry),
   );
-  const newEntries = [...added.values()].sort(
+  const newEntries = [...added.values()].toSorted(
     (a, b) =>
       (a.page ?? "").localeCompare(b.page ?? "") || (a.href ?? "").localeCompare(b.href ?? ""),
   );

@@ -2,7 +2,12 @@ import type { LinkCheckResult } from "../types";
 
 /** HTTP status of a failed GitHub API request, `undefined` without a response (network error, no `GH_TOKEN`) */
 export const getApiErrorStatus = (error: unknown): number | undefined =>
-  (error as { status?: number } | null | undefined)?.status;
+  typeof error === "object" &&
+  error !== null &&
+  "status" in error &&
+  typeof error.status === "number"
+    ? error.status
+    : undefined;
 
 /**
  * `true` if a failed GitHub API request is a definitive "missing" answer: 404 Not Found or 410 Gone (deleted issues).

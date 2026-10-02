@@ -13,7 +13,7 @@ export const MAX_RATE_LIMIT_RETRIES = 2;
 // How many times a request (or a Playwright navigation) is retried after a 502, 503 or 504
 export const MAX_SERVER_ERROR_RETRIES = 2;
 // Backoff before each server error retry, when the response has no (shorter) `Retry-After`
-export const DEFAULT_SERVER_ERROR_RETRY_DELAYS = [2000, 5000];
+const DEFAULT_SERVER_ERROR_RETRY_DELAYS = [2000, 5000];
 // Longest wait before a server error retry: a longer `Retry-After` is not waited for, the request gives up.
 // Bounds the added wait per request to `MAX_SERVER_ERROR_RETRIES * MAX_SERVER_ERROR_RETRY_DELAY` (20s).
 export const MAX_SERVER_ERROR_RETRY_DELAY = 10000;
@@ -52,7 +52,7 @@ export const formatServerErrorRetry = (url: string, status: number, delayMs: num
 // Redirects followed per request (like `fetch`, which gives up after 20; 10 is plenty for real links)
 export const MAX_REDIRECTS = 10;
 
-const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 export type LimitedResponse<T> = {
   status: number;
@@ -75,11 +75,11 @@ export type LimitedRequestOptions = {
 };
 
 /** Log message for a rate-limited request that is retried (the header can be seconds or an HTTP date) */
-export const formatRateLimitRetry = (url: string, delayMs: number, retryAfter: string | null) =>
+const formatRateLimitRetry = (url: string, delayMs: number, retryAfter: string | null) =>
   `Rate limited (${url}), retrying after ${Math.ceil(delayMs / 1000)}s (Retry-After: ${retryAfter})...`;
 
 /** Cancels the response body if it was not consumed (frees the connection) */
-export const discardBody = async (response: Response) => {
+const discardBody = async (response: Response) => {
   if (!response.bodyUsed) {
     await response.body?.cancel().catch(() => {});
   }
@@ -100,11 +100,61 @@ export const getRedirectMethod = (status: number, method: string): string => {
   return method;
 };
 
-type HopResult<T> =
+/** What to do after a response that is not final: follow a redirect, or retry after the host pause */
+type HopAction =
   | { type: "retry" }
   | { type: "server-error-retry" }
-  | { type: "redirect"; location: string; status: number }
-  | { type: "final"; response: Omit<LimitedResponse<T>, "url"> };
+  | { type: "redirect"; location: string; status: number };
+
+type HopResult<T> = HopAction | { type: "final"; response: Omit<LimitedResponse<T>, "url"> };
+
+type RetryState = {
+  rateLimitRetries: number;
+  serverErrorRetryCount: number;
+  /** Maximum server error retries of the request */
+  serverErrorRetries: number;
+};
+
+/**
+ * The redirect or retry for a response, `undefined` if the response is final. A retry pauses the whole host while the
+ * caller still holds the slot, so no queued request to that host starts during the pause.
+ */
+const getHopAction = (
+  response: Response,
+  requestUrl: string,
+  { rateLimitRetries, serverErrorRetryCount, serverErrorRetries }: RetryState,
+): HopAction | undefined => {
+  const location = response.headers.get("Location");
+  // An empty Location is a valid (relative) target, it resolves to the current URL
+  if (REDIRECT_STATUS_CODES.has(response.status) && location !== null) {
+    return { type: "redirect", location, status: response.status };
+  }
+  if (response.status === 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+    const retryAfter = response.headers.get("Retry-After");
+    const retryAfterMs = parseRetryAfter(retryAfter);
+    if (retryAfterMs !== undefined && retryAfterMs < TASK_TIMEOUT) {
+      // Retry-After is either a number of seconds or an HTTP date, log the parsed delay
+      console.log(formatRateLimitRetry(requestUrl, retryAfterMs, retryAfter));
+      getHostLimiter().pause(requestUrl, retryAfterMs);
+      return { type: "retry" };
+    }
+  }
+  if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+    const delayMs = getServerErrorRetryDelay(
+      serverErrorRetryCount,
+      response.headers.get("Retry-After"),
+      serverErrorRetries,
+    );
+    if (delayMs !== undefined) {
+      console.log(formatServerErrorRetry(requestUrl, response.status, delayMs));
+      incrementMetric("serverErrorRetries");
+      // Like a 429: the whole host backs off
+      getHostLimiter().pause(requestUrl, delayMs);
+      return { type: "server-error-retry" };
+    }
+  }
+  return undefined;
+};
 
 /**
  * Sends a request limited per host (see `getHostLimiter`):
@@ -153,35 +203,13 @@ export const fetchWithHostLimit = async <T>(
         signal: AbortSignal.timeout(timeoutMs),
       });
       try {
-        const location = response.headers.get("Location");
-        // An empty Location is a valid (relative) target, it resolves to the current URL
-        if (REDIRECT_STATUS_CODES.includes(response.status) && location !== null) {
-          return { type: "redirect", location, status: response.status };
-        }
-        if (response.status === 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
-          const retryAfter = response.headers.get("Retry-After");
-          const retryAfterMs = parseRetryAfter(retryAfter);
-          if (retryAfterMs !== undefined && retryAfterMs < TASK_TIMEOUT) {
-            // Retry-After is either a number of seconds or an HTTP date, log the parsed delay
-            console.log(formatRateLimitRetry(requestUrl, retryAfterMs, retryAfter));
-            // Pause the whole host while still holding the slot
-            hostLimiter.pause(requestUrl, retryAfterMs);
-            return { type: "retry" };
-          }
-        }
-        if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-          const delayMs = getServerErrorRetryDelay(
-            serverErrorRetryCount,
-            response.headers.get("Retry-After"),
-            serverErrorRetries,
-          );
-          if (delayMs !== undefined) {
-            console.log(formatServerErrorRetry(requestUrl, response.status, delayMs));
-            incrementMetric("serverErrorRetries");
-            // Like a 429: the whole host backs off while the slot is still held
-            hostLimiter.pause(requestUrl, delayMs);
-            return { type: "server-error-retry" };
-          }
+        const action = getHopAction(response, requestUrl, {
+          rateLimitRetries,
+          serverErrorRetryCount,
+          serverErrorRetries,
+        });
+        if (action) {
+          return action;
         }
         return {
           type: "final",

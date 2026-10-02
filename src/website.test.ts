@@ -25,7 +25,7 @@ const pages = Array.from(
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
-  mocks.getWebsitePages.mockReset().mockResolvedValue([...pages].reverse());
+  mocks.getWebsitePages.mockReset().mockResolvedValue(pages.toReversed());
   mocks.getLinksFromPages.mockReset().mockResolvedValue({ links: [], errors: [] });
   mocks.checkLinks.mockReset().mockResolvedValue({ results: [], errors: [] });
   mocks.saveReport.mockReset();
@@ -39,7 +39,7 @@ describe("checkWebsite() sampling", () => {
   it("checks all pages by default", async () => {
     vi.stubEnv("LINK_CHECK_SAMPLE_RATE", "");
     await checkWebsite({ websiteUrl: "https://example.com" });
-    expect(mocks.getLinksFromPages.mock.calls[0][0].pages).toHaveLength(20);
+    expect(mocks.getLinksFromPages.mock.calls[0]![0].pages).toHaveLength(20);
   });
 
   it("checks a deterministic sample of pages with LINK_CHECK_SAMPLE_RATE", async () => {
@@ -48,14 +48,14 @@ describe("checkWebsite() sampling", () => {
 
     await checkWebsite({ websiteUrl: "https://example.com" });
 
-    expect(mocks.getLinksFromPages.mock.calls[0][0].pages).toEqual([pages[0], pages[10]]);
+    expect(mocks.getLinksFromPages.mock.calls[0]![0].pages).toEqual([pages[0], pages[10]]);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Sampling 2 of 20 pages"));
   });
 
   it("uses the sampleRate option over LINK_CHECK_SAMPLE_RATE", async () => {
     vi.stubEnv("LINK_CHECK_SAMPLE_RATE", "0.1");
     await checkWebsite({ websiteUrl: "https://example.com", sampleRate: 0.2 });
-    expect(mocks.getLinksFromPages.mock.calls[0][0].pages).toHaveLength(4);
+    expect(mocks.getLinksFromPages.mock.calls[0]![0].pages).toHaveLength(4);
   });
 });
 
