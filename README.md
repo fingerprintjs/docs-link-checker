@@ -170,7 +170,8 @@ jobs:
 * Set `LINK_CHECK_HOST_CONCURRENCY` (a positive integer, default `8`) to change the maximum number of concurrent `fetch` requests to a single host. It applies to every `fetch` request of a run (sitemaps, source pages, README downloads, link checks), and to every redirect hop (limited by the host it goes to). A `429` response with `Retry-After` pauses requests to that host, and the request is retried. Sitemaps are also limited to 5 concurrent fetches overall. GitHub API requests are limited by Octokit instead, and Playwright navigations by the browser's page limit.
 * A `502`, `503` or `504` (an overloaded server, github.com also returns `503` under load) is retried twice, after 2s and 5s, or after `Retry-After` if it asks for longer (at most 10s, a longer `Retry-After` is not waited for). Like a `429`, the retry pauses all requests to that host, Playwright navigations included. If the error persists (also in the browser), the link is reported as "could not check" with the status, not as broken. The wait adds at most 20s per request or navigation. GitHub API requests are retried by Octokit (3 times on 5xx), a persisting server error is re-checked with Playwright.
 * Links without a hash are checked with `HEAD`. Any failed `HEAD` response (except `429`) is retried once with `GET` (a `HEAD` server error is not retried itself, the `GET` is): some servers refuse `HEAD` and some answer it differently (support.google.com and chatgpt.com return `404` to `HEAD` and `200` to `GET`).
-* Hashes not found in the server HTML are checked in Chromium: each anchor is waited for up to 3 seconds. If the anchor of the URL the page was opened with is still missing, the checker keeps waiting for it, 15 seconds in total (client-side rendered docs like Mintlify and the Terraform Registry add some anchors late, even after the page looks idle). Anchors that appear earlier return right away, a missing anchor of the opened URL takes the whole 15 seconds. GitHub code line links (`#L12`, `#L12-L15`) are checked against the line numbers of the rendered code view instead. Text fragments (`:~:`), `#/` and Google Help accordion states (`#zippy=...` on support.google.com) are accepted without an element.
+* Hashes not found in the server HTML are checked in Chromium: each anchor is waited for up to 3 seconds. If the anchor of the URL the page was opened with is still missing, the checker keeps waiting for it, 15 seconds in total (client-side rendered docs like Mintlify and the Terraform Registry add some anchors late, even after the page looks idle). Anchors that appear earlier return right away, a missing anchor of the opened URL takes the whole 15 seconds. Text fragments (`:~:`), `#/` and Google Help accordion states (`#zippy=...` on support.google.com) are accepted without an element.
+* GitHub code line links (`#L12`, `#L12-L15`, on `github.com/<owner>/<repo>/blob/...`) are checked with the GitHub API, not in the browser (github.com refuses blob pages to headless browsers on CI runners with `503`): the file is read once per run (files over 1 MB with the blob API) and its last linked line must be in the file (lines start at 1, ranges go forward, `#L0` is invalid, a trailing newline does not count as a line, binary files have no lines). On a rendered markdown file (without `?plain=1`), a heading slug like `l12` is accepted too. Branch names with slashes (`blob/feature/x/src/a.ts`) are resolved by trying the longer refs when the shorter one is not found. A missing file or repository (`404`, also private repositories the token can't see) is a broken link. If the API can't answer (no `GH_TOKEN`, rate limited, server or network errors), the link falls back to the browser, which checks the line numbers of the rendered code view (a persisting `503` there is "could not check").
 * GitHub URLs are decoded before they are passed to the GitHub API (tags like `%40scope%2Fpkg%401.0.0`), and `https://github.com/<owner>` is checked as a user or organization (and as a page if the API doesn't know the account). GitHub's own pages (`/features`, `/topics/...`, `/marketplace/...`...) are checked as regular pages.
 * Each run launches one shared Chromium (only if needed) that blocks images, media, fonts and analytics scripts. Links to the same page with different hashes share one fetch or browser navigation, and GitHub API responses are cached for the run. The run metrics (links, unique URLs and pages, requests, navigations, duration per phase) are logged at the end.
 
@@ -182,7 +183,7 @@ jobs:
 * Fingerprint.com is only checked for links to our resources and GitHub, external links trigger too many false positives for now.
 * Link [text fragments](https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments) are not checked.
 * Code quality, test coverage and CI does not meet production standards.
-* Github `#L{number}` links still cause false positives sometimes.
+* Github `#L{number}` links are only checked against the number of lines of the file (not, e.g., whether the line still shows what the link meant).
 
 ## Motivation
 
@@ -206,7 +207,7 @@ So a proper documentation link checker must:
 - [x] Nicer Readme
 - [x] Clean up promise pool
 - [x] Run tests in CI
-- [ ] Fix Github `#L{number}` links occasional false positives 
+- [x] Fix Github `#L{number}` links occasional false positives (checked with the GitHub API)
 - [ ] Add more tests for everything
 - [ ] Nicer report styling
 - [x] Add `eslint`/`biome`

@@ -6,6 +6,8 @@ const { octokit } = vi.hoisted(() => {
   return {
     octokit: {
       notFound,
+      // Simulates a missing `GH_TOKEN`: `getMyOctokit` throws
+      noToken: false,
       users: { getByUsername: vi.fn() },
       repos: {
         get: vi.fn(),
@@ -18,12 +20,20 @@ const { octokit } = vi.hoisted(() => {
   };
 });
 
-vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
+vi.mock("./github_client", () => ({
+  getMyOctokit: () => {
+    if (octokit.noToken) {
+      throw new Error("GH_TOKEN is not set. A GitHub token is required to check GitHub links.");
+    }
+    return octokit;
+  },
+}));
 
 import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./gh_check_link";
 import { decodePathSegment, getGithubPathSegments, isGithubReservedRoute } from "./gh_url";
 
 beforeEach(() => {
+  octokit.noToken = false;
   for (const fn of [
     octokit.users.getByUsername,
     octokit.repos.get,
@@ -368,5 +378,44 @@ describe("GitHub API server errors", () => {
     const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/missing");
 
     expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+});
+
+describe("checkLinkWithGithubApi() with code line links", () => {
+  const fileContent = (text: string) => ({
+    data: { type: "file", sha: "sha", content: Buffer.from(text).toString("base64") },
+  });
+
+  it("checks the line against the file from the API (no browser)", async () => {
+    octokit.repos.getContent.mockResolvedValue(fileContent('{\n  "name": "x"\n}\n'));
+
+    expect(
+      await checkLinkWithGithubApi("https://github.com/o/r/blob/main/package.json#L3"),
+    ).toEqual({ ok: true, status: 200 });
+    expect(
+      await checkLinkWithGithubApi("https://github.com/o/r/blob/main/package.json#L2-L4"),
+    ).toMatchObject({
+      ok: false,
+      error: "hash not found",
+      errorDetail: "package.json has only 3 lines",
+    });
+    expect(octokit.repos.getContent).toHaveBeenCalledWith({
+      owner: "o",
+      repo: "r",
+      ref: "main",
+      path: "package.json",
+    });
+  });
+
+  it("reports 'unexpected error' without a GH_TOKEN (checkLinks re-checks it in the browser)", async () => {
+    octokit.noToken = true;
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/blob/main/a.ts#L3");
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+      errorDetail: expect.stringContaining("GH_TOKEN is not set"),
+    });
   });
 });

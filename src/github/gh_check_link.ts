@@ -1,4 +1,4 @@
-import { checkLinkWithFetch, checkLinkWithPlaywright } from "../link";
+import { checkLinkWithFetch } from "../link";
 import type { LinkCheckResult } from "../types";
 import { checkGitHubBlobLink } from "./checks/gh_blob";
 import { checkGitHubCommitLink } from "./checks/gh_commit";
@@ -34,11 +34,6 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   // Parse the GitHub URL. Segments are decoded (`%40` -> `@`), Octokit encodes them again in the API request.
   const githubUrl = new URL(url);
   const [owner, repo, ...pathParts] = getGithubPathSegments(githubUrl);
-
-  // If it's a code line link, fall back to fetch for now
-  if (isGithubCodeLineLink(url)) {
-    return checkLinkWithPlaywright(url);
-  }
 
   // `https://github.com/` itself
   if (!owner) {
@@ -86,7 +81,7 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
     return checkGitHubDiscussionLink(owner, repo, parseInt(pathParts[1], 10));
   }
 
-  // If blob, check if it exists
+  // If blob, check if it exists (and its hash: a heading, or a code line like `#L12`)
   if (pathParts[0] === "blob") {
     return checkGitHubBlobLink(githubUrl, owner, repo, pathParts);
   }

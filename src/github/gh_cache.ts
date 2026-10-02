@@ -10,6 +10,7 @@ type Octokit = ReturnType<typeof getMyOctokit>;
 export type RepoResponse = Awaited<ReturnType<Octokit["repos"]["get"]>>;
 export type UserResponse = Awaited<ReturnType<Octokit["users"]["getByUsername"]>>;
 export type ContentResponse = Awaited<ReturnType<Octokit["repos"]["getContent"]>>;
+export type BlobResponse = Awaited<ReturnType<Octokit["git"]["getBlob"]>>;
 
 // "Not found" is a definitive answer worth caching. Other errors (rate limits, 5xx) are retried on the next call.
 const isNotFound = (error: unknown) => (error as { status?: number } | undefined)?.status === 404;
@@ -23,8 +24,9 @@ export const isTransientApiError = (error: unknown): boolean => {
   return status === undefined || status === 429 || status >= 500;
 };
 
+// `async`: a client that can't be created (no `GH_TOKEN`) rejects the promise instead of throwing
 const cachedRequest = <T>(key: string, request: () => Promise<T>): Promise<T> =>
-  runCached(`github:${key}`, request, {
+  runCached(`github:${key}`, async () => request(), {
     cacheError: isNotFound,
     // Requests themselves are counted by the Octokit client (see `countRequests`)
     onHit: () => incrementMetric("githubCacheHits"),
@@ -54,4 +56,13 @@ export const getContentCached = ({
   cachedRequest(
     `content:${JSON.stringify([owner.toLowerCase(), repo.toLowerCase(), ref, path])}`,
     () => getMyOctokit().repos.getContent({ owner, repo, ref, path }),
+  );
+
+/**
+ * `GET /repos/{owner}/{repo}/git/blobs/{sha}`, cached per blob (a blob never changes).
+ * For files over 1 MB, the contents API has no content, the blob API returns files up to 100 MB.
+ */
+export const getBlobCached = (owner: string, repo: string, sha: string): Promise<BlobResponse> =>
+  cachedRequest(`blob:${JSON.stringify([owner.toLowerCase(), repo.toLowerCase(), sha])}`, () =>
+    getMyOctokit().git.getBlob({ owner, repo, file_sha: sha }),
   );

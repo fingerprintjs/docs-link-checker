@@ -5,6 +5,7 @@ import { marked, type Token, type Tokens } from "marked";
 import { type Baseline, EMPTY_BASELINE } from "./baseline";
 import { getMarkdownAnchors } from "./github/checks/gh_blob";
 import { decodeHash } from "./hash";
+import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
 import { filterOutIrrelevantLinks } from "./page";
 import { getJSONReport, saveReport } from "./report/report";
@@ -125,7 +126,6 @@ const decodePath = (path: string) => {
   }
 };
 
-const GITHUB_LINE_HASH = /^L(\d+)(?:C\d+)?(?:-L(\d+)(?:C\d+)?)?$/;
 // GitHub prefixes ids in rendered markdown with `user-content-`, links work both with and without it
 const USER_CONTENT_PREFIX = "user-content-";
 
@@ -259,28 +259,11 @@ export const checkLocalLink = (
 
   if (!markdownFile) {
     // GitHub line links (`#L10`, `#L10-L20`) on code files: the file must have enough lines
-    const lineMatch = GITHUB_LINE_HASH.exec(hash);
-    if (lineMatch) {
-      // Line numbers are 1-based, a range goes forward (`#L0`, `#L5-L0`, `#L9-L3` are not valid anchors)
-      const firstLine = Number(lineMatch[1]);
-      const lastLine = lineMatch[2] === undefined ? firstLine : Number(lineMatch[2]);
-      if (firstLine < 1 || lastLine < firstLine) {
-        return {
-          ok: false,
-          error: "hash not found",
-          status: 200,
-          errorDetail: `Invalid line anchor #${hash} (lines start at 1, ranges go forward)`,
-        };
-      }
-      const lineCount = readFileSync(target, "utf8").replace(/\n$/, "").split("\n").length;
-      return lastLine <= lineCount
-        ? { ok: true, status: 200 }
-        : {
-            ok: false,
-            error: "hash not found",
-            status: 200,
-            errorDetail: `${displayTarget} has only ${lineCount} lines`,
-          };
+    const lineResult = parseLineAnchor(hash)
+      ? checkLineAnchor(hash, countLines(readFileSync(target, "utf8")), displayTarget)
+      : undefined;
+    if (lineResult) {
+      return lineResult;
     }
     return { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
   }

@@ -6,7 +6,9 @@ import {
   PAGE_OPERATION_TIMEOUT,
 } from "./browser";
 import { MAX_SERVER_ERROR_RETRIES, MAX_SERVER_ERROR_RETRY_DELAY } from "./http";
-import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
+import { checkLinks, checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
+import { withRun } from "./run";
+import { getRunContext } from "./run_context";
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeBrowser);
@@ -140,40 +142,38 @@ describe("checkLinkWithPlaywright()", () => {
     );
     expect(result).toEqual({ ok: true, status: 200 });
   });
+});
 
-  it(`should return OK for working L{number} hashes on GitHub `, {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
+// GitHub code line links (`#L12`) are checked with the GitHub API (github.com refuses blob pages to headless browsers on
+// CI runners with 503), never in the browser. Needs GH_TOKEN.
+describe("checkLinks() GitHub code line links", () => {
+  it("checks the lines against the file from the GitHub API, without a browser navigation", {
+    // A few API requests (Octokit retries server errors itself)
+    timeout: 60000,
   }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3",
-    );
-    expect(result).toMatchObject({ ok: true, status: 200 });
-  });
+    const file = "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json";
+    const links = ["#L3", "#L3-L5", "#L99999", "#L8888-L9999"].map((hash) => ({
+      page: "https://example.com/",
+      href: `${file}${hash}`,
+      text: "link",
+    }));
 
-  it(`should return OK for working L{number}-L{number} hashes on GitHub `, {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
-  }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3-L5",
-    );
-    expect(result).toMatchObject({ ok: true, status: 200 });
-  });
+    const { results, metrics } = await withRun(async () => {
+      const checked = await checkLinks({ links });
+      return { ...checked, metrics: { ...getRunContext()!.metrics.counters } };
+    });
 
-  it(`should return 'hash not found' for broken L{number} hashes on GitHub `, {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
-  }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999",
-    );
-    expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
-  });
-
-  it(`should return 'hash not found' for broken L{number}-L{number} hashes on GitHub `, {
-    timeout: HASH_CHECK_TEST_TIMEOUT,
-  }, async () => {
-    const result = await checkLinkWithPlaywright(
-      "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999",
-    );
-    expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
+    const resultFor = (hash: string) => results.find((r) => r.href === `${file}${hash}`)?.result;
+    expect(resultFor("#L3")).toEqual({ ok: true, status: 200 });
+    expect(resultFor("#L3-L5")).toEqual({ ok: true, status: 200 });
+    expect(resultFor("#L99999")).toMatchObject({ ok: false, status: 200, error: "hash not found" });
+    expect(resultFor("#L8888-L9999")).toMatchObject({
+      ok: false,
+      status: 200,
+      error: "hash not found",
+    });
+    expect(metrics.playwrightNavigations ?? 0).toBe(0);
+    // One request for the file, shared by all its line hashes
+    expect(metrics.githubApiRequests).toBe(1);
   });
 });

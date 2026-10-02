@@ -48,12 +48,12 @@ type CheckLinksArgs = {
 
 /**
  * How a link is checked in the first pass:
- * - `github-api`: GitHub links checked with the GitHub API (definitive answers)
+ * - `github-api`: GitHub links checked with the GitHub API (definitive answers). Code line links (`#L12`) too: the
+ *   file must have enough lines. github.com refuses blob pages to headless browsers on CI runners (503).
  * - `fetch`: plain `fetch`, assumes the page is server-side rendered
- * - `playwright`: needs a real browser (GitHub code line links), checked in the Playwright pass only
  * - `invalid`: the URL cannot be parsed or is not http(s), reported as broken link without any request
  */
-export type CheckMethod = "fetch" | "github-api" | "playwright" | "invalid";
+export type CheckMethod = "fetch" | "github-api" | "invalid";
 
 export const getInitialCheckMethod = (href: string): CheckMethod => {
   // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
@@ -64,9 +64,6 @@ export const getInitialCheckMethod = (href: string): CheckMethod => {
   try {
     if (!isGithubUrl(href)) {
       return "fetch";
-    }
-    if (isGithubCodeLineLink(href)) {
-      return "playwright";
     }
     // Wikis and GitHub's own pages (`/features`, `/topics/x`...) are not available through the API
     if (isGithubWikiLink(href) || isGithubReservedRoute(href)) {
@@ -120,15 +117,12 @@ export const shouldRecheckWithPlaywright = (
     return false;
   }
   switch (method) {
-    case "playwright":
-      // Already checked with Playwright
-      return false;
     case "invalid":
       // A URL that cannot be parsed is definitively broken
       return false;
     case "github-api":
       // "broken link" and "hash not found" from the API are definitive.
-      // Unexpected errors (unknown link type, API errors) might still work in a browser.
+      // Unexpected errors (unknown link type, API errors, rate limits, no `GH_TOKEN`) might still work in a browser.
       return result.error === "unexpected error";
     case "fetch":
       if (result.error === "broken link") {
@@ -155,9 +149,6 @@ const checkLinkFirstPass = async (
     case "invalid":
       // Every request has its own timeout (FETCH_TIMEOUT)
       return { result: await checkLinkWithFetch(href, false, pageCache), method };
-    case "playwright":
-      // Not reached from checkLinks (code line links go straight to the Playwright pass), kept for completeness
-      return { result: await checkLinkWithGithubApi(href), method };
     case "github-api":
       return {
         result: await withTimeout(
@@ -296,12 +287,6 @@ const checkLinksInRun = async ({
         // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
         taskTimeout: null,
         processFn: async (link): Promise<LinkWithResult | null> => {
-          // Links that need a browser go straight to the Playwright pass, so they respect its concurrency limit
-          // (and links to the same file with different line hashes share one navigation)
-          if (getInitialCheckMethod(link.href) === "playwright") {
-            linksToCheckWithPlaywright.push(link);
-            return null;
-          }
           const { result, method } = await checkFirstPass(link.href);
           // Failure possibly caused by the fetch method, add to Playwright queue
           if (shouldRecheckWithPlaywright(result, method)) {
@@ -788,35 +773,60 @@ async function checkUrlsInOneNavigation(
   }
 
   const hostLimiter = getHostLimiter();
-  for (let retries = 0; ; retries++) {
-    // Back off while the host is paused (after a server error or a 429 of this or another check), before taking a
+  // Hosts to back off for: the navigated URL's, and the hosts of server errors (after a redirect, the final URL's)
+  const pausedUrls = new Set([firstUrl]);
+  for (let retries = 0; ; ) {
+    // Back off while a host is paused (after a server error or a 429 of this or another check), before taking a
     // page slot, so the other checks keep the browser busy in the meantime
-    await hostLimiter.waitUntilResumed(firstUrl);
-    const outcome = await navigateAndCheck(urls, verbose, headless, retries);
-    if (outcome !== "retry") {
+    for (const url of pausedUrls) {
+      await hostLimiter.waitUntilResumed(url);
+    }
+    const outcome = await navigateAndCheck(urls, verbose, headless, retries, [...pausedUrls]);
+    if (outcome instanceof Map) {
       return outcome;
     }
+    if (outcome.reason === "server error") {
+      retries++;
+      pausedUrls.add(outcome.pausedUrl);
+    }
+    // "paused": a host was paused while this check waited for a page slot, the slot is released and the check waits
+    // for the pause again (not counted as a retry)
   }
 }
 
+/** A navigation of `navigateAndCheck` to do again, after waiting for the host pauses outside of the page slot */
+type NavigationRetry =
+  /** 502, 503 or 504, the host of `pausedUrl` (the final URL after redirects) is paused for the backoff */
+  | { reason: "server error"; pausedUrl: string }
+  /** A host was paused while waiting for the page slot, nothing was requested */
+  | { reason: "paused" };
+
 /**
- * One navigation of `checkUrlsInOneNavigation`. Returns `"retry"` after a 502, 503 or 504 that should be retried
- * (the host is paused for the backoff, see `getServerErrorRetryDelay`).
+ * One navigation of `checkUrlsInOneNavigation`. Returns a retry after a 502, 503 or 504 that should be retried
+ * (the host of the response is paused for the backoff, see `getServerErrorRetryDelay`), or when one of the
+ * `pausedUrls` hosts got paused while waiting for the page slot.
  * @param retries server error retries done so far
+ * @param pausedUrls URLs whose host must not be paused when navigating
  */
 async function navigateAndCheck(
   urls: string[],
   verbose: boolean,
   headless: boolean,
   retries: number,
-): Promise<Map<string, LinkCheckResult> | "retry"> {
+  pausedUrls: string[],
+): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
   const [firstUrl] = urls;
   const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
 
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
   // Errors while navigating and checking the page are reported as broken links.
   return withPage(
-    async (page): Promise<Map<string, LinkCheckResult> | "retry"> => {
+    async (page): Promise<Map<string, LinkCheckResult> | NavigationRetry> => {
+      // A fetch or another navigation may have paused the host while this check waited for the page slot: don't
+      // sleep while holding the slot, release it and wait outside (see `checkUrlsInOneNavigation`)
+      if (pausedUrls.some((url) => getHostLimiter().isPaused(url))) {
+        return { reason: "paused" };
+      }
       try {
         incrementMetric("playwrightNavigations");
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
@@ -835,11 +845,13 @@ async function navigateAndCheck(
           if (delayMs === undefined) {
             return sameForAll(getServerErrorResult(status, response.statusText()));
           }
-          console.log(formatServerErrorRetry(firstUrl, status, delayMs));
+          // After a redirect, the server error comes from the final URL: back off for its host
+          const failedUrl = response.url() || firstUrl;
+          console.log(formatServerErrorRetry(failedUrl, status, delayMs));
           incrementMetric("serverErrorRetries");
           // The page is closed right away, the retry waits for the pause outside of the page slot
-          getHostLimiter().pause(firstUrl, delayMs);
-          return "retry";
+          getHostLimiter().pause(failedUrl, delayMs);
+          return { reason: "server error", pausedUrl: failedUrl };
         }
 
         if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {

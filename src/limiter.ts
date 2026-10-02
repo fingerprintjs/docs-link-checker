@@ -108,6 +108,12 @@ export class HostLimiter {
     }
   }
 
+  /** `true` while the URL's host is paused */
+  isPaused(url: string): boolean {
+    const state = this.getHost(url);
+    return state !== undefined && state.pausedUntil > Date.now();
+  }
+
   /** Pauses new requests to the URL's host for `ms` milliseconds */
   pause(url: string, ms: number) {
     const state = this.getHost(url);
