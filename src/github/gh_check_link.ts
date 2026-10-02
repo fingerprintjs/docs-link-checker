@@ -24,19 +24,25 @@ const SECTIONS_WITH_INDEX_PAGE = new Set(["issues", "discussions", "releases", "
 
 type SectionCheckArgs = { url: URL; owner: string; repo: string; pathParts: string[] };
 
-/** Checks by the first path segment after the repository (`/owner/repo/{section}/...`) */
-const SECTION_CHECKS: Partial<
-  Record<string, (args: SectionCheckArgs) => Promise<LinkCheckResult>>
-> = {
-  issues: ({ owner, repo, pathParts }) => checkGitHubIssueLink(owner, repo, pathParts),
-  discussions: ({ owner, repo, pathParts }) =>
-    checkGitHubDiscussionLink(owner, repo, parseInt(pathParts[1] ?? "", 10)),
-  blob: ({ url, owner, repo, pathParts }) => checkGitHubBlobLink(url, owner, repo, pathParts),
-  tree: ({ owner, repo, pathParts }) => checkGitHubTreeLink(owner, repo, pathParts),
-  releases: ({ owner, repo, pathParts }) => checkGitHubReleaseLink(owner, repo, pathParts),
-  pull: ({ owner, repo, pathParts }) => checkGitHubPullRequestLink(owner, repo, pathParts),
-  commit: ({ owner, repo, pathParts }) => checkGitHubCommitLink(owner, repo, pathParts),
-};
+type SectionCheck = (args: SectionCheckArgs) => Promise<LinkCheckResult>;
+
+/**
+ * Checks by the first path segment after the repository (`/owner/repo/{section}/...`). A `Map`, so a segment like
+ * `constructor` or `__proto__` from the URL never resolves an inherited object property.
+ */
+const SECTION_CHECKS = new Map<string, SectionCheck>([
+  ["issues", ({ owner, repo, pathParts }) => checkGitHubIssueLink(owner, repo, pathParts)],
+  [
+    "discussions",
+    ({ owner, repo, pathParts }) =>
+      checkGitHubDiscussionLink(owner, repo, parseInt(pathParts[1] ?? "", 10)),
+  ],
+  ["blob", ({ url, owner, repo, pathParts }) => checkGitHubBlobLink(url, owner, repo, pathParts)],
+  ["tree", ({ owner, repo, pathParts }) => checkGitHubTreeLink(owner, repo, pathParts)],
+  ["releases", ({ owner, repo, pathParts }) => checkGitHubReleaseLink(owner, repo, pathParts)],
+  ["pull", ({ owner, repo, pathParts }) => checkGitHubPullRequestLink(owner, repo, pathParts)],
+  ["commit", ({ owner, repo, pathParts }) => checkGitHubCommitLink(owner, repo, pathParts)],
+]);
 
 /** A user or an organization (`https://github.com/owner`) */
 const checkOwnerLink = async (owner: string, url: string): Promise<LinkCheckResult> => {
@@ -105,7 +111,7 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
     return checkLinkWithFetch(url);
   }
 
-  const checkSection = SECTION_CHECKS[section];
+  const checkSection = SECTION_CHECKS.get(section);
   if (checkSection) {
     return checkSection({ url: githubUrl, owner, repo, pathParts });
   }

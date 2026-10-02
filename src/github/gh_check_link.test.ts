@@ -238,6 +238,21 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
   });
 });
 
+describe("checkLinkWithGithubApi() with unknown sections", () => {
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "reports /owner/repo/%s/x as an unknown link type (no inherited object property)",
+    async (section) => {
+      const result = await checkLinkWithGithubApi(`https://github.com/o/r/${section}/x`);
+      expect(result).toEqual({
+        ok: false,
+        error: "unexpected error",
+        status: 400,
+        errorDetail: `Unknown link type: ${section}/x`,
+      });
+    },
+  );
+});
+
 describe("isGithubReservedRoute()", () => {
   it.each([
     "https://github.com/features",

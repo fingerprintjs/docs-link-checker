@@ -1,4 +1,4 @@
-import { configDefaults, defineConfig } from "vitest/config";
+import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
 
 // Offline unit tests (`pnpm test`), no network or GH_TOKEN needed.
 // Network tests live in `*.integration.test.ts` files, see `vitest.integration.config.js`.
@@ -16,7 +16,13 @@ export default defineConfig({
     // `pnpm run test:coverage` (CI) fails when coverage drops below these numbers (a bit below the current ones)
     coverage: {
       include: ["src/**/*.{ts,tsx}"],
-      exclude: ["src/__fixtures__/**", "src/test_setup.ts"],
+      // Keep Vitest's default exclusions (test files...), integration tests are not run here
+      exclude: [
+        ...coverageConfigDefaults.exclude,
+        "**/*.integration.test.ts",
+        "src/__fixtures__/**",
+        "src/test_setup.ts",
+      ],
       reporter: ["text-summary", "html"],
       thresholds: { statements: 90, branches: 85, functions: 92, lines: 90 },
     },
