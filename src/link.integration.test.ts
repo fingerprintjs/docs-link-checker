@@ -5,15 +5,24 @@ import {
   HASH_WAIT_TIMEOUT,
   PAGE_OPERATION_TIMEOUT,
 } from "./browser";
+import { MAX_SERVER_ERROR_RETRIES, MAX_SERVER_ERROR_RETRY_DELAY } from "./http";
 import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeBrowser);
 
-// Worst case of a missing anchor: the navigation, then the late anchor wait (a missing GitHub code line: the wait for
-// the code view plus the wait for the line), plus a margin
+// Retries of a navigation answered with 502/503/504 (GitHub under load): the waits, plus the navigations
+const SERVER_ERROR_RETRY_TIME =
+  MAX_SERVER_ERROR_RETRIES * (MAX_SERVER_ERROR_RETRY_DELAY + PAGE_OPERATION_TIMEOUT);
+
+// Worst case of a missing anchor: the navigation (and its retries), then the late anchor wait (a missing GitHub code
+// line: the wait for the code view plus the wait for the line), plus a margin
 const HASH_CHECK_TEST_TIMEOUT =
-  PAGE_OPERATION_TIMEOUT + HASH_FALLBACK_WAIT_TIMEOUT + HASH_WAIT_TIMEOUT + 10000;
+  PAGE_OPERATION_TIMEOUT +
+  SERVER_ERROR_RETRY_TIME +
+  HASH_FALLBACK_WAIT_TIMEOUT +
+  HASH_WAIT_TIMEOUT +
+  10000;
 
 const linkCheckMethods = [
   {
@@ -132,14 +141,18 @@ describe("checkLinkWithPlaywright()", () => {
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
-  it(`should return OK for working L{number} hashes on GitHub `, async () => {
+  it(`should return OK for working L{number} hashes on GitHub `, {
+    timeout: HASH_CHECK_TEST_TIMEOUT,
+  }, async () => {
     const result = await checkLinkWithPlaywright(
       "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3",
     );
     expect(result).toMatchObject({ ok: true, status: 200 });
   });
 
-  it(`should return OK for working L{number}-L{number} hashes on GitHub `, async () => {
+  it(`should return OK for working L{number}-L{number} hashes on GitHub `, {
+    timeout: HASH_CHECK_TEST_TIMEOUT,
+  }, async () => {
     const result = await checkLinkWithPlaywright(
       "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L3-L5",
     );
