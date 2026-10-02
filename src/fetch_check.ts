@@ -204,8 +204,6 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
     return { ok: true, status: page.status, note };
   }
 
-  // Note: GitHub `#L12` line links no longer work server-side, since GitHub switched to client-side rendering 🤦
-  // Playwright fallback still works. The check is kept in case GitHub switches back to server-side rendering.
   if (!page.getAnchors || !isHashInAnchorIndex(page.getAnchors(), hash, url)) {
     return { ok: false, status: page.status, error: "hash not found" };
   }

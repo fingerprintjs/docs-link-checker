@@ -13,27 +13,23 @@ type MyOctokitInstance = InstanceType<typeof MyOctokit>;
 type ThrottleOptions = NonNullable<
   NonNullable<ConstructorParameters<typeof MyOctokit>[0]>["throttle"]
 >;
+type LimitHandler = NonNullable<ThrottleOptions["onRateLimit"]>;
 
-/**
- * Retry once on both the primary and the secondary rate limit, then give up.
- */
+/** Retry once on a rate limit (primary or secondary), then give up */
+const onRateLimited =
+  (kind: string): LimitHandler =>
+  (retryAfter, options, octokit, retryCount) => {
+    octokit.log.warn(`${kind} for request ${options.method} ${options.url}`);
+    if (retryCount < 1) {
+      octokit.log.info(`Retrying after ${retryAfter} seconds!`);
+      return true;
+    }
+    return false;
+  };
+
 export const throttleOptions = {
-  onRateLimit: (retryAfter, options, octokit, retryCount) => {
-    octokit.log.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
-    if (retryCount < 1) {
-      octokit.log.info(`Retrying after ${retryAfter} seconds!`);
-      return true;
-    }
-    return false;
-  },
-  onSecondaryRateLimit: (retryAfter, options, octokit, retryCount) => {
-    octokit.log.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
-    if (retryCount < 1) {
-      octokit.log.info(`Retrying after ${retryAfter} seconds!`);
-      return true;
-    }
-    return false;
-  },
+  onRateLimit: onRateLimited("Request quota exhausted"),
+  onSecondaryRateLimit: onRateLimited("SecondaryRateLimit detected"),
 } satisfies ThrottleOptions;
 
 let client: MyOctokitInstance | undefined;

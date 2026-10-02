@@ -34,8 +34,14 @@ vi.mock("./github_client", () => ({
   },
 }));
 
-import { checkLinkWithGithubApi, isGithubCodeLineLink, isGithubUrl } from "./gh_check_link";
-import { decodePathSegment, getGithubPathSegments, isGithubReservedRoute } from "./gh_url";
+import { checkLinkWithGithubApi } from "./gh_check_link";
+import {
+  getGithubPathSegments,
+  isGithubCodeLineLink,
+  isGithubReservedRoute,
+  isGithubUrl,
+  safeDecode,
+} from "./gh_url";
 
 beforeEach(() => {
   octokit.noToken = false;
@@ -121,15 +127,15 @@ describe("checkLinkWithGithubApi", () => {
   });
 });
 
-describe("decodePathSegment() / getGithubPathSegments()", () => {
+describe("safeDecode() / getGithubPathSegments()", () => {
   it("decodes percent-encoded segments", () => {
-    expect(decodePathSegment("%40fingerprint%2Fvue%402.0.0")).toBe("@fingerprint/vue@2.0.0");
-    expect(decodePathSegment("my%20file.md")).toBe("my file.md");
+    expect(safeDecode("%40fingerprint%2Fvue%402.0.0")).toBe("@fingerprint/vue@2.0.0");
+    expect(safeDecode("my%20file.md")).toBe("my file.md");
   });
 
   it("keeps malformed percent-encoding as is (does not throw)", () => {
-    expect(decodePathSegment("100%")).toBe("100%");
-    expect(decodePathSegment("%E0%A4%A")).toBe("%E0%A4%A");
+    expect(safeDecode("100%")).toBe("100%");
+    expect(safeDecode("%E0%A4%A")).toBe("%E0%A4%A");
   });
 
   it("splits before decoding, so an encoded slash stays in its segment", () => {

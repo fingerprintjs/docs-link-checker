@@ -18,7 +18,7 @@ vi.mock("../github_client", () => ({
   }),
 }));
 
-import { checkGitHubBlobLink, getMarkdownAnchors } from "./gh_blob";
+import { checkGitHubBlobLink } from "./gh_blob";
 
 const readme = readFileSync(
   join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"),
@@ -37,43 +37,6 @@ beforeEach(() => {
   getContent.mockReset();
   getContent.mockResolvedValue({
     data: { type: "file", content: Buffer.from(readme).toString("base64") },
-  });
-});
-
-describe("getMarkdownAnchors()", () => {
-  const anchors = getMarkdownAnchors(readme);
-
-  it("includes heading slugs", () => {
-    expect(anchors).toContain("getting-started");
-    expect(anchors).toContain("installation");
-    expect(anchors).toContain("setext-heading");
-    expect(anchors).toContain("a--b");
-  });
-
-  it("slugs the rendered heading text (no markdown syntax or link URLs)", () => {
-    expect(anchors).toContain("usage-with-code-and-bold-and-a-link");
-  });
-
-  it("adds -1, -2 suffixes to duplicate headings", () => {
-    expect(anchors).toContain("usage");
-    expect(anchors).toContain("usage-1");
-    expect(anchors).not.toContain("usage-2");
-  });
-
-  it("includes headings in blockquotes and lists", () => {
-    expect(anchors).toContain("heading-in-a-quote");
-    expect(anchors).toContain("heading-in-a-list");
-  });
-
-  it("ignores # lines inside fenced code blocks", () => {
-    expect(anchors).not.toContain("not-a-heading");
-    expect(anchors).not.toContain("also-not-a-heading");
-  });
-
-  it("includes explicit HTML anchors", () => {
-    expect(anchors).toContain("custom-anchor"); // <a name="...">
-    expect(anchors).toContain("inline-anchor"); // <a id="...">
-    expect(anchors).toContain("project-logo"); // <h1 id="...">
   });
 });
 

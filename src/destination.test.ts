@@ -6,7 +6,6 @@ import {
   DestinationNotAllowedError,
   isBlockedHostLiteral,
   isNonPublicAddress,
-  parseIPv6,
 } from "./destination";
 import { checkLinkWithFetch } from "./fetch_check";
 import { fetchWithHostLimit } from "./http";
@@ -79,6 +78,11 @@ describe("isNonPublicAddress()", () => {
     "64:ff9b::10.0.0.1",
     "2002:c0a8:0101::1",
     "fe80::1%eth0",
+    // IPv4-compatible, IPv4-translated, NAT64 and 6to4 forms are blocked wholesale, public addresses too
+    "::8.8.8.8",
+    "::ffff:0:8.8.8.8",
+    "64:ff9b::8.8.8.8",
+    "2002:0808:0808::1",
     // Not an IP address: fail closed
     "not-an-ip",
   ])("%s is non-public", (address) => {
@@ -99,18 +103,8 @@ describe("isNonPublicAddress()", () => {
     "2606:4700:4700::1111",
     "2001:4860:4860::8888",
     "::ffff:8.8.8.8",
-    "64:ff9b::8.8.8.8",
-    "2002:0808:0808::1",
   ])("%s is public", (address) => {
     expect(isNonPublicAddress(address)).toBe(false);
-  });
-
-  it("expands IPv6 addresses", () => {
-    expect(parseIPv6("::ffff:1.2.3.4")).toEqual([0, 0, 0, 0, 0, 0xffff, 0x0102, 0x0304]);
-    expect(parseIPv6("1::")).toEqual([1, 0, 0, 0, 0, 0, 0, 0]);
-    expect(parseIPv6("1:2:3:4:5:6:7:8")).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(parseIPv6("1:2:3:4:5:6:1.2.3.4")).toEqual([1, 2, 3, 4, 5, 6, 0x0102, 0x0304]);
-    expect(parseIPv6("1::2::3")).toBeUndefined();
   });
 });
 

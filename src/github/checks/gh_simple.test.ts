@@ -4,7 +4,7 @@ const { octokit } = vi.hoisted(() => ({ octokit: { graphql: vi.fn() } }));
 
 vi.mock("../github_client", () => ({ getMyOctokit: () => octokit }));
 
-import { checkGitHubDiscussionLink } from "./gh_discussion";
+import { checkGitHubDiscussionLink } from "./gh_simple";
 
 // GraphQL answers a missing repository or discussion with errors in a 200 response
 const graphqlError = (message: string, type?: string) =>

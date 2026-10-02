@@ -1,12 +1,12 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { glob } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { marked, type Token, type Tokens } from "marked";
 import { type Baseline, EMPTY_BASELINE } from "./baseline";
-import { getMarkdownAnchors } from "./github/checks/gh_blob";
+import { safeDecode } from "./github/gh_url";
 import { decodeHash } from "./hash";
 import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
+import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "./markdown";
 import { filterOutIrrelevantLinks } from "./page";
 import { getJSONReport, saveReport } from "./report/report";
 import { withRun } from "./run";
@@ -44,73 +44,6 @@ export const findMarkdownFiles = async (patterns: string[], cwd: string): Promis
   return [...files].toSorted();
 };
 
-export type MarkdownLink = { href: string; text: string; line?: number };
-
-// `Token` includes a generic token with any `type`, so checking `type` alone does not narrow it
-const isLinkToken = (token: Token): token is Tokens.Link => token.type === "link";
-
-const stripFormatting = (text: string) => text.replace(/\*\*|__|\*|_|~~|`/g, "");
-
-/** Offsets of the line starts, to convert an offset to a 1-based line number */
-const getLineStarts = (source: string): number[] => {
-  const starts = [0];
-  for (let i = 0; i < source.length; i++) {
-    if (source[i] === "\n") starts.push(i + 1);
-  }
-  return starts;
-};
-
-const lineAt = (lineStarts: number[], offset: number): number => {
-  let [low, high] = [0, lineStarts.length - 1];
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if ((lineStarts[middle] ?? 0) <= offset) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return low + 1;
-};
-
-/**
- * Extracts links from markdown with the line they are on. Uses the marked lexer (like `extractLinksFromMarkdown`),
- * so links in code blocks are ignored. Tokens have no positions, so the line is found by searching the raw link
- * text in the source, in document order. Links whose raw text can't be found have no line.
- */
-export const extractMarkdownLinks = (markdown: string): MarkdownLink[] => {
-  // marked normalizes line endings, do the same so raw token text can be found in the source
-  const source = markdown.replace(/\r\n?/g, "\n");
-  const lineStarts = getLineStarts(source);
-  const links: MarkdownLink[] = [];
-  let cursor = 0;
-
-  const findLine = (raw: string): number | undefined => {
-    // Links inside blockquotes and lists can span lines that were re-indented by the lexer, search the first line
-    const candidates = [raw, raw.split("\n", 1)[0] ?? raw];
-    for (const candidate of candidates) {
-      const offset = source.indexOf(candidate, cursor);
-      if (offset !== -1) {
-        cursor = offset + candidate.length;
-        return lineAt(lineStarts, offset);
-      }
-    }
-    return undefined;
-  };
-
-  // The callback is synchronous, walkTokens returns its (empty) results
-  void marked.walkTokens(marked.lexer(source), (token: Token) => {
-    if (isLinkToken(token)) {
-      links.push({
-        href: token.href,
-        text: stripFormatting(token.text),
-        line: findLine(token.raw),
-      });
-    }
-  });
-  return links;
-};
-
 export type LinkKind = "local" | "external" | "skip";
 
 /**
@@ -124,17 +57,6 @@ export const getLinkKind = (href: string): LinkKind => {
   if (/^[a-z][a-z\d+.-]*:/i.test(href)) return "skip";
   return "local";
 };
-
-const decodePath = (path: string) => {
-  try {
-    return decodeURIComponent(path);
-  } catch {
-    return path;
-  }
-};
-
-// GitHub prefixes ids in rendered markdown with `user-content-`, links work both with and without it
-const USER_CONTENT_PREFIX = "user-content-";
 
 type LocalCheckContext = {
   /** Root for root-relative links (`/docs/a.md`), usually the repository root */
@@ -212,10 +134,7 @@ const checkMarkdownAnchor = (
 ): LinkCheckResult => {
   const anchor = decodeHash(hash).toLowerCase();
   const anchors = getAnchorsOfFile(markdownFile, anchorCache);
-  const withoutPrefix = anchor.startsWith(USER_CONTENT_PREFIX)
-    ? anchor.slice(USER_CONTENT_PREFIX.length)
-    : anchor;
-  if (anchors.has(anchor) || anchors.has(withoutPrefix)) {
+  if (hasMatchingAnchor(anchors, anchor)) {
     return { ok: true, status: 200 };
   }
   return {
@@ -240,7 +159,7 @@ export const checkLocalLink = (
   const hashIndex = href.indexOf("#");
   const pathAndQuery = hashIndex === -1 ? href : href.slice(0, hashIndex);
   const hash = hashIndex === -1 ? "" : href.slice(hashIndex + 1);
-  const path = decodePath(pathAndQuery.split("?", 1)[0] ?? "");
+  const path = safeDecode(pathAndQuery.split("?", 1)[0] ?? "");
 
   let target = file;
   if (path !== "") {
