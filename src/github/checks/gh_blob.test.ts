@@ -2,10 +2,20 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getContent, getBlob } = vi.hoisted(() => ({ getContent: vi.fn(), getBlob: vi.fn() }));
+const { getContent, getBlob, listMatchingRefs } = vi.hoisted(() => ({
+  getContent: vi.fn(),
+  getBlob: vi.fn(),
+  listMatchingRefs: vi.fn(),
+}));
 
 vi.mock("../github_client", () => ({
-  getMyOctokit: () => ({ repos: { getContent }, git: { getBlob } }),
+  getMyOctokit: () => ({
+    repos: { getContent },
+    git: { getBlob, listMatchingRefs },
+    // All pages of a list endpoint: the mocks return a single page
+    paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
+      (await fn(params)).data,
+  }),
 }));
 
 import { checkGitHubBlobLink, getMarkdownAnchors } from "./gh_blob";
@@ -22,6 +32,8 @@ const checkHash = (hash: string) => {
 
 beforeEach(() => {
   getBlob.mockReset();
+  listMatchingRefs.mockReset();
+  listMatchingRefs.mockResolvedValue({ data: [] });
   getContent.mockReset();
   getContent.mockResolvedValue({
     data: { type: "file", content: Buffer.from(readme).toString("base64") },
@@ -117,14 +129,14 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
     getContent.mockResolvedValue(file("one\ntwo\nthree\n"));
   });
 
-  it.each(["#L1", "#L3", "#L1-L3", "#L2-L2", "#%4C2"])(
+  it.each(["#L1", "#L3", "#L1-L3", "#L2-L2", "#%4C2", "#L2C5", "#L2C5-L3C1", "#L1-L3C2"])(
     "accepts %s within the file",
     async (hash) => {
       expect(await checkBlob("main/src/a.ts", hash)).toEqual({ ok: true, status: 200 });
     },
   );
 
-  it.each(["#L4", "#L2-L4", "#L99999", "#L8888-L9999"])(
+  it.each(["#L4", "#L2-L4", "#L99999", "#L8888-L9999", "#L2C5-L4C1", "#L4C1"])(
     "reports %s past the end of the file as 'hash not found'",
     async (hash) => {
       expect(await checkBlob("main/src/a.ts", hash)).toEqual({
@@ -205,6 +217,8 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
   it.each([
     ["server error", 503],
     ["rate limit", 429],
+    ["rate limit or no access", 403],
+    ["bad token", 401],
     ["network error", undefined],
   ])("reports a %s as 'unexpected error' (re-checked in the browser)", async (_name, status) => {
     getContent.mockRejectedValue(Object.assign(new Error("Failed"), { status }));
@@ -228,22 +242,117 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
     });
   });
 
-  it("resolves branch names with slashes (`feature/x`)", async () => {
-    getContent.mockImplementation(async ({ ref }: { ref: string }) => {
-      if (ref !== "feature/x") {
+  /** Branches and tags of the mocked repository (`heads/feature/x`, `tags/v1`) */
+  const mockRefs = (refs: string[]) => {
+    listMatchingRefs.mockImplementation(async ({ ref }: { ref: string }) => ({
+      // Prefix match like the API: `heads/feature` matches `heads/feature-2` too
+      data: refs.filter((name) => name.startsWith(ref)).map((name) => ({ ref: `refs/${name}` })),
+    }));
+  };
+  /** The file exists only at `ref` */
+  const mockFileAt = (fileRef: string, filePath: string, text: string) => {
+    getContent.mockImplementation(async ({ ref, path }: { ref: string; path: string }) => {
+      if (ref !== fileRef || path !== filePath) {
         throw notFound();
       }
-      return file("a\nb\n");
+      return file(text);
     });
+  };
+  const contentCalls = () => getContent.mock.calls.map(([params]) => [params.ref, params.path]);
+
+  it("resolves branch names with slashes (`feature/x`)", async () => {
+    mockRefs(["heads/feature", "heads/feature-2", "heads/feature/x"]);
+    mockFileAt("feature/x", "src/a.ts", "a\nb\n");
 
     expect(await checkBlob("feature/x/src/a.ts", "#L2")).toEqual({ ok: true, status: 200 });
     expect(await checkBlob("feature/x/src/a.ts", "#L3")).toMatchObject({
       errorDetail: "src/a.ts has only 2 lines",
     });
-    expect(getContent.mock.calls.map(([params]) => [params.ref, params.path])).toContainEqual([
-      "feature/x",
-      "src/a.ts",
+    expect(contentCalls()).toContainEqual(["feature/x", "src/a.ts"]);
+  });
+
+  it("resolves branch names of any length (5 segments) with one listing of branches and tags", async () => {
+    mockRefs(["heads/a/b/c/d/e", "heads/a/b/x", "tags/a/b"]);
+    mockFileAt("a/b/c/d/e", "src/f.ts", "one\n");
+
+    const { withRun } = await import("../../run");
+    await withRun(async () => {
+      expect(await checkBlob("a/b/c/d/e/src/f.ts", "#L1")).toEqual({ ok: true, status: 200 });
+      expect(await checkBlob("a/b/c/d/e/src/f.ts")).toEqual({ ok: true, status: 200 });
+    });
+
+    // The first segment, then the longest ref that is a prefix of the path, no guessing
+    expect(contentCalls()).toEqual([
+      ["a", "b/c/d/e/src/f.ts"],
+      ["a/b/c/d/e", "src/f.ts"],
     ]);
+    // One listing of branches and one of tags for the repository and first segment, cached for the run
+    expect(listMatchingRefs.mock.calls.map(([params]) => params.ref).sort()).toEqual([
+      "heads/a",
+      "tags/a",
+    ]);
+  });
+
+  it("resolves tag names with slashes (`@scope/pkg@1.0.0`)", async () => {
+    mockRefs(["tags/@scope/pkg@1.0.0", "tags/@scope/other@2.0.0"]);
+    mockFileAt("@scope/pkg@1.0.0", "README.md", "# Title\n");
+
+    expect(await checkBlob("@scope/pkg@1.0.0/README.md", "#title")).toEqual({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("tries a shorter ref if the longest one has no such file (a branch `a/b` and a tag `a/b/c`)", async () => {
+    mockRefs(["heads/a/b", "tags/a/b/c"]);
+    mockFileAt("a/b", "c/f.ts", "one\n");
+
+    expect(await checkBlob("a/b/c/f.ts", "#L1")).toEqual({ ok: true, status: 200 });
+    expect(contentCalls()).toEqual([
+      ["a", "b/c/f.ts"],
+      ["a/b/c", "f.ts"],
+      ["a/b", "c/f.ts"],
+    ]);
+  });
+
+  it("uses a commit SHA (or a ref without slashes) directly, without listing refs", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    mockFileAt(sha, "src/a.ts", "a\nb\n");
+
+    expect(await checkBlob(`${sha}/src/a.ts`, "#L2")).toEqual({ ok: true, status: 200 });
+    expect(listMatchingRefs).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing file at a commit SHA as broken link", async () => {
+    getContent.mockRejectedValue(notFound());
+
+    expect(
+      await checkBlob("0123456789abcdef0123456789abcdef01234567/src/missing.ts", "#L1"),
+    ).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+
+  it("reports a nonexistent ref as broken link, a ref is never the whole path", async () => {
+    getContent.mockRejectedValue(notFound());
+    // `a/b/c/d/e/f/g.ts` is a branch, but a blob URL needs a file path after the ref
+    mockRefs(["heads/a-b", "heads/a/b/c/d/e/f/g.ts"]);
+
+    expect(await checkBlob("a/b/c/d/e/f/g.ts", "#L1")).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+    });
+    // Only the first segment: no listed ref is a prefix of the path
+    expect(getContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a missing repository (no refs listed) as broken link", async () => {
+    getContent.mockRejectedValue(notFound());
+    listMatchingRefs.mockRejectedValue(notFound());
+
+    expect(await checkBlob("feature/x/src/a.ts")).toMatchObject({
+      error: "broken link",
+      status: 404,
+    });
   });
 
   it("does not try longer refs after an error that is not 'not found'", async () => {
@@ -252,14 +361,18 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
     await checkBlob("feature/x/src/a.ts", "#L2");
 
     expect(getContent).toHaveBeenCalledTimes(1);
+    expect(listMatchingRefs).not.toHaveBeenCalled();
   });
 
-  it("reports a file missing with every ref candidate as broken link", async () => {
+  it("reports a failing ref listing as 'unexpected error', not broken", async () => {
     getContent.mockRejectedValue(notFound());
+    listMatchingRefs.mockRejectedValue(Object.assign(new Error("Forbidden"), { status: 403 }));
 
-    expect(await checkBlob("a/b/c/d/e/f/g.ts", "#L1")).toMatchObject({ error: "broken link" });
-    // A bounded number of ref candidates
-    expect(getContent).toHaveBeenCalledTimes(4);
+    expect(await checkBlob("feature/x/src/a.ts")).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+      status: 403,
+    });
   });
 
   it("checks line anchors on rendered markdown against the lines, a heading `L12` matches too", async () => {

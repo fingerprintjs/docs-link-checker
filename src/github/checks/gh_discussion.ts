@@ -1,6 +1,6 @@
-import type { RequestError } from "@octokit/types";
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
+import { getApiErrorResult, isNotFoundApiError } from "../gh_api_error";
 import { getMyOctokit } from "../github_client";
 
 /**
@@ -32,22 +32,10 @@ export const checkGitHubDiscussionLink = async (
     return { ok: true, status: 200 };
   }
 
-  if (
-    (error as unknown as RequestError).status === 404 ||
-    error?.message?.includes("Could not resolve to a Discussion")
-  ) {
-    return {
-      ok: false,
-      error: "broken link",
-      status: 404,
-      errorDetail: `Discussion #${discussionNumber} not found in repository ${owner}/${repo}`,
-    };
+  const notFoundDetail = `Discussion #${discussionNumber} not found in repository ${owner}/${repo}`;
+  // GraphQL answers a missing discussion (or repository) with an error in a 200 response
+  if (isNotFoundApiError(error) || error?.message?.includes("Could not resolve to a Discussion")) {
+    return { ok: false, error: "broken link", status: 404, errorDetail: notFoundDetail };
   }
-
-  return {
-    ok: false,
-    error: "unexpected error",
-    status: 500,
-    errorDetail: String(error),
-  };
+  return getApiErrorResult(error, notFoundDetail);
 };

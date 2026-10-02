@@ -1,4 +1,3 @@
-import type { RequestError } from "@octokit/types";
 import * as cheerio from "cheerio";
 import GithubSlugger from "github-slugger";
 import { marked, Parser, type Token } from "marked";
@@ -6,7 +5,9 @@ import { decodeHash } from "../../hash";
 import { checkLineAnchor, countLines } from "../../line_anchor";
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { type ContentResponse, getBlobCached, getContentCached } from "../gh_cache";
+import { getApiErrorResult } from "../gh_api_error";
+import { getBlobCached } from "../gh_cache";
+import { getRefPathContent } from "../gh_ref";
 import { isGithubCodeLineLink } from "../gh_url";
 
 // GitHub prefixes ids in rendered markdown with `user-content-`, links work both with and without it
@@ -67,55 +68,6 @@ type FileText = { text: string; binary: boolean };
 /** A file from the contents API (not a directory, symlink or submodule) */
 type FileData = { content: string; encoding?: string; sha: string; size?: number };
 
-// Branch names can contain slashes (`feature/x`), the URL doesn't say where the ref ends: refs of up to this many
-// path segments are tried
-const MAX_REF_SEGMENTS = 4;
-
-/** Error of a failed GitHub API request as a link check result: 404 is a broken link, anything else unexpected */
-const getApiErrorResult = (error: unknown, notFoundDetail: string): LinkCheckResult => {
-  const { status } = error as Partial<RequestError>;
-  if (status === 404) {
-    return { ok: false, error: "broken link", status: 404, errorDetail: notFoundDetail };
-  }
-  // Server errors and rate limits (after Octokit's retries), network errors, no `GH_TOKEN`: says nothing about the
-  // link, re-checked in the browser (see `shouldRecheckWithPlaywright`)
-  return {
-    ok: false,
-    error: "unexpected error",
-    ...(status !== undefined ? { status } : {}),
-    errorDetail: String(error),
-  };
-};
-
-/**
- * Contents API response of `<ref>/<path>` in a blob URL (`blob/<ref>/<path>`). The ref is the first segment, or (if
- * that is not found) the first 2, 3... segments: branch names can contain slashes (`blob/feature/x/src/a.ts`).
- */
-const getBlobContent = async (
-  owner: string,
-  repo: string,
-  refAndPath: string[],
-): Promise<
-  { found: true; response: ContentResponse; path: string } | { found: false; error: unknown }
-> => {
-  const maxRefSegments = Math.min(MAX_REF_SEGMENTS, Math.max(1, refAndPath.length - 1));
-  let firstError: unknown = null;
-  for (let refSegments = 1; refSegments <= maxRefSegments; refSegments++) {
-    const ref = refAndPath.slice(0, refSegments).join("/");
-    const path = refAndPath.slice(refSegments).join("/");
-    const { data, error } = await tryCatch(getContentCached({ owner, repo, ref, path }));
-    if (data) {
-      return { found: true, response: data, path };
-    }
-    firstError ??= error;
-    // Only "not found" can mean the ref is longer, any other error is the answer
-    if ((error as Partial<RequestError> | undefined)?.status !== 404) {
-      return { found: false, error };
-    }
-  }
-  return { found: false, error: firstError };
-};
-
 /**
  * Text of a file. Files over 1 MB have no content in the contents API (`encoding: "none"`), they are read with the
  * blob API (up to 100 MB).
@@ -161,8 +113,8 @@ const hasHeadingAnchor = (fileText: FileText, hash: string) => {
 };
 
 /**
- * Check if a GitHub blob exists, and its hash: a heading of a markdown file, or a code line (`#L12`, `#L12-L15`, the
- * file must have enough lines, see `checkLineAnchor`). Code lines are checked with the API, not in the browser:
+ * Check if a GitHub blob exists, and its hash: a heading of a markdown file, or a code line (`#L12`, `#L12-L15`,
+ * `#L12C3-L15C1`, the file must have enough lines, see `checkLineAnchor`). Code lines are checked with the API, not in the browser:
  * github.com refuses blob pages to headless browsers on CI runners (503).
  * @param fullUrl - The full URL of the blob
  * @param owner - The owner of the repository
@@ -179,7 +131,7 @@ export const checkGitHubBlobLink = async (
   // Remove the # character, decode percent-encoding and make it lowercase
   const hash = decodeHash(fullUrl.hash).toLowerCase();
 
-  const content = await getBlobContent(owner, repo, pathParts.slice(1));
+  const content = await getRefPathContent(owner, repo, pathParts.slice(1), { requirePath: true });
   if (!content.found) {
     return getApiErrorResult(content.error, "File not found in repository");
   }
@@ -190,8 +142,8 @@ export const checkGitHubBlobLink = async (
   }
 
   // For hash checking, we need to get the file content
-  const fileData = content.response.data;
-  if (!("content" in fileData)) {
+  const fileData = content.response?.data;
+  if (!fileData || !("content" in fileData)) {
     return {
       ok: false,
       error: "hash not found",
@@ -205,7 +157,7 @@ export const checkGitHubBlobLink = async (
     return getApiErrorResult(error, "File content not found in repository");
   }
 
-  // `#L12`, `#L12-L15` (case-sensitive, `#l12` is not a line anchor)
+  // `#L12`, `#L12-L15`, `#L12C3-L15C1` (case-sensitive, `#l12` is not a line anchor), see `parseLineAnchor`
   const lineResult = isGithubCodeLineLink(fullUrl.href)
     ? checkLineAnchor(
         decodeHash(fullUrl.hash),

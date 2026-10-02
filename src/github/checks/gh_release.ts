@@ -1,6 +1,6 @@
-import type { RequestError } from "@octokit/types";
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
+import { getApiErrorResult } from "../gh_api_error";
 import { getMyOctokit } from "../github_client";
 
 /**
@@ -30,21 +30,10 @@ export const checkGitHubReleaseLink = async (
     );
 
     if (releaseError) {
-      const requestError = releaseError as unknown as RequestError;
-      if (requestError.status === 404) {
-        return {
-          ok: false,
-          error: "broken link",
-          status: 404,
-          errorDetail: `Release tag ${tag} not found in repository ${owner}/${repo}`,
-        };
-      }
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(releaseError),
-      };
+      return getApiErrorResult(
+        releaseError,
+        `Release tag ${tag} not found in repository ${owner}/${repo}`,
+      );
     }
 
     // Then check if the asset exists
@@ -72,12 +61,7 @@ export const checkGitHubReleaseLink = async (
     );
 
     if (error) {
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(error),
-      };
+      return getApiErrorResult(error, `Repository ${owner}/${repo} not found`);
     }
 
     if (releases.data.length === 0) {
@@ -105,21 +89,10 @@ export const checkGitHubReleaseLink = async (
     );
 
     if (error) {
-      const requestError = error as unknown as RequestError;
-      if (requestError.status === 404) {
-        return {
-          ok: false,
-          error: "broken link",
-          status: 404,
-          errorDetail: `Release tag ${tag} not found in repository ${owner}/${repo}`,
-        };
-      }
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(error),
-      };
+      return getApiErrorResult(
+        error,
+        `Release tag ${tag} not found in repository ${owner}/${repo}`,
+      );
     }
 
     return { ok: true, status: 200 };
@@ -137,21 +110,10 @@ export const checkGitHubReleaseLink = async (
     );
 
     if (error) {
-      const requestError = error as unknown as RequestError;
-      if (requestError.status === 404) {
-        return {
-          ok: false,
-          error: "broken link",
-          status: 404,
-          errorDetail: `Release #${releaseId} not found in repository ${owner}/${repo}`,
-        };
-      }
-      return {
-        ok: false,
-        error: "unexpected error",
-        status: 500,
-        errorDetail: String(error),
-      };
+      return getApiErrorResult(
+        error,
+        `Release #${releaseId} not found in repository ${owner}/${repo}`,
+      );
     }
 
     return { ok: true, status: 200 };

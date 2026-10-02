@@ -49,7 +49,7 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   if (!repo) {
     const result = await checkIfOwnerExists(owner);
     // Not an account: maybe one of GitHub's own pages missing from the reserved routes, check the page itself
-    if (!result.ok && result.status === 404) {
+    if (!result.ok && result.error === "broken link") {
       const page = await checkLinkWithFetch(url);
       if (page.ok) {
         return page;
