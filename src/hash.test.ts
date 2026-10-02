@@ -78,6 +78,19 @@ describe("isHashPresentInHtml()", () => {
     );
     expect(isHashPresentInHtml(html, "#L12", `${PAGE}#L12`)).toBe(false);
   });
+
+  it("finds the first line of GitHub code line links with columns", () => {
+    expect(
+      isHashPresentInHtml(
+        html,
+        "#L12C5-L20C1",
+        "https://github.com/o/r/blob/main/a.js#L12C5-L20C1",
+      ),
+    ).toBe(true);
+    expect(isHashPresentInHtml(html, "#L13C1", "https://github.com/o/r/blob/main/a.js#L13C1")).toBe(
+      false,
+    );
+  });
 });
 
 describe("getHashSelectors() (used by Playwright)", () => {
@@ -98,5 +111,6 @@ describe("getHashSelectors() (used by Playwright)", () => {
   it("matches GitHub line numbers for GitHub code line links", () => {
     expect(matches("L12-L20", "https://github.com/o/r/blob/main/a.js#L12-L20")).toBe(true);
     expect(matches("L13", "https://github.com/o/r/blob/main/a.js#L13")).toBe(false);
+    expect(matches("L12C3", "https://github.com/o/r/blob/main/a.js#L12C3")).toBe(true);
   });
 });

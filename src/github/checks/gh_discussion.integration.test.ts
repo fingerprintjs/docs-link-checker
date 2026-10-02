@@ -29,8 +29,8 @@ describe("checkGitHubDiscussionLink", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      error: "unexpected error",
-      status: 500,
+      error: "broken link",
+      status: 404,
     });
   });
 });

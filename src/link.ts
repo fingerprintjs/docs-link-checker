@@ -15,7 +15,12 @@ import {
   isGithubWikiLink,
 } from "./github/gh_url";
 import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
-import { fetchWithHostLimit } from "./http";
+import {
+  fetchWithHostLimit,
+  formatServerErrorRetry,
+  getServerErrorRetryDelay,
+  MAX_SERVER_ERROR_RETRIES,
+} from "./http";
 import { withTimeout } from "./limiter";
 import { withRun } from "./run";
 import { incrementMetric, timePhase } from "./run_context";
@@ -23,12 +28,14 @@ import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import {
   CONCURRENCY_LIMIT,
   FORBIDDEN_STATUS_CODES,
+  getHostLimiter,
   getRandomUserAgent,
   log,
   OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
   parallelProcess,
   TASK_TIMEOUT,
+  TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./utils";
 
 export { closeBrowser } from "./browser";
@@ -41,12 +48,12 @@ type CheckLinksArgs = {
 
 /**
  * How a link is checked in the first pass:
- * - `github-api`: GitHub links checked with the GitHub API (definitive answers)
+ * - `github-api`: GitHub links checked with the GitHub API (definitive answers). Code line links (`#L12`) too: the
+ *   file must have enough lines. github.com refuses blob pages to headless browsers on CI runners (503).
  * - `fetch`: plain `fetch`, assumes the page is server-side rendered
- * - `playwright`: needs a real browser (GitHub code line links), checked in the Playwright pass only
  * - `invalid`: the URL cannot be parsed or is not http(s), reported as broken link without any request
  */
-export type CheckMethod = "fetch" | "github-api" | "playwright" | "invalid";
+export type CheckMethod = "fetch" | "github-api" | "invalid";
 
 export const getInitialCheckMethod = (href: string): CheckMethod => {
   // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
@@ -57,9 +64,6 @@ export const getInitialCheckMethod = (href: string): CheckMethod => {
   try {
     if (!isGithubUrl(href)) {
       return "fetch";
-    }
-    if (isGithubCodeLineLink(href)) {
-      return "playwright";
     }
     // Wikis and GitHub's own pages (`/features`, `/topics/x`...) are not available through the API
     if (isGithubWikiLink(href) || isGithubReservedRoute(href)) {
@@ -82,6 +86,17 @@ export const getBlockedDestinationResult = (
   destinationBlocked: true,
 });
 
+/**
+ * Result for a 502, 503 or 504 that persisted after the retries (`TRANSIENT_SERVER_ERROR_STATUS_CODES`): the server
+ * is overloaded or rate limiting (github.com returns 503 under load), it says nothing about the link
+ */
+export const getServerErrorResult = (status: number, statusText: string): LinkCheckResult => ({
+  ok: false,
+  error: "could not check",
+  status,
+  errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
+});
+
 // Status codes returned by fetch that might be caused by bot protection, rate limiting or the request itself
 export const PLAYWRIGHT_RETRY_STATUS_CODES = [401, 403, 405, 406, 408, 429];
 
@@ -102,15 +117,12 @@ export const shouldRecheckWithPlaywright = (
     return false;
   }
   switch (method) {
-    case "playwright":
-      // Already checked with Playwright
-      return false;
     case "invalid":
       // A URL that cannot be parsed is definitively broken
       return false;
     case "github-api":
       // "broken link" and "hash not found" from the API are definitive.
-      // Unexpected errors (unknown link type, API errors) might still work in a browser.
+      // Unexpected errors (unknown link type, API errors, rate limits, no `GH_TOKEN`) might still work in a browser.
       return result.error === "unexpected error";
     case "fetch":
       if (result.error === "broken link") {
@@ -137,9 +149,6 @@ const checkLinkFirstPass = async (
     case "invalid":
       // Every request has its own timeout (FETCH_TIMEOUT)
       return { result: await checkLinkWithFetch(href, false, pageCache), method };
-    case "playwright":
-      // Not reached from checkLinks (code line links go straight to the Playwright pass), kept for completeness
-      return { result: await checkLinkWithGithubApi(href), method };
     case "github-api":
       return {
         result: await withTimeout(
@@ -278,12 +287,6 @@ const checkLinksInRun = async ({
         // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
         taskTimeout: null,
         processFn: async (link): Promise<LinkWithResult | null> => {
-          // Links that need a browser go straight to the Playwright pass, so they respect its concurrency limit
-          // (and links to the same file with different line hashes share one navigation)
-          if (getInitialCheckMethod(link.href) === "playwright") {
-            linksToCheckWithPlaywright.push(link);
-            return null;
-          }
           const { result, method } = await checkFirstPass(link.href);
           // Failure possibly caused by the fetch method, add to Playwright queue
           if (shouldRecheckWithPlaywright(result, method)) {
@@ -390,21 +393,39 @@ export const fetchPage = async (
 
   // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
   // unread bodies are cancelled (see `fetchWithHostLimit`)
-  const request = (method: "GET" | "HEAD") =>
-    fetchWithHostLimit(url, { method, headers }, async (response) =>
-      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
-      // An error page body is kept for the error detail (HEAD responses have none).
-      method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status))
-        ? response.text()
-        : "",
+  // A HEAD request is not retried after a server error: the GET fallback is (see `shouldRetryHeadWithGet`), and the
+  // HEAD counts as the first attempt, so a failing server gets at most `1 + MAX_SERVER_ERROR_RETRIES` requests
+  const request = (method: "GET" | "HEAD", serverErrorRetries?: number) =>
+    fetchWithHostLimit(
+      url,
+      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : serverErrorRetries },
+      async (response) =>
+        // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
+        // An error page body is kept for the error detail (HEAD responses have none).
+        method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status))
+          ? response.text()
+          : "",
     );
 
   try {
     let response = await request(needBody ? "GET" : "HEAD");
     // Some servers don't support (or block) HEAD requests, or answer them differently, retry once with GET
     if (!needBody && shouldRetryHeadWithGet(response.status)) {
+      // A server error on HEAD follows the server error retry policy before the GET: wait for `Retry-After` (or the
+      // backoff) with the whole host paused, or give up when it asks for too long. The GET is its first retry.
+      let getServerErrorRetries: number | undefined;
+      if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+        const delayMs = getServerErrorRetryDelay(0, response.headers.get("Retry-After"));
+        if (delayMs === undefined) {
+          return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
+        }
+        console.log(formatServerErrorRetry(url, response.status, delayMs));
+        incrementMetric("serverErrorRetries");
+        getHostLimiter().pause(url, delayMs);
+        getServerErrorRetries = MAX_SERVER_ERROR_RETRIES - 1;
+      }
       log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-      response = await request("GET");
+      response = await request("GET", getServerErrorRetries);
     }
 
     // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
@@ -419,6 +440,14 @@ export const fetchPage = async (
           // Raw header without a unit: it can be seconds or an HTTP date
           errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
         },
+      };
+    }
+
+    // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
+    if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+      return {
+        ok: false,
+        result: getServerErrorResult(response.status, response.statusText),
       };
     }
 
@@ -756,10 +785,61 @@ async function checkUrlsInOneNavigation(
     throw error;
   }
 
+  const hostLimiter = getHostLimiter();
+  // Hosts to back off for: the navigated URL's, and the hosts of server errors (after a redirect, the final URL's)
+  const pausedUrls = new Set([firstUrl]);
+  for (let retries = 0; ; ) {
+    // Back off while a host is paused (after a server error or a 429 of this or another check), before taking a
+    // page slot, so the other checks keep the browser busy in the meantime
+    for (const url of pausedUrls) {
+      await hostLimiter.waitUntilResumed(url);
+    }
+    const outcome = await navigateAndCheck(urls, verbose, headless, retries, [...pausedUrls]);
+    if (outcome instanceof Map) {
+      return outcome;
+    }
+    if (outcome.reason === "server error") {
+      retries++;
+      pausedUrls.add(outcome.pausedUrl);
+    }
+    // "paused": a host was paused while this check waited for a page slot, the slot is released and the check waits
+    // for the pause again (not counted as a retry)
+  }
+}
+
+/** A navigation of `navigateAndCheck` to do again, after waiting for the host pauses outside of the page slot */
+type NavigationRetry =
+  /** 502, 503 or 504, the host of `pausedUrl` (the final URL after redirects) is paused for the backoff */
+  | { reason: "server error"; pausedUrl: string }
+  /** A host was paused while waiting for the page slot, nothing was requested */
+  | { reason: "paused" };
+
+/**
+ * One navigation of `checkUrlsInOneNavigation`. Returns a retry after a 502, 503 or 504 that should be retried
+ * (the host of the response is paused for the backoff, see `getServerErrorRetryDelay`), or when one of the
+ * `pausedUrls` hosts got paused while waiting for the page slot.
+ * @param retries server error retries done so far
+ * @param pausedUrls URLs whose host must not be paused when navigating
+ */
+async function navigateAndCheck(
+  urls: string[],
+  verbose: boolean,
+  headless: boolean,
+  retries: number,
+  pausedUrls: string[],
+): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
+  const [firstUrl] = urls;
+  const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
+
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
   // Errors while navigating and checking the page are reported as broken links.
   return withPage(
-    async (page) => {
+    async (page): Promise<Map<string, LinkCheckResult> | NavigationRetry> => {
+      // A fetch or another navigation may have paused the host while this check waited for the page slot: don't
+      // sleep while holding the slot, release it and wait outside (see `checkUrlsInOneNavigation`)
+      if (pausedUrls.some((url) => getHostLimiter().isPaused(url))) {
+        return { reason: "paused" };
+      }
       try {
         incrementMetric("playwrightNavigations");
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
@@ -769,6 +849,24 @@ async function checkUrlsInOneNavigation(
         });
 
         log(`Navigation response: ${response?.status()}`, verbose);
+        if (response && TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status())) {
+          const status = response.status();
+          const delayMs = getServerErrorRetryDelay(
+            retries,
+            response.headers()["retry-after"] ?? null,
+          );
+          if (delayMs === undefined) {
+            return sameForAll(getServerErrorResult(status, response.statusText()));
+          }
+          // After a redirect, the server error comes from the final URL: back off for its host
+          const failedUrl = response.url() || firstUrl;
+          console.log(formatServerErrorRetry(failedUrl, status, delayMs));
+          incrementMetric("serverErrorRetries");
+          // The page is closed right away, the retry waits for the pause outside of the page slot
+          getHostLimiter().pause(failedUrl, delayMs);
+          return { reason: "server error", pausedUrl: failedUrl };
+        }
+
         if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
           return sameForAll({
             ok: false,

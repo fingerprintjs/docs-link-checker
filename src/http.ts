@@ -1,10 +1,54 @@
 import { assertDestinationAllowed } from "./destination";
 import { parseRetryAfter } from "./limiter";
 import { incrementMetric } from "./run_context";
-import { FETCH_TIMEOUT, getHostLimiter, TASK_TIMEOUT } from "./utils";
+import {
+  FETCH_TIMEOUT,
+  getHostLimiter,
+  TASK_TIMEOUT,
+  TRANSIENT_SERVER_ERROR_STATUS_CODES,
+} from "./utils";
 
 // How many times a request is retried after a 429 with `Retry-After`
 export const MAX_RATE_LIMIT_RETRIES = 2;
+// How many times a request (or a Playwright navigation) is retried after a 502, 503 or 504
+export const MAX_SERVER_ERROR_RETRIES = 2;
+// Backoff before each server error retry, when the response has no (shorter) `Retry-After`
+export const DEFAULT_SERVER_ERROR_RETRY_DELAYS = [2000, 5000];
+// Longest wait before a server error retry: a longer `Retry-After` is not waited for, the request gives up.
+// Bounds the added wait per request to `MAX_SERVER_ERROR_RETRIES * MAX_SERVER_ERROR_RETRY_DELAY` (20s).
+export const MAX_SERVER_ERROR_RETRY_DELAY = 10000;
+
+let serverErrorRetryDelays = DEFAULT_SERVER_ERROR_RETRY_DELAYS;
+/** Only for tests: replace (or reset with `undefined`) the server error backoff */
+export const setServerErrorRetryDelays = (delays: number[] | undefined) => {
+  serverErrorRetryDelays = delays ?? DEFAULT_SERVER_ERROR_RETRY_DELAYS;
+};
+
+/**
+ * Delay before the next retry of a transient server error (`TRANSIENT_SERVER_ERROR_STATUS_CODES`), `undefined` to give
+ * up: after `maxRetries` retries, or when `Retry-After` asks for more than `MAX_SERVER_ERROR_RETRY_DELAY`.
+ * A `Retry-After` is respected (never retried sooner), the backoff is the minimum.
+ * @param retries retries done so far
+ */
+export const getServerErrorRetryDelay = (
+  retries: number,
+  retryAfter: string | null,
+  maxRetries = MAX_SERVER_ERROR_RETRIES,
+): number | undefined => {
+  if (retries >= maxRetries) {
+    return undefined;
+  }
+  const backoff = serverErrorRetryDelays[Math.min(retries, serverErrorRetryDelays.length - 1)] ?? 0;
+  const retryAfterMs = parseRetryAfter(retryAfter);
+  if (retryAfterMs !== undefined && retryAfterMs > MAX_SERVER_ERROR_RETRY_DELAY) {
+    return undefined;
+  }
+  return Math.min(Math.max(backoff, retryAfterMs ?? 0), MAX_SERVER_ERROR_RETRY_DELAY);
+};
+
+/** Log message for a request (or navigation) retried after a server error */
+export const formatServerErrorRetry = (url: string, status: number, delayMs: number) =>
+  `Server error ${status} (${url}), retrying after ${Math.ceil(delayMs / 1000)}s...`;
 // Redirects followed per request (like `fetch`, which gives up after 20; 10 is plenty for real links)
 export const MAX_REDIRECTS = 10;
 
@@ -26,6 +70,8 @@ export type LimitedRequestOptions = {
   headers?: HeadersInit;
   /** Timeout of each request (each redirect hop), default `FETCH_TIMEOUT` */
   timeoutMs?: number;
+  /** Retries after a 502, 503 or 504, default `MAX_SERVER_ERROR_RETRIES` */
+  serverErrorRetries?: number;
 };
 
 /** Log message for a rate-limited request that is retried (the header can be seconds or an HTTP date) */
@@ -56,6 +102,7 @@ export const getRedirectMethod = (status: number, method: string): string => {
 
 type HopResult<T> =
   | { type: "retry" }
+  | { type: "server-error-retry" }
   | { type: "redirect"; location: string; status: number }
   | { type: "final"; response: Omit<LimitedResponse<T>, "url"> };
 
@@ -65,7 +112,10 @@ type HopResult<T> =
  *   redirected from many hosts to the same destination still respect the destination's limit.
  * - A 429 with a usable `Retry-After` pauses the whole host *before* the slot is released (so no queued request to
  *   that host starts during the pause), then the request is retried, at most `MAX_RATE_LIMIT_RETRIES` times.
- * - The final response (possibly still a 429) is returned. `read` consumes what it needs of the body inside the slot,
+ * - A 502, 503 or 504 is retried too (at most `serverErrorRetries` times), after a backoff or the `Retry-After` delay
+ *   (see `getServerErrorRetryDelay`). The host is paused in the same way, so concurrent requests to an overloaded host
+ *   back off as well.
+ * - The final response (possibly still a 429 or 5xx) is returned. `read` consumes what it needs of the body inside the slot,
  *   any unread body (also of redirect and 429 responses) is cancelled before the slot is released.
  * - Every hop must go to a public address (see `src/destination.ts`), a blocked hop is never sent.
  * @throws {DestinationNotAllowedError} for a non-public destination (also after a redirect)
@@ -73,7 +123,12 @@ type HopResult<T> =
  */
 export const fetchWithHostLimit = async <T>(
   url: string,
-  { method = "GET", headers, timeoutMs = FETCH_TIMEOUT }: LimitedRequestOptions,
+  {
+    method = "GET",
+    headers,
+    timeoutMs = FETCH_TIMEOUT,
+    serverErrorRetries = MAX_SERVER_ERROR_RETRIES,
+  }: LimitedRequestOptions,
   read: (response: Response) => Promise<T>,
 ): Promise<LimitedResponse<T>> => {
   const hostLimiter = getHostLimiter();
@@ -81,6 +136,7 @@ export const fetchWithHostLimit = async <T>(
   let currentMethod = method;
   let redirects = 0;
   let rateLimitRetries = 0;
+  let serverErrorRetryCount = 0;
 
   for (;;) {
     const requestUrl = currentUrl;
@@ -113,6 +169,20 @@ export const fetchWithHostLimit = async <T>(
             return { type: "retry" };
           }
         }
+        if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+          const delayMs = getServerErrorRetryDelay(
+            serverErrorRetryCount,
+            response.headers.get("Retry-After"),
+            serverErrorRetries,
+          );
+          if (delayMs !== undefined) {
+            console.log(formatServerErrorRetry(requestUrl, response.status, delayMs));
+            incrementMetric("serverErrorRetries");
+            // Like a 429: the whole host backs off while the slot is still held
+            hostLimiter.pause(requestUrl, delayMs);
+            return { type: "server-error-retry" };
+          }
+        }
         return {
           type: "final",
           response: {
@@ -134,6 +204,9 @@ export const fetchWithHostLimit = async <T>(
         return { ...result.response, url: currentUrl };
       case "retry":
         rateLimitRetries++;
+        break;
+      case "server-error-retry":
+        serverErrorRetryCount++;
         break;
       case "redirect":
         if (redirects >= MAX_REDIRECTS) {

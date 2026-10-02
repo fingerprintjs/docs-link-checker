@@ -104,6 +104,24 @@ describe("GitHub API cache", () => {
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
   });
 
+  it.each([401, 403])(
+    "does not cache %i (bad token, rate limit or no access), it is no proof the repository is missing",
+    async (status) => {
+      octokit.repos.get.mockRejectedValue(Object.assign(new Error("Denied"), { status }));
+
+      await withRun(async () => {
+        for (let i = 0; i < 2; i++) {
+          expect(await checkIfRepositoryExists("owner", "repo")).toMatchObject({
+            ok: false,
+            error: "unexpected error",
+            status,
+          });
+        }
+      });
+      expect(octokit.repos.get).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("checks many hashes of the same file with one API request", async () => {
     const hashes = ["", "#title", "#usage", "#missing"];
     const results = await withRun(() =>

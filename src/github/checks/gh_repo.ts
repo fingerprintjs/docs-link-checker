@@ -1,4 +1,5 @@
 import type { LinkCheckResult } from "../../types";
+import { getApiErrorResult } from "../gh_api_error";
 import { getRepoCached, getUserCached } from "../gh_cache";
 
 /**
@@ -14,13 +15,10 @@ export const checkIfRepositoryExists = async (
   try {
     await getRepoCached(owner, repo);
     return { ok: true, status: 200 };
-  } catch {
-    return {
-      ok: false,
-      error: "broken link",
-      status: 404,
-      errorDetail: `Repository ${owner}/${repo} not found`,
-    };
+  } catch (error) {
+    // Only "not found" is a broken link: server errors (Octokit already retried them), rate limits and 401/403 say
+    // nothing about the repository
+    return getApiErrorResult(error, `Repository ${owner}/${repo} not found`);
   }
 };
 
@@ -35,14 +33,6 @@ export const checkIfOwnerExists = async (owner: string): Promise<LinkCheckResult
     await getUserCached(owner);
     return { ok: true, status: 200 };
   } catch (error) {
-    if ((error as { status?: number } | undefined)?.status === 404) {
-      return {
-        ok: false,
-        error: "broken link",
-        status: 404,
-        errorDetail: `User or organization ${owner} not found`,
-      };
-    }
-    return { ok: false, error: "unexpected error", errorDetail: String(error) };
+    return getApiErrorResult(error, `User or organization ${owner} not found`);
   }
 };

@@ -332,6 +332,20 @@ describe("checkLinkWithGithubApi", () => {
     });
   });
 
+  it("should report code line hashes past the end of the file as 'hash not found'", async () => {
+    for (const hash of ["#L99999", "#L8888-L9999"]) {
+      const result = await checkLinkWithGithubApi(
+        `https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json${hash}`,
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: "hash not found",
+        status: 200,
+        errorDetail: expect.stringMatching(/^package\.json has only \d+ lines$/),
+      });
+    }
+  });
+
   it("should handle commit links", async () => {
     const result = await checkLinkWithGithubApi(
       "https://github.com/WebKit/WebKit/commit/6f2b47e87bc414001affb258048749130bc91083",
