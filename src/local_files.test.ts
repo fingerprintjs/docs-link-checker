@@ -8,7 +8,6 @@ import {
   checkLocalFiles,
   checkLocalLink,
   collectLinksFromFiles,
-  extractMarkdownLinks,
   findMarkdownFiles,
   findReadme,
   getLinkKind,
@@ -42,46 +41,6 @@ describe("getLinkKind()", () => {
     ["a.md?x=1:2", "local"],
   ])("%s -> %s", (href, kind) => {
     expect(getLinkKind(href)).toBe(kind);
-  });
-});
-
-describe("extractMarkdownLinks()", () => {
-  it("returns links with line numbers, ignoring code blocks", () => {
-    const markdown = [
-      "# Title", // 1
-      "", // 2
-      "[a](a.md) and [b](b.md)", // 3
-      "```", // 4
-      "[code](code.md)", // 5
-      "```", // 6
-      "| col | col |", // 7
-      "| --- | --- |", // 8
-      "| [t](t.md) | x |", // 9
-      "> quote [q](q.md)", // 10
-      "[a](a.md)", // 11
-      "<https://auto.link>", // 12
-    ].join("\n");
-    expect(extractMarkdownLinks(markdown)).toEqual([
-      { href: "a.md", text: "a", line: 3 },
-      { href: "b.md", text: "b", line: 3 },
-      { href: "t.md", text: "t", line: 9 },
-      { href: "q.md", text: "q", line: 10 },
-      // Same link again: found after the first one
-      { href: "a.md", text: "a", line: 11 },
-      { href: "https://auto.link", text: "https://auto.link", line: 12 },
-    ]);
-  });
-
-  it("handles CRLF line endings and formatted link text", () => {
-    expect(extractMarkdownLinks("line\r\n\r\n[**bold** `code`](x.md)\r\n")).toEqual([
-      { href: "x.md", text: "bold code", line: 3 },
-    ]);
-  });
-
-  it("resolves reference links", () => {
-    expect(extractMarkdownLinks("text\n\n[ref link][ref]\n\n[ref]: docs/a.md#x\n")).toEqual([
-      { href: "docs/a.md#x", text: "ref link", line: 3 },
-    ]);
   });
 });
 

@@ -1,7 +1,7 @@
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import { fetchWithHostLimit } from "../http";
 import { checkLinks } from "../link";
-import { extractLinksFromMarkdown } from "../markdown";
+import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
 import { DEFAULT_OUTPUT_DIR, getJSONReport, saveReport } from "../report/report";
 import { withRun } from "../run";
@@ -100,6 +100,24 @@ export async function getReadmesFromOrg(orgName: string, sampleRate?: number): P
   });
 }
 
+/** The `https://github.com/owner/repo/blob/<ref>` prefix of a README's blob URL, to resolve repo-relative links */
+const extractGitHubRepoUrl = (url: string): string | undefined =>
+  url.match(/(https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+)/)?.[1];
+
+/**
+ * Resolves an href found in a README against the blob URL it was downloaded from:
+ * - A root-relative path (`/docs/a.md`) resolves against the repository, like GitHub renders it.
+ * - A `#hash` resolves against the page.
+ * - Anything else resolves against the page URL, absolute URLs are returned unchanged.
+ */
+export const resolveReadmeHref = (href: string, page: string): string => {
+  if (URL.canParse(href)) return href;
+  if (href.startsWith("#")) return `${page}${href}`;
+  const repoUrl = extractGitHubRepoUrl(page);
+  if (href.startsWith("/") && repoUrl) return `${repoUrl}${href}`;
+  return new URL(href, page).toString();
+};
+
 /** Downloads README files (limited per host) and extracts their links */
 export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
@@ -115,8 +133,11 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);
       }
-      const links = extractLinksFromMarkdown(response.data, file.sourcePath);
-      return links;
+      return extractMarkdownLinks(response.data).map(({ href, text }) => ({
+        page: file.sourcePath,
+        href: resolveReadmeHref(href, file.sourcePath),
+        text,
+      }));
     },
   });
 
