@@ -8,6 +8,7 @@ import { getMyOctokit } from "./github_client";
 
 type Octokit = ReturnType<typeof getMyOctokit>;
 export type RepoResponse = Awaited<ReturnType<Octokit["repos"]["get"]>>;
+export type UserResponse = Awaited<ReturnType<Octokit["users"]["getByUsername"]>>;
 export type ContentResponse = Awaited<ReturnType<Octokit["repos"]["getContent"]>>;
 
 // "Not found" is a definitive answer worth caching. Other errors (rate limits, 5xx) are retried on the next call.
@@ -24,6 +25,12 @@ const cachedRequest = <T>(key: string, request: () => Promise<T>): Promise<T> =>
 export const getRepoCached = (owner: string, repo: string): Promise<RepoResponse> =>
   cachedRequest(`repo:${owner}/${repo}`.toLowerCase(), () =>
     getMyOctokit().repos.get({ owner, repo }),
+  );
+
+/** `GET /users/{username}` (users and organizations), cached per account (names are case-insensitive) */
+export const getUserCached = (username: string): Promise<UserResponse> =>
+  cachedRequest(`user:${username}`.toLowerCase(), () =>
+    getMyOctokit().users.getByUsername({ username }),
   );
 
 type ContentParams = { owner: string; repo: string; ref: string; path: string };

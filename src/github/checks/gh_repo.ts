@@ -1,5 +1,5 @@
 import type { LinkCheckResult } from "../../types";
-import { getRepoCached } from "../gh_cache";
+import { getRepoCached, getUserCached } from "../gh_cache";
 
 /**
  * Check if a repository exists
@@ -21,5 +21,28 @@ export const checkIfRepositoryExists = async (
       status: 404,
       errorDetail: `Repository ${owner}/${repo} not found`,
     };
+  }
+};
+
+/**
+ * Check if a GitHub user or organization exists (`https://github.com/owner`).
+ * `GET /users/{owner}` works for both users and organizations.
+ * @param owner - The user or organization name
+ * @returns - A LinkCheckResult object
+ */
+export const checkIfOwnerExists = async (owner: string): Promise<LinkCheckResult> => {
+  try {
+    await getUserCached(owner);
+    return { ok: true, status: 200 };
+  } catch (error) {
+    if ((error as { status?: number } | undefined)?.status === 404) {
+      return {
+        ok: false,
+        error: "broken link",
+        status: 404,
+        errorDetail: `User or organization ${owner} not found`,
+      };
+    }
+    return { ok: false, error: "unexpected error", errorDetail: String(error) };
   }
 };

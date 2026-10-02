@@ -245,3 +245,74 @@ describe("updateBaseline()", () => {
     }
   });
 });
+
+describe("linkcheck.baseline.json (used by the default checks)", () => {
+  const repoRoot = join(import.meta.dirname, "..");
+  const baseline = loadBaseline(join(repoRoot, "linkcheck.baseline.json"));
+
+  const couldNotCheck = (href: string, status = 403): LinkWithResult => ({
+    href,
+    page: "https://dev.fingerprint.com/docs/page",
+    text: "text",
+    result: { ok: false, error: "could not check", status },
+  });
+
+  // "Could not check" links of the reports: login walls (401) and bot-protected sites (403)
+  const knownCouldNotCheck = [
+    couldNotCheck("https://dashboard.fpjs.sh/integrations/active", 401),
+    couldNotCheck("https://dashboard.fpjs.sh/suspect-score", 401),
+    couldNotCheck("https://mcp.fpjs.io/mcp", 401),
+    couldNotCheck("https://www.npmjs.com/package/@fingerprintjs/fingerprintjs-pro"),
+    couldNotCheck("https://www.npmjs.com/package/@fingerprint/agent"),
+    couldNotCheck("https://www.npmjs.com/package/create-cloudflare"),
+    couldNotCheck("https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk"),
+    couldNotCheck(
+      "https://community.cloudflare.com/t/presence-of-query-string-make-route-match-fail/63400",
+    ),
+    couldNotCheck(
+      "https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/worker-sites-react",
+    ),
+    couldNotCheck(
+      "https://codesandbox.io/p/devbox/github/fingerprintjs/fingerprintjs-pro-use-cases/",
+    ),
+    couldNotCheck("https://my.bluehost.com/hosting/help/resource/714"),
+    couldNotCheck("https://nordvpn.com/"),
+    couldNotCheck("https://www.iso.org/iso-3166-country-codes.html"),
+    // Reported as resolved by `new URL()` (with a trailing slash)
+    couldNotCheck("http://www.allaboutcookies.org/"),
+  ];
+
+  it("moves the known 'could not check' links to the ignored section", () => {
+    const report = getJSONReport({
+      siteName: "test",
+      baseline,
+      links: knownCouldNotCheck,
+      errors: [],
+    });
+
+    expect(report.summary.couldNotCheck).toBe(0);
+    expect(report.summary.ignored).toBe(knownCouldNotCheck.length);
+    expect(report.ignored.every((link) => link.ignoreReason)).toBe(true);
+  });
+
+  it("does not ignore real broken links", () => {
+    const realBroken = [
+      broken("https://support.microsoft.com/en-gb/help/278835/how-to-delete-cookie-files"),
+      broken("https://fingerprint.com/blog/tag/workforce-identity/"),
+      broken("https://api.fpjs.io/v4"),
+      broken("https://github.com/fingerprintjs/fingerprintjs-pro-spa/blob/master/LICENSE"),
+      broken("https://docs.flutter.dev/get-started/install/macos/mobile-ios"),
+    ];
+    const report = getJSONReport({ siteName: "test", baseline, links: realBroken, errors: [] });
+
+    expect(report.summary.ignored).toBe(0);
+    expect(report.summary.brokenLinks).toBe(realBroken.length);
+  });
+
+  it("is passed to the default checks", () => {
+    const { scripts } = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+    for (const script of ["checkLinks:docs", "checkLinks:github", "checkLinks:web"]) {
+      expect(scripts[script]).toContain("--baseline linkcheck.baseline.json");
+    }
+  });
+});

@@ -38,6 +38,8 @@ export const METRICS = {
   playwrightNavigations: "Playwright navigations",
   // A hash missing in the shared DOM of its page is re-checked with a dedicated navigation (included above)
   playwrightHashFallbacks: "Playwright hash fallbacks",
+  // A hash missing on the page opened with it is waited for again after the full load (late-rendered anchors)
+  playwrightLongHashWaits: "Playwright long hash waits",
   browserLaunches: "Browser launches",
   // Every request sent by the Octokit client (all operations, pagination, retries), counted by a request hook
   githubApiRequests: "GitHub API requests",

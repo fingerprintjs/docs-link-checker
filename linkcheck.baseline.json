@@ -1,0 +1,44 @@
+{
+  "ignore": [
+    {
+      "pattern": "https://dashboard.fpjs.sh/**",
+      "reason": "Fingerprint dashboard, requires a login (401)"
+    },
+    {
+      "pattern": "https://mcp.fpjs.io/**",
+      "reason": "Fingerprint MCP server, requires a bearer token (401)"
+    },
+    {
+      "pattern": "https://www.npmjs.com/**",
+      "reason": "npm blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://community.cloudflare.com/**",
+      "reason": "Blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://deploy.workers.cloudflare.com/**",
+      "reason": "Redirects to dash.cloudflare.com, which blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://codesandbox.io/**",
+      "reason": "Blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://my.bluehost.com/**",
+      "reason": "Blocks automated clients with a Cloudflare captcha (403)"
+    },
+    {
+      "pattern": "https://www.iso.org/**",
+      "reason": "Blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://nordvpn.com/**",
+      "reason": "Blocks the CI runner (403), works in a browser"
+    },
+    {
+      "pattern": "http://www.allaboutcookies.org/**",
+      "reason": "Blocks automated clients (403), works in a browser"
+    }
+  ]
+}

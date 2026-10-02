@@ -94,7 +94,8 @@ export const checkGitHubReleaseLink = async (
 
   // If pathParts[1] is "tag", check if the specific tag exists
   if (pathParts[1] === "tag") {
-    const tag = pathParts[2];
+    // Tags can contain slashes (`@fingerprint/vue@2.0.0`), written encoded (`%2F`) or not
+    const tag = pathParts.slice(2).join("/");
     const { error } = await tryCatch(
       octokit.repos.getReleaseByTag({
         owner,
