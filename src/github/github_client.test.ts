@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withRun } from "../run";
-import { getRunContext } from "../run_context";
+import { getRunContext, withRun } from "../run";
 import {
   checkGitHubRateLimit,
   getMyOctokit,
@@ -71,7 +70,7 @@ describe("GitHub API request metrics", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const counters = await withRun(async () => {
+    const counters = await withRun({}, async () => {
       const octokit = getMyOctokit();
       await octokit.rest.repos.get({ owner: "o", repo: "r" });
       await octokit.rest.issues.get({ owner: "o", repo: "r", issue_number: 1 });

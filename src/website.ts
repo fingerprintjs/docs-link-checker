@@ -2,13 +2,12 @@ import { type Baseline, EMPTY_BASELINE } from "./baseline";
 import { checkLinks } from "./link";
 import { getLinksFromPages } from "./page";
 import { DEFAULT_OUTPUT_DIR, getJSONReport, saveReport } from "./report/report";
-import { withRun } from "./run";
-import { timePhase } from "./run_context";
+import { type RunConfig, timePhase, withRun } from "./run";
 import { getWebsitePages } from "./sitemap";
 import type { Link } from "./types";
 import { sampleItems } from "./utils";
 
-export type CheckWebsiteArgs = {
+export type CheckWebsiteArgs = RunConfig & {
   websiteUrl: string;
   linkFilter?: (link: Link) => boolean;
   /** Share of sitemap pages to check (0-1), defaults to `LINK_CHECK_SAMPLE_RATE` */
@@ -35,11 +34,13 @@ export const checkWebsite = ({
   sampleRate,
   baseline = EMPTY_BASELINE,
   outputDir = DEFAULT_OUTPUT_DIR,
+  hostConcurrency,
+  allowPrivateHosts,
 }: CheckWebsiteArgs) =>
-  withRun(async () => {
+  withRun({ hostConcurrency, allowPrivateHosts }, async () => {
     const startTime = performance.now();
 
-    const allPages = await timePhase("Read sitemap", () => getWebsitePages(websiteUrl, true));
+    const allPages = await timePhase("Read sitemap", () => getWebsitePages(websiteUrl));
     const pages = sampleItems({
       items: allPages,
       key: (page) => page,

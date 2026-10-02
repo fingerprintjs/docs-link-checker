@@ -51,6 +51,25 @@ export class Semaphore {
   }
 }
 
+/** Default per-host concurrency (`--host-concurrency` / `LINK_CHECK_HOST_CONCURRENCY`) */
+export const DEFAULT_HOST_CONCURRENCY = 8;
+
+/**
+ * Parses a host concurrency value (positive integer, default `DEFAULT_HOST_CONCURRENCY`): the maximum number of
+ * concurrent `fetch` requests to a single host.
+ * @throws {Error} if the value is not a positive integer
+ */
+export const parseHostConcurrency = (value: string | undefined): number => {
+  if (value === undefined || value.trim() === "") {
+    return DEFAULT_HOST_CONCURRENCY;
+  }
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`Invalid LINK_CHECK_HOST_CONCURRENCY "${value}", expected a positive integer.`);
+  }
+  return limit;
+};
+
 type HostState = { semaphore: Semaphore; pausedUntil: number };
 
 /** Waits until the pause of the host ends (a pause can be extended while waiting) */

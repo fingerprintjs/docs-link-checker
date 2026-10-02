@@ -2,7 +2,7 @@ import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { Octokit } from "@octokit/rest";
 import dotenv from "dotenv";
-import { incrementMetric } from "../run_context";
+import { incrementMetric } from "../run";
 
 // dotenv 17+ logs a message on every load, keep the output clean
 dotenv.config({ quiet: true });

@@ -12,7 +12,7 @@ import { checkLinkWithFetch } from "./fetch_check";
 import { fetchWithHostLimit } from "./http";
 import { checkLinks, shouldRecheckWithPlaywright } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { setHostLimiter } from "./utils";
+import { setHostLimiter, withRun } from "./run";
 
 // `node:dns/promises` is mocked for all unit tests (src/test_setup.ts)
 const mockedLookup = vi.mocked(lookup) as unknown as ReturnType<
@@ -181,12 +181,12 @@ describe("assertDestinationAllowed()", () => {
     await expect(assertDestinationAllowed("https://nxdomain.example/")).resolves.toBeUndefined();
   });
 
-  it("allows everything with LINK_CHECK_ALLOW_PRIVATE_HOSTS=true (opt-out)", async () => {
+  it("allows everything with allowPrivateHosts (--allow-private-hosts / LINK_CHECK_ALLOW_PRIVATE_HOSTS, opt-out)", async () => {
     resolvesTo({ "dev.internal": ["10.0.0.5"] });
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "true");
-    await expect(assertDestinationAllowed("http://localhost:3000/")).resolves.toBeUndefined();
-    await expect(assertDestinationAllowed("http://dev.internal/")).resolves.toBeUndefined();
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "false");
+    await withRun({ allowPrivateHosts: true }, async () => {
+      await expect(assertDestinationAllowed("http://localhost:3000/")).resolves.toBeUndefined();
+      await expect(assertDestinationAllowed("http://dev.internal/")).resolves.toBeUndefined();
+    });
     await expect(assertDestinationAllowed("http://localhost:3000/")).rejects.toThrow(
       DestinationNotAllowedError,
     );
@@ -222,14 +222,15 @@ describe("fetchWithHostLimit() destination guard", () => {
   });
 
   it("follows redirects to private hosts with the opt-out", async () => {
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "true");
     const fetchMock = vi.fn(async (input: string | URL | Request) =>
       String(input).startsWith("https://public.example/")
         ? new Response("", { status: 302, headers: { Location: "http://127.0.0.1:3000/" } })
         : new Response("dev server"),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const response = await fetchWithHostLimit("https://public.example/", {}, (r) => r.text());
+    const response = await withRun({ allowPrivateHosts: true }, () =>
+      fetchWithHostLimit("https://public.example/", {}, (r) => r.text()),
+    );
     expect(response.data).toBe("dev server");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

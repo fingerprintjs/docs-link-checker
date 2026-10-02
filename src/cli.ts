@@ -19,6 +19,7 @@ import {
   writeGithubOutputs,
   writeJobSummary,
 } from "./github_actions";
+import { parseHostConcurrency } from "./limiter";
 import { checkLocalFiles, collectLinksFromFiles } from "./local_files";
 import {
   DEFAULT_OUTPUT_DIR,
@@ -26,7 +27,7 @@ import {
   getReportPaths,
   type LinkCheckReport,
 } from "./report/report";
-import { getHostConcurrencyLimit, getSampleRate } from "./utils";
+import { getSampleRate } from "./utils";
 import { getErrorMessage } from "./utils/errors";
 import { checkWebsite, createPrefixFilter } from "./website";
 
@@ -231,14 +232,14 @@ const parseSampleRate = (value: string | undefined, env: Env): number =>
     ? parseOrThrow(() => getSampleRate(env.LINK_CHECK_SAMPLE_RATE))
     : parseOrThrow(() => getSampleRate(value), ["LINK_CHECK_SAMPLE_RATE", "--sample-rate"]);
 
-const parseHostConcurrency = (value: string | undefined, env: Env): number | undefined => {
+const parseHostConcurrencyOption = (value: string | undefined, env: Env): number | undefined => {
   if (value === undefined) {
     // Validate the environment variable early instead of failing on the first request
-    parseOrThrow(() => getHostConcurrencyLimit(env.LINK_CHECK_HOST_CONCURRENCY));
+    parseOrThrow(() => parseHostConcurrency(env.LINK_CHECK_HOST_CONCURRENCY));
     return undefined;
   }
   return parseOrThrow(
-    () => getHostConcurrencyLimit(value),
+    () => parseHostConcurrency(value),
     ["LINK_CHECK_HOST_CONCURRENCY", "--host-concurrency"],
   );
 };
@@ -255,7 +256,7 @@ const parseAllowPrivateHosts = (value: boolean | undefined, env: Env): boolean =
 
 const parseCommonOptions = (values: ParsedValues, env: Env): CommonOptions => {
   const sampleRate = parseSampleRate(values["sample-rate"], env);
-  const hostConcurrency = parseHostConcurrency(values["host-concurrency"], env);
+  const hostConcurrency = parseHostConcurrencyOption(values["host-concurrency"], env);
   const isUpdatingBaseline = values["update-baseline"] ?? false;
   const pruneBaseline = values["prune-baseline"] ?? false;
   if (pruneBaseline && !isUpdatingBaseline) {
@@ -394,7 +395,7 @@ const runCommand = (
   cwd: string,
   env: Env,
 ): Promise<LinkCheckReport> => {
-  const { sampleRate, outputDir } = command.options;
+  const { sampleRate, outputDir, hostConcurrency, allowPrivateHosts } = command.options;
   switch (command.command) {
     case "site":
       return checkWebsite({
@@ -403,9 +404,17 @@ const runCommand = (
         sampleRate,
         baseline,
         outputDir,
+        hostConcurrency,
+        allowPrivateHosts,
       });
     case "github-org":
-      return checkReadmesInGithubOrg(command.org, { sampleRate, baseline, outputDir });
+      return checkReadmesInGithubOrg(command.org, {
+        sampleRate,
+        baseline,
+        outputDir,
+        hostConcurrency,
+        allowPrivateHosts,
+      });
     case "files":
       return checkLocalFiles({
         patterns: command.patterns,
@@ -414,6 +423,8 @@ const runCommand = (
         baseline,
         outputDir,
         sourceBaseUrl: getGithubBlobBaseUrl(env, cwd),
+        hostConcurrency,
+        allowPrivateHosts,
       });
   }
 };
@@ -539,10 +550,6 @@ const loadCommandBaseline = (options: CommonOptions): Baseline => {
 
 const runCheckCommand = async (command: CheckCommand, context: RunContext): Promise<number> => {
   const { options } = command;
-  if (options.hostConcurrency !== undefined) {
-    // Read when the shared per-host limiter is created (on the first request)
-    process.env.LINK_CHECK_HOST_CONCURRENCY = String(options.hostConcurrency);
-  }
 
   let baseline: Baseline;
   try {
@@ -571,18 +578,13 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
   return getExitCode(report.summary.totalLinksToFix, options);
 };
 
-/**
- * Runs `fn` with the process set up for the options: with --json, console output goes to stderr; the destination
- * guard reads `LINK_CHECK_ALLOW_PRIVATE_HOSTS` (also in the browser route handler). Both are restored at the end.
- */
+/** Runs `fn` with the process set up for the options: with --json, console output goes to stderr (restored at the end) */
 const withCliEnvironment = async <T>(options: CommonOptions, fn: () => Promise<T>): Promise<T> => {
   const originalConsole = globalThis.console;
   if (options.json) {
     // stdout only gets the JSON report: send all logs (console.log, console.table...) to stderr
     globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
   }
-  const previousAllowPrivateHosts = process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
-  process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS = String(options.allowPrivateHosts);
   if (options.allowPrivateHosts) {
     console.warn("Links to private and local addresses are allowed (--allow-private-hosts).");
   }
@@ -590,11 +592,6 @@ const withCliEnvironment = async <T>(options: CommonOptions, fn: () => Promise<T
     return await fn();
   } finally {
     globalThis.console = originalConsole;
-    if (previousAllowPrivateHosts === undefined) {
-      delete process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
-    } else {
-      process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS = previousAllowPrivateHosts;
-    }
   }
 };
 

@@ -1,12 +1,7 @@
 import { assertDestinationAllowed } from "./destination";
 import { parseRetryAfter } from "./limiter";
-import { incrementMetric } from "./run_context";
-import {
-  FETCH_TIMEOUT,
-  getHostLimiter,
-  TASK_TIMEOUT,
-  TRANSIENT_SERVER_ERROR_STATUS_CODES,
-} from "./utils";
+import { getHostLimiter, incrementMetric } from "./run";
+import { FETCH_TIMEOUT, TASK_TIMEOUT, TRANSIENT_SERVER_ERROR_STATUS_CODES } from "./utils";
 
 // How many times a request is retried after a 429 with `Retry-After`
 export const MAX_RATE_LIMIT_RETRIES = 2;

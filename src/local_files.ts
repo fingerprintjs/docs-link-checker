@@ -9,8 +9,7 @@ import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
 import { filterOutIrrelevantLinks } from "./page";
 import { getJSONReport, saveReport } from "./report/report";
-import { withRun } from "./run";
-import { timePhase } from "./run_context";
+import { type RunConfig, timePhase, withRun } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { compareStrings, sampleItems } from "./utils";
 
@@ -382,7 +381,7 @@ export const collectLinksFromFiles = async ({
   return collected;
 };
 
-type CheckLocalFilesArgs = {
+type CheckLocalFilesArgs = RunConfig & {
   /** Glob patterns or file paths, relative to `cwd` */
   patterns: string[];
   /** Directory the patterns and root-relative links (`/docs/a.md`) are resolved against, default `process.cwd()` */
@@ -410,8 +409,10 @@ export const checkLocalFiles = ({
   baseline = EMPTY_BASELINE,
   outputDir = "results",
   sourceBaseUrl,
+  hostConcurrency,
+  allowPrivateHosts,
 }: CheckLocalFilesArgs) =>
-  withRun(async () => {
+  withRun({ hostConcurrency, allowPrivateHosts }, async () => {
     const root = isAbsolute(cwd) ? cwd : resolve(cwd);
     const collected = await timePhase("Extract links", () =>
       collectLinksFromFiles({ patterns, cwd: root, sampleRate }),

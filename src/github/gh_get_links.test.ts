@@ -15,7 +15,7 @@ vi.mock("./github_client", () => ({
 }));
 
 import { HostLimiter } from "../limiter";
-import { setHostLimiter } from "../utils";
+import { setHostLimiter } from "../run";
 import { checkReadmesInGithubOrg, getReadmeLinks, getReadmesFromOrg } from "./gh_get_links";
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({

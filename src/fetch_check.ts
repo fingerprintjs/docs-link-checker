@@ -15,16 +15,13 @@ import {
   shouldSpoofUserAgent,
   stripHash,
 } from "./link_common";
-import { incrementMetric } from "./run_context";
+import { getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 import {
-  getHostLimiter,
   getRandomUserAgent,
-  log,
   OKAY_STATUS_CODES,
   TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./utils";
-import { getErrorMessage } from "./utils/errors";
 
 /**
  * A failed HEAD request is retried once with GET: some servers refuse HEAD (403, 405, 501) and some answer it
@@ -120,7 +117,7 @@ const handleHeadServerError = (
  */
 const fetchPage = async (
   url: string,
-  { needBody, verbose = false }: { needBody: boolean; verbose?: boolean },
+  { needBody }: { needBody: boolean },
 ): Promise<FetchedPage> => {
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {
@@ -151,7 +148,6 @@ const fetchPage = async (
       if ("ok" in retry) {
         return retry;
       }
-      log(`HEAD returned ${response.status}, retrying with GET`, verbose);
       response = await request("GET", retry.getRetries);
     }
     return (
@@ -165,7 +161,6 @@ const fetchPage = async (
     if (error instanceof DestinationNotAllowedError) {
       return { ok: false, result: getBlockedDestinationResult(error) };
     }
-    log(`Something went wrong: ${getErrorMessage(error)}`, verbose);
     return {
       ok: false,
       result: {
@@ -190,14 +185,14 @@ export class PageFetchCache {
    */
   constructor(private readonly pagesWithHash: ReadonlySet<string> = new Set()) {}
 
-  get(pageUrl: string, needBody: boolean, verbose = false): Promise<FetchedPage> {
+  get(pageUrl: string, needBody: boolean): Promise<FetchedPage> {
     const getKey = `GET ${pageUrl}`;
     const useGet = needBody || this.pagesWithHash.has(pageUrl) || this.pages.has(getKey);
     const key = useGet ? getKey : `HEAD ${pageUrl}`;
     let page = this.pages.get(key);
     if (!page) {
       incrementMetric("uniquePagesFetched");
-      page = fetchPage(pageUrl, { needBody: useGet, verbose });
+      page = fetchPage(pageUrl, { needBody: useGet });
       this.pages.set(key, page);
     }
     return page;
@@ -235,13 +230,11 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
 /**
  * Check a link with fetch, assuming page is server-side rendered
  * @param url link URL
- * @param verbose log details
  * @param pageCache share page fetches between links (links to the same page with different hashes fetch it once)
  * @returns LinkCheckResult, a URL that cannot be parsed is reported as a broken link
  */
 export const checkLinkWithFetch = async (
   url: string,
-  verbose = false,
   pageCache?: PageFetchCache,
 ): Promise<LinkCheckResult> => {
   // A URL that cannot be parsed (or is not http(s)) is a broken link, not an exception
@@ -261,11 +254,7 @@ export const checkLinkWithFetch = async (
   const needBody = hasHash(url);
   const pageUrl = stripHash(url);
   const page = pageCache
-    ? await pageCache.get(pageUrl, needBody, verbose)
-    : await fetchPage(pageUrl, { needBody, verbose });
-  const result = getResultFromPage(page, url);
-  if (result.ok) {
-    log(`OK`, verbose);
-  }
-  return result;
+    ? await pageCache.get(pageUrl, needBody)
+    : await fetchPage(pageUrl, { needBody });
+  return getResultFromPage(page, url);
 };

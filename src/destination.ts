@@ -1,6 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { runCached } from "./run_context";
+import { isPrivateHostsAllowed, runCached } from "./run";
 
 /**
  * Destination policy (SSRF protection): links come from documents that can be untrusted (for example markdown in a
@@ -23,9 +23,6 @@ import { runCached } from "./run_context";
  */
 
 const DESTINATION_NOT_ALLOWED = "Destination not allowed (private or local address)";
-
-export const isPrivateHostsAllowed = (value = process.env.LINK_CHECK_ALLOW_PRIVATE_HOSTS) =>
-  value === "true";
 
 /** Thrown by `fetchWithHostLimit` for a blocked destination, the request is never sent */
 export class DestinationNotAllowedError extends Error {

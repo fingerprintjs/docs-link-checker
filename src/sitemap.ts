@@ -1,39 +1,14 @@
 import * as cheerio from "cheerio";
 import { fetchWithHostLimit } from "./http";
-import { getRandomUserAgent, log } from "./utils";
+import { Semaphore } from "./limiter";
+import { getRandomUserAgent } from "./utils";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;
 // How many sitemaps are fetched at the same time (sitemap indexes can list thousands of sitemaps)
 export const SITEMAP_FETCH_CONCURRENCY = 5;
 
-/**
- * Limits how many calls of `fn` run at the same time. A finished call hands its slot directly to the next
- * queued call, so the limit is never exceeded.
- */
-const createConcurrencyLimiter = (max: number) => {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  return async <T>(fn: () => Promise<T>): Promise<T> => {
-    if (active < max) {
-      active++;
-    } else {
-      await new Promise<void>((resolve) => queue.push(resolve));
-    }
-    try {
-      return await fn();
-    } finally {
-      const next = queue.shift();
-      if (next) {
-        next();
-      } else {
-        active--;
-      }
-    }
-  };
-};
-
-const limitSitemapFetch = createConcurrencyLimiter(SITEMAP_FETCH_CONCURRENCY);
+const sitemapFetchSlots = new Semaphore(SITEMAP_FETCH_CONCURRENCY);
 
 // Sitemaps can be large, give them more time than a regular page
 const SITEMAP_FETCH_TIMEOUT = 60000;
@@ -46,7 +21,7 @@ const isSuccess = (status: number) => status >= 200 && status < 300;
  * @returns the status and the body (empty if `readBody` is false or the response is not successful)
  */
 const fetchSitemap = (sitemapUrl: string, readBody = true) =>
-  limitSitemapFetch(() =>
+  sitemapFetchSlots.run(() =>
     fetchWithHostLimit(
       sitemapUrl,
       { headers: { "User-Agent": getRandomUserAgent() }, timeoutMs: SITEMAP_FETCH_TIMEOUT },
@@ -59,18 +34,14 @@ const fetchSitemap = (sitemapUrl: string, readBody = true) =>
  * Retrieves all the pages from a website by fetching the sitemap and parsing it.
  *
  * @param {string} url - The URL of the website.
- * @param {boolean} [verbose=false] - Whether to log the progress of the function.
  * @return {Promise<string[]>} - A promise that resolves to an array of unique page URLs.
  */
-export const getWebsitePages = async (url: string, verbose = false) => {
-  const sitemaps = await getWebsiteSitemaps(url, verbose);
-  // Shared between all sitemaps, so each sitemap is processed only once (per shallowest depth)
-  const visitedSitemaps = new Map<string, number>();
+export const getWebsitePages = async (url: string) => {
+  const sitemaps = await getWebsiteSitemaps(url);
+  // Shared between all sitemaps, so each sitemap is only processed once
+  const visited = new Set<string>();
   const pages = (
-    await Promise.all(
-      // Not verbose, that would log every page
-      sitemaps.map((sitemap) => getPagesFromSitemap(sitemap, false, 0, visitedSitemaps)),
-    )
+    await Promise.all(sitemaps.map((sitemap) => getPagesFromSitemap(sitemap, 0, visited)))
   ).flat();
 
   return [...new Set(pages)];
@@ -80,13 +51,12 @@ export const getWebsitePages = async (url: string, verbose = false) => {
  * Retrieves the all sitemaps from the websites sitemap-index or a single sitemap, whatever the website has.
  *
  * @param {string} url - The URL of the website.
- * @param {boolean} [verbose=false] - Whether to log the progress.
  * @return {Promise<string[]>} - A promise that resolves to an array of sitemap URLs.
  */
-const getWebsiteSitemaps = async (url: string, verbose = false): Promise<string[]> => {
+const getWebsiteSitemaps = async (url: string): Promise<string[]> => {
   const sitemapExists = isSuccess((await fetchSitemap(`${url}/sitemap.xml`, false)).status);
   if (sitemapExists) {
-    log("Sitemap.xml exists, parsing pages from it", verbose);
+    console.log("Sitemap.xml exists, parsing pages from it");
     return [`${url}/sitemap.xml`];
   }
 
@@ -97,7 +67,7 @@ const getWebsiteSitemaps = async (url: string, verbose = false): Promise<string[
   }
 
   const sitemaps: string[] = getSitemapsFromSitemapIndex(sitemapIndex);
-  log(`Retrieved ${sitemaps.length} sitemaps from sitemap-index.xml`, verbose);
+  console.log(`Retrieved ${sitemaps.length} sitemaps from sitemap-index.xml`);
   return sitemaps;
 };
 
@@ -122,27 +92,20 @@ function getSitemapsFromSitemapIndex(sitemapIndexXml: string) {
 /**
  * Retrieves pages from a sitemap URL and logs the number of pages retrieved.
  * If the sitemap is a sitemap index (`<sitemapindex>`), the nested sitemaps are followed recursively
- * (up to `MAX_SITEMAP_DEPTH`, each sitemap is processed once, or again if reached at a shallower depth).
+ * (up to `MAX_SITEMAP_DEPTH`, each sitemap is processed once).
  *
  * @param {string} sitemapUrl - The URL of the sitemap.
- * @param {boolean} [verbose=false] - Whether to log the progress.
  * @return {string[]} An array of unique page URLs retrieved from the sitemap.
  */
 export const getPagesFromSitemap = async (
   sitemapUrl: string,
-  verbose = false,
   depth = 0,
-  // Sitemap URL -> shallowest depth it was processed at
-  visitedSitemaps = new Map<string, number>(),
+  visited = new Set<string>(),
 ): Promise<string[]> => {
-  const visitedDepth = visitedSitemaps.get(sitemapUrl);
-  // Only skip if it was already processed at the same or a shallower depth. A shallower visit can follow
-  // nested indexes further, so it must not be skipped because of an earlier (concurrent) deeper visit.
-  if (visitedDepth !== undefined && visitedDepth <= depth) {
-    log(`Skipping already visited sitemap ${sitemapUrl}`, verbose);
+  if (visited.has(sitemapUrl)) {
     return [];
   }
-  visitedSitemaps.set(sitemapUrl, depth);
+  visited.add(sitemapUrl);
 
   // Only the fetch is limited (not the recursion), so nested sitemaps can't deadlock waiting for their parents
   const sitemapResponse = await fetchSitemap(sitemapUrl);
@@ -161,12 +124,10 @@ export const getPagesFromSitemap = async (
       return [];
     }
     const nestedSitemaps = getSitemapsFromSitemapIndex(response);
-    log(`${sitemapUrl} is a sitemap index with ${nestedSitemaps.length} sitemaps`, verbose);
+    console.log(`${sitemapUrl} is a sitemap index with ${nestedSitemaps.length} sitemaps`);
     const nestedPages = (
       await Promise.all(
-        nestedSitemaps.map((nested) =>
-          getPagesFromSitemap(nested, verbose, depth + 1, visitedSitemaps),
-        ),
+        nestedSitemaps.map((nested) => getPagesFromSitemap(nested, depth + 1, visited)),
       )
     ).flat();
     return [...new Set(nestedPages)];
@@ -182,6 +143,5 @@ export const getPagesFromSitemap = async (
   const uniquePages = [...new Set(pages)];
 
   console.log(`Retrieved ${uniquePages.length} pages from ${sitemapUrl} sitemap.`);
-  log(uniquePages, verbose);
   return uniquePages;
 };

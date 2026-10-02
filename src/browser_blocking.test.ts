@@ -1,6 +1,7 @@
 import type { Route } from "playwright";
 import { describe, expect, it, vi } from "vitest";
 import { blockHeavyResources, createResourceBlocker, shouldBlockRequest } from "./browser";
+import { withRun } from "./run";
 
 const request = (resourceType: string, url: string, isMainFrameNavigation = false) => ({
   resourceType,
@@ -110,14 +111,15 @@ describe("blockHeavyResources() route handler", () => {
     );
   });
 
-  it("allows private destinations with LINK_CHECK_ALLOW_PRIVATE_HOSTS=true", async () => {
-    vi.stubEnv("LINK_CHECK_ALLOW_PRIVATE_HOSTS", "true");
+  it("allows private destinations with allowPrivateHosts (--allow-private-hosts)", async () => {
     const route = fakeRoute({
       resourceType: "document",
       url: "http://localhost:3000/",
       navigation: true,
     });
-    await blockHeavyResources(route as unknown as Route);
+    await withRun({ allowPrivateHosts: true }, () =>
+      blockHeavyResources(route as unknown as Route),
+    );
     expect(route.continue).toHaveBeenCalled();
     expect(route.abort).not.toHaveBeenCalled();
   });

@@ -9,8 +9,7 @@ import { checkLinkWithFetch } from "./fetch_check";
 import { MAX_SERVER_ERROR_RETRIES, MAX_SERVER_ERROR_RETRY_DELAY } from "./http";
 import { checkLinks } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { withRun } from "./run";
-import { getRunContext } from "./run_context";
+import { getRunContext, withRun } from "./run";
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeBrowser);
@@ -175,7 +174,7 @@ describe("checkLinks() GitHub code line links", () => {
         text: "link",
       }));
 
-      const { results, metrics } = await withRun(async () => {
+      const { results, metrics } = await withRun({}, async () => {
         const checked = await checkLinks({ links });
         return { ...checked, metrics: { ...getRunContext()!.metrics.counters } };
       });

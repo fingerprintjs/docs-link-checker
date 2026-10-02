@@ -1,12 +1,5 @@
 import { type ProcessHandler, PromisePool, type PromisePoolError } from "@supercharge/promise-pool";
 import * as cliProgress from "cli-progress";
-import { HostLimiter } from "./limiter";
-
-export const log = (message: unknown, verbose = false) => {
-  if (verbose) {
-    console.log(message);
-  }
-};
 
 /**
  * The progress bar redraws the terminal line, which only makes sense in an interactive terminal.
@@ -149,36 +142,7 @@ export const sampleItems = <T>({
 
 export const CONCURRENCY_LIMIT = 100;
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
-const DEFAULT_HOST_CONCURRENCY_LIMIT = 8;
 
-/**
- * Parses the `LINK_CHECK_HOST_CONCURRENCY` environment variable (positive integer, default 8):
- * the maximum number of concurrent `fetch` requests to a single host.
- * @throws {Error} if the value is not a positive integer
- */
-export const getHostConcurrencyLimit = (
-  value = process.env.LINK_CHECK_HOST_CONCURRENCY,
-): number => {
-  if (value === undefined || value.trim() === "") {
-    return DEFAULT_HOST_CONCURRENCY_LIMIT;
-  }
-  const limit = Number(value);
-  if (!Number.isInteger(limit) || limit < 1) {
-    throw new Error(`Invalid LINK_CHECK_HOST_CONCURRENCY "${value}", expected a positive integer.`);
-  }
-  return limit;
-};
-
-let sharedHostLimiter: HostLimiter | undefined;
-/** Per-host limiter shared by all `fetch` requests of the process (created lazily, so the env variable can be set first) */
-export const getHostLimiter = (): HostLimiter => {
-  sharedHostLimiter ??= new HostLimiter(getHostConcurrencyLimit());
-  return sharedHostLimiter;
-};
-/** Only for tests: replace (or reset with `undefined`) the shared per-host limiter */
-export const setHostLimiter = (limiter: HostLimiter | undefined) => {
-  sharedHostLimiter = limiter;
-};
 // GitHub web rate limit makes you wait 60 seconds after 500 requests
 export const TASK_TIMEOUT = 80000;
 // Timeout of a single fetch request

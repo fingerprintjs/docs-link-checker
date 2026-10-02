@@ -5,12 +5,10 @@ import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/g
 import { withTimeout } from "./limiter";
 import { hasHash, stripHash } from "./link_common";
 import { checkUrlsOnPageWithPlaywright, resultFor } from "./playwright_check";
-import { withRun } from "./run";
-import { incrementMetric, timePhase } from "./run_context";
+import { incrementMetric, timePhase, withRun } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import {
   CONCURRENCY_LIMIT,
-  log,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
   parallelProcess,
   TASK_TIMEOUT,
@@ -18,7 +16,6 @@ import {
 
 type CheckLinksArgs = {
   links: Link[];
-  verbose?: boolean;
   fetchConcurrencyLimit?: number;
 };
 
@@ -102,7 +99,7 @@ const checkLinkFirstPass = async (
     // `invalid` URLs are reported by checkLinkWithFetch without any request
     case "invalid":
       // Every request has its own timeout (FETCH_TIMEOUT)
-      return { result: await checkLinkWithFetch(href, false, pageCache), method };
+      return { result: await checkLinkWithFetch(href, pageCache), method };
     case "github-api":
       return {
         result: await withTimeout(
@@ -190,11 +187,10 @@ const groupLinksByPage = (links: Link[]): Array<{ href: string; links: Link[] }>
  * - First pass: `fetch` (limited per host) or the GitHub API.
  * - Failures that might be caused by the check method are re-checked with Playwright.
  */
-export const checkLinks = (args: CheckLinksArgs) => withRun(() => checkLinksInRun(args));
+export const checkLinks = (args: CheckLinksArgs) => withRun({}, () => checkLinksInRun(args));
 
 const checkLinksInRun = async ({
   links,
-  verbose,
   fetchConcurrencyLimit = CONCURRENCY_LIMIT,
 }: CheckLinksArgs) => {
   console.log(`\nChecking ${links.length} links...`);
@@ -275,6 +271,5 @@ const checkLinksInRun = async ({
     `Checked ${finalResults.length} links (${uniqueHrefs.size} unique URLs, ${uniquePages.size} unique pages).`,
   );
   console.log(`Unexpected errors occurred for ${finalErrors.length} links`);
-  log(finalErrors, verbose);
   return { results: finalResults, errors: finalErrors };
 };

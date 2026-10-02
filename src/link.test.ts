@@ -126,9 +126,7 @@ import { HostLimiter } from "./limiter";
 import { checkLinks, interleaveByHost, shouldRecheckWithPlaywright } from "./link";
 import { getSpecialFragmentNote } from "./link_common";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { withRun } from "./run";
-import { getRunContext } from "./run_context";
-import { setHostLimiter } from "./utils";
+import { getRunContext, setHostLimiter, withRun } from "./run";
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -583,7 +581,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
   it("finds a fast anchor with the short wait, without the long wait", async () => {
     playwrightState.html = '<div id="fast"></div>';
 
-    const result = await withRun(async () => {
+    const result = await withRun({}, async () => {
       const checked = await checkLinkWithPlaywright("https://example.com/docs#fast");
       expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
       return checked;
@@ -691,7 +689,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
       async (hash) => {
         playwrightState.html = codeView;
 
-        const result = await withRun(async () => {
+        const result = await withRun({}, async () => {
           const checked = await checkLinkWithPlaywright(`${file}${hash}`);
           expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
           return checked;
@@ -855,7 +853,7 @@ describe("checkLinks() Playwright hash fallback", () => {
       link(`https://example.com/app${hash}`),
     );
 
-    const { results, errors } = await withRun(async () => {
+    const { results, errors } = await withRun({}, async () => {
       const checked = await checkLinks({ links });
       expect(getRunContext()!.metrics.counters).toMatchObject({
         playwrightNavigations: 3,
@@ -925,7 +923,7 @@ describe("checkLinks() Playwright hash fallback", () => {
     vi.useFakeTimers();
     let results: LinkWithResult[];
     try {
-      const promise = withRun(async () => {
+      const promise = withRun({}, async () => {
         const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
         expect(getRunContext()!.metrics.counters).toMatchObject({
           playwrightNavigations: 4,
@@ -1071,7 +1069,7 @@ describe("server errors (502, 503, 504)", () => {
       "https://github.com/WebKit/WebKit/blob/167dc5118a3f6228a19df40e673ea0a6d03b9bec/Source/WebCore/Modules/webaudio/AudioBuffer.cpp#L167";
 
     const { result, took } = await withFakeTimers(() =>
-      withRun(async () => {
+      withRun({}, async () => {
         const checked = await checkLinkWithPlaywright(url);
         expect(getRunContext()!.metrics.counters.serverErrorRetries).toBe(1);
         return checked;
@@ -1152,7 +1150,7 @@ describe("server errors (502, 503, 504)", () => {
     expect(took).toBe(3000);
   });
 
-  it("Playwright: a host paused while waiting for a page slot is waited for outside of the slot", async () => {
+  it("Playwright: a pause set after a check already started waiting for a page slot does not delay it", async () => {
     const limiter = new HostLimiter(8);
     setHostLimiter(limiter);
     playwrightState.gotoDelayMs = 1000;
@@ -1167,19 +1165,17 @@ describe("server errors (502, 503, 504)", () => {
       // Not paused yet: both wait for a page slot
       const paused = checkLinkWithPlaywright("https://busy.example.com/page");
       const other = checkLinkWithPlaywright("https://other.example.com/page");
-      // A fetch pauses the host in the meantime
+      // A fetch pauses the host in the meantime: the pause is only checked before waiting for a slot, not after
       await vi.advanceTimersByTimeAsync(100);
       limiter.pause("https://busy.example.com/", 5000);
       return Promise.all([paused, other, ...busySlots]);
     });
 
     expect(result.every((r) => r.ok)).toBe(true);
-    // Navigated once, after the pause (not right when the slot opened at 1s)
-    expect(playwrightState.visited.filter((url) => url.includes("busy"))).toHaveLength(1);
-    expect(playwrightState.visitedAt["https://busy.example.com/page"]! - start).toBe(5100);
-    // The slot was released in the meantime: the check queued behind it did not wait for the pause
+    // Navigated right when the slot opened, the later pause did not delay it
+    expect(playwrightState.visitedAt["https://busy.example.com/page"]! - start).toBe(1000);
     expect(playwrightState.visitedAt["https://other.example.com/page"]! - start).toBe(1000);
-    expect(took).toBe(6100);
+    expect(took).toBe(2000);
   });
 
   it("Playwright: after a redirect to another host, a 503 pauses the final URL's host and the retry waits for it", async () => {

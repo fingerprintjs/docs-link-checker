@@ -158,7 +158,7 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
 
   it("asks the API for the file once for all its line hashes in a run", async () => {
     const { withRun } = await import("../../run");
-    await withRun(async () => {
+    await withRun({}, async () => {
       await Promise.all(["#L1", "#L2", "#L9"].map((hash) => checkBlob("main/src/a.ts", hash)));
     });
     expect(getContent).toHaveBeenCalledTimes(1);
@@ -276,7 +276,7 @@ describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
     mockFileAt("a/b/c/d/e", "src/f.ts", "one\n");
 
     const { withRun } = await import("../../run");
-    await withRun(async () => {
+    await withRun({}, async () => {
       expect(await checkBlob("a/b/c/d/e/src/f.ts", "#L1")).toEqual({ ok: true, status: 200 });
       expect(await checkBlob("a/b/c/d/e/src/f.ts")).toEqual({ ok: true, status: 200 });
     });

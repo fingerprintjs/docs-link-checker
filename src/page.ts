@@ -86,17 +86,14 @@ export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Pr
 /**
  * Parses links from multiple pages
  * @param pages
- * @param verbose
  * @param linkFilter Filter function to apply to links
  * @returns
  */
 export const getLinksFromPages = async ({
   pages,
-  verbose = false,
   linkFilter,
 }: {
   pages: string[];
-  verbose?: boolean;
   linkFilter?: (link: Link) => boolean;
 }) => {
   console.log(`Retrieving links from ${pages.length} pages...`);
@@ -122,9 +119,6 @@ export const getLinksFromPages = async ({
 
   if (errors.length > 0) {
     console.log(`Retrieving links failed for ${errors.length} pages.`);
-  }
-  if (verbose) {
-    console.log(errors);
   }
 
   return { links, errors };
