@@ -6,9 +6,14 @@ import { checkGitHubDiscussionLink } from "./checks/gh_discussion";
 import { checkGitHubIssueLink } from "./checks/gh_issue";
 import { checkGitHubPullRequestLink } from "./checks/gh_pr";
 import { checkGitHubReleaseLink } from "./checks/gh_release";
-import { checkIfRepositoryExists } from "./checks/gh_repo";
+import { checkIfOwnerExists, checkIfRepositoryExists } from "./checks/gh_repo";
 import { checkGitHubTreeLink } from "./checks/gh_tree";
-import { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink } from "./gh_url";
+import {
+  getGithubPathSegments,
+  isGithubCodeLineLink,
+  isGithubUrl,
+  isGithubWikiLink,
+} from "./gh_url";
 
 export { isGithubCodeLineLink, isGithubUrl, isGithubWikiLink };
 
@@ -25,13 +30,23 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
     throw new Error("Not a GitHub URL");
   }
 
-  // Parse the GitHub URL
+  // Parse the GitHub URL. Segments are decoded (`%40` -> `@`), Octokit encodes them again in the API request.
   const githubUrl = new URL(url);
-  const [owner, repo, ...pathParts] = githubUrl.pathname.split("/").filter(Boolean);
+  const [owner, repo, ...pathParts] = getGithubPathSegments(githubUrl);
 
   // If it's a code line link, fall back to fetch for now
   if (isGithubCodeLineLink(url)) {
     return checkLinkWithPlaywright(url);
+  }
+
+  // `https://github.com/` itself
+  if (!owner) {
+    return { ok: true, status: 200 };
+  }
+
+  // `https://github.com/owner` (with or without a trailing slash): a user or an organization, not a repository
+  if (!repo) {
+    return checkIfOwnerExists(owner);
   }
 
   // If pathParts is empty, it's a repository link, just check if it exists

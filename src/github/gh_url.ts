@@ -34,6 +34,23 @@ export const decodeUrlHash = (hash: string): string => {
 };
 
 /**
+ * Decodes a percent-encoded URL path segment (`%40fingerprint%2Fvue%402.0.0` -> `@fingerprint/vue@2.0.0`).
+ * Octokit encodes request parameters itself, so they must be passed decoded (or they are encoded twice).
+ * Keeps the raw segment if it is malformed (`100%` stays `100%`).
+ */
+export const decodePathSegment = (segment: string): string => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
+
+/** Decoded, non-empty path segments of a GitHub URL (`/owner/repo/` -> `["owner", "repo"]`) */
+export const getGithubPathSegments = (url: URL): string[] =>
+  url.pathname.split("/").filter(Boolean).map(decodePathSegment);
+
+/**
  * Check if a URL is a GitHub wiki link like https://github.com/owner/repo/wiki/Page
  * (wikis are not available through the API, they are checked with fetch)
  */
