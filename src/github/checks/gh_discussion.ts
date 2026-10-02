@@ -3,6 +3,15 @@ import { tryCatch } from "../../utils/tryCatch";
 import { getApiErrorResult, isNotFoundApiError } from "../gh_api_error";
 import { getMyOctokit } from "../github_client";
 
+/** `true` for a GraphQL "Could not resolve to a Repository/Discussion" (NOT_FOUND) error */
+const isGraphqlNotFound = (error: unknown): boolean => {
+  const { errors, message } = (error ?? {}) as { errors?: { type?: string }[]; message?: string };
+  return (
+    errors?.some((e) => e.type === "NOT_FOUND") === true ||
+    /Could not resolve to a (Discussion|Repository)/.test(message ?? "")
+  );
+};
+
 /**
  * Check if a GitHub discussion exists
  * @param owner - The owner of the repository
@@ -33,8 +42,8 @@ export const checkGitHubDiscussionLink = async (
   }
 
   const notFoundDetail = `Discussion #${discussionNumber} not found in repository ${owner}/${repo}`;
-  // GraphQL answers a missing discussion (or repository) with an error in a 200 response
-  if (isNotFoundApiError(error) || error?.message?.includes("Could not resolve to a Discussion")) {
+  // GraphQL answers a missing discussion or repository with a NOT_FOUND error in a 200 response
+  if (isNotFoundApiError(error) || isGraphqlNotFound(error)) {
     return { ok: false, error: "broken link", status: 404, errorDetail: notFoundDetail };
   }
   return getApiErrorResult(error, notFoundDetail);
