@@ -74,25 +74,16 @@ export type AnchorIndex = {
   names: Set<string>;
   /** `href` attributes */
   hrefs: Set<string>;
-  /** `data-line-number` attributes (GitHub code views) */
-  lineNumbers: Set<string>;
 };
 
 export const buildAnchorIndex = (html: string): AnchorIndex => {
-  const index: AnchorIndex = {
-    ids: new Set(),
-    names: new Set(),
-    hrefs: new Set(),
-    lineNumbers: new Set(),
-  };
+  const index: AnchorIndex = { ids: new Set(), names: new Set(), hrefs: new Set() };
   const $ = cheerio.load(html);
-  $("[id], a[name], [href], [data-line-number]").each((_, element) => {
+  $("[id], a[name], [href]").each((_, element) => {
     const { id, name, href } = element.attribs;
-    const lineNumber = element.attribs["data-line-number"];
     if (id !== undefined) index.ids.add(id);
     if (name !== undefined && element.tagName === "a") index.names.add(name);
     if (href !== undefined) index.hrefs.add(href);
-    if (lineNumber !== undefined) index.lineNumbers.add(lineNumber);
   });
   return index;
 };
@@ -100,31 +91,18 @@ export const buildAnchorIndex = (html: string): AnchorIndex => {
 /**
  * Checks if the hash points to an element in the anchor index of a page.
  * Compares attribute values directly instead of building selectors, so no hash value can break the check.
+ * GitHub code line links (`#L12`) are checked with the GitHub API (fetch never sees a github.com blob page, and
+ * GitHub renders lines client-side anyway), not against this index.
  * @param index - anchor index of the page, see `buildAnchorIndex`
  * @param hash - the hash, with or without the leading `#`
- * @param url - the full URL (used to detect GitHub code line links)
+ * @param _url - kept for callers that still pass the full URL, no longer used (see above)
  */
-export const isHashInAnchorIndex = (index: AnchorIndex, hash: string, url: string): boolean => {
+export const isHashInAnchorIndex = (index: AnchorIndex, hash: string, _url?: string): boolean => {
   const variants = getHashVariants(hash);
   if (variants.some((variant) => index.ids.has(variant) || index.names.has(variant))) {
     return true;
   }
-  if (
-    variants.some(
-      (variant) => index.hrefs.has(`#${variant}`) || index.hrefs.has(`#${variant.toLowerCase()}`),
-    )
-  ) {
-    return true;
-  }
-  const lineNumber = getGithubLineNumber(hash, url);
-  return lineNumber !== undefined && index.lineNumbers.has(lineNumber);
+  return variants.some(
+    (variant) => index.hrefs.has(`#${variant}`) || index.hrefs.has(`#${variant.toLowerCase()}`),
+  );
 };
-
-/**
- * Checks if the hash points to an element in the (server-rendered) HTML.
- * @param html - page HTML
- * @param hash - the hash, with or without the leading `#`
- * @param url - the full URL (used to detect GitHub code line links)
- */
-export const isHashPresentInHtml = (html: string, hash: string, url: string): boolean =>
-  isHashInAnchorIndex(buildAnchorIndex(html), hash, url);
