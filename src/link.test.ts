@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LinkCheckResult } from "./types";
+import type { LinkCheckResult, LinkWithResult } from "./types";
 
 /**
  * Offline tests for `link.ts`: `fetch`, the GitHub API check and Playwright are all mocked.
@@ -25,12 +25,13 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     // Timeouts passed to `goto` and set as page defaults
     gotoTimeouts: [] as Array<number | undefined>,
     pageTimeouts: [] as number[],
-    // HTML per navigated URL once the page reported it fired `load` (anchors rendered late), falls back to the above
-    htmlAfterLoadByUrl: {} as Record<string, string>,
-    // DOM activity the page reports (`load` fired, ms without DOM changes)
-    domActivity: { loaded: true, quietFor: 10_000 },
+    // HTML per navigated URL rendered `afterMs` after the navigation (anchors rendered late, e.g. by a timer on an
+    // already loaded and quiet page), falls back to the above before that. For tests with fake timers.
+    lateHtmlByUrl: {} as Record<string, { html: string; afterMs: number }>,
     // Timeouts of hash waits
     hashTimeouts: [] as Array<number | undefined>,
+    // The navigation response body never ends (Playwright has no timeout for it)
+    responseBodyHangs: false,
     // A missing selector times out after its whole timeout (instead of right away), for tests with fake timers
     waitForTakesTimeout: false,
   },
@@ -52,35 +53,27 @@ vi.mock("playwright", () => ({
         close: async () => {},
         newPage: async () => {
           let currentUrl = "";
-          let loaded = false;
-          let hashWaits = 0;
+          let navigatedAt = 0;
           return {
             isClosed: () => false,
             setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
             setDefaultNavigationTimeout: (timeout: number) =>
               playwrightState.pageTimeouts.push(timeout),
-            // Request events (network activity) are not simulated: the network is always quiet
-            on: () => {},
-            // `getDomActivity`. The page fires `load` (if it ever does) after the first hash wait.
-            evaluate: async () => {
-              if (playwrightState.domActivity.loaded && hashWaits > 0) {
-                loaded = true;
-              }
-              return { ...playwrightState.domActivity };
-            },
             goto: async (url: string, options?: { timeout?: number }) => {
               currentUrl = url;
-              loaded = false;
-              hashWaits = 0;
               playwrightState.visited.push(url);
               playwrightState.gotoTimeouts.push(options?.timeout);
               if (playwrightState.gotoDelayMs > 0) {
                 await new Promise((resolve) => setTimeout(resolve, playwrightState.gotoDelayMs));
               }
+              navigatedAt = Date.now();
               return {
                 status: () => playwrightState.status,
                 statusText: () => "",
-                text: async () => "",
+                text: () =>
+                  playwrightState.responseBodyHangs
+                    ? new Promise<string>(() => {})
+                    : Promise.resolve("Forbidden page"),
               };
             },
             locator: (selector: string) => ({
@@ -88,20 +81,23 @@ vi.mock("playwright", () => ({
                 waitFor: async (options?: { timeout?: number }) => {
                   playwrightState.selectors.push(selector);
                   playwrightState.hashTimeouts.push(options?.timeout);
-                  hashWaits++;
+                  const matches = (html: string) => cheerio.load(html)(selector).length > 0;
                   // Throws for invalid selectors, like Playwright would
-                  const html =
-                    (loaded ? playwrightState.htmlAfterLoadByUrl[currentUrl] : undefined) ??
-                    playwrightState.htmlByUrl[currentUrl] ??
-                    playwrightState.html;
-                  if (cheerio.load(html)(selector).length === 0) {
-                    if (playwrightState.waitForTakesTimeout) {
-                      await new Promise((resolve) => setTimeout(resolve, options?.timeout));
-                    }
-                    const error = new Error("Timeout");
-                    error.name = "TimeoutError";
-                    throw error;
+                  if (matches(playwrightState.htmlByUrl[currentUrl] ?? playwrightState.html)) {
+                    return;
                   }
+                  const late = playwrightState.lateHtmlByUrl[currentUrl];
+                  const lateIn = late ? navigatedAt + late.afterMs - Date.now() : Number.NaN;
+                  if (late && matches(late.html) && lateIn <= (options?.timeout ?? 0)) {
+                    await new Promise((resolve) => setTimeout(resolve, Math.max(0, lateIn)));
+                    return;
+                  }
+                  if (playwrightState.waitForTakesTimeout) {
+                    await new Promise((resolve) => setTimeout(resolve, options?.timeout));
+                  }
+                  const error = new Error("Timeout");
+                  error.name = "TimeoutError";
+                  throw error;
                 },
               }),
             }),
@@ -118,7 +114,6 @@ import {
   checkLinkWithPlaywright,
   getSpecialFragmentNote,
   interleaveByHost,
-  RequestActivity,
   shouldRecheckWithPlaywright,
 } from "./link";
 import { withRun } from "./run";
@@ -146,8 +141,8 @@ beforeEach(() => {
   playwrightState.gotoDelayMs = 0;
   playwrightState.gotoTimeouts = [];
   playwrightState.pageTimeouts = [];
-  playwrightState.htmlAfterLoadByUrl = {};
-  playwrightState.domActivity = { loaded: true, quietFor: 10_000 };
+  playwrightState.lateHtmlByUrl = {};
+  playwrightState.responseBodyHangs = false;
   playwrightState.hashTimeouts = [];
   playwrightState.waitForTakesTimeout = false;
   playwrightState.status = 200;
@@ -554,57 +549,84 @@ describe("checkLinkWithPlaywright() hash check", () => {
     expect(playwrightState.hashTimeouts).toEqual([3000]);
   });
 
-  it("waits longer for an anchor rendered late (same navigation)", async () => {
-    const url = "https://docs.example.com/reference/get-event#response-ip-info-v6-address";
-    // Only added after hydration (e.g. Mintlify expands nested response fields on hash navigation)
-    playwrightState.htmlAfterLoadByUrl = { [url]: '<div id="response-ip-info-v6-address"></div>' };
-
-    const result = await checkLinkWithPlaywright(url);
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(playwrightState.visited).toEqual([url]);
-    expect(playwrightState.hashTimeouts).toEqual([3000, 500]);
-  });
-
-  it("stops waiting for a missing anchor as soon as the page settled (loaded, no DOM changes)", async () => {
-    const result = await checkLinkWithPlaywright("https://example.com/docs#never");
-
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-    expect(playwrightState.visited).toEqual(["https://example.com/docs#never"]);
-    // One more check after the page was seen settled, no full budget
-    expect(playwrightState.hashTimeouts).toEqual([3000, 500]);
-  });
-
-  it.each([
-    ["never fires `load`", { loaded: false, quietFor: 10_000 }],
-    ["keeps changing its DOM", { loaded: true, quietFor: 100 }],
-  ])("waits for a missing anchor at most 15s in total when the page %s", async (_, activity) => {
+  /** Checks `url` with fake timers, returns the result and how long the check took (simulated time) */
+  const checkWithFakeTimers = async (url: string) => {
     vi.useFakeTimers();
     try {
       playwrightState.waitForTakesTimeout = true;
-      playwrightState.domActivity = activity;
       const start = Date.now();
-
       let finishedAt = Number.NaN;
-      const promise = checkLinkWithPlaywright("https://example.com/busy#missing").then((r) => {
+      const promise = checkLinkWithPlaywright(url).then((r) => {
         finishedAt = Date.now();
         return r;
       });
       await vi.advanceTimersByTimeAsync(60_000);
-      const result = await promise;
-
-      expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-      // The regular wait is part of the overall budget (not 15s on top of it)
-      expect(playwrightState.hashTimeouts[0]).toBe(3000);
-      const waited = playwrightState.hashTimeouts.reduce<number>((sum, t) => sum + (t ?? 0), 0);
-      expect(waited).toBe(15_000);
-      expect(playwrightState.hashTimeouts.slice(1).every((t) => t !== undefined && t <= 500)).toBe(
-        true,
-      );
-      expect(finishedAt - start).toBe(15_000);
+      return { result: await promise, took: finishedAt - start };
     } finally {
       vi.useRealTimers();
     }
+  };
+
+  it("waits longer for an anchor rendered late (same navigation)", async () => {
+    const url = "https://docs.example.com/reference/get-event#response-ip-info-v6-address";
+    // Added by a timer 4s after the navigation, on an already loaded and quiet page (e.g. Mintlify expands nested
+    // response fields on hash navigation)
+    playwrightState.lateHtmlByUrl = {
+      [url]: { html: '<div id="response-ip-info-v6-address"></div>', afterMs: 4000 },
+    };
+
+    const { result, took } = await checkWithFakeTimers(url);
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toEqual([url]);
+    // Found as soon as it appears, the rest of the budget is not waited
+    expect(took).toBe(4000);
+    expect(playwrightState.hashTimeouts).toEqual([3000, 12_000]);
+  });
+
+  it("waits for a missing anchor until the 15s budget is used up (regular wait included)", async () => {
+    const { result, took } = await checkWithFakeTimers("https://example.com/docs#never");
+
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(playwrightState.visited).toEqual(["https://example.com/docs#never"]);
+    // The regular wait is part of the overall budget (not 15s on top of it)
+    expect(playwrightState.hashTimeouts).toEqual([3000, 12_000]);
+    expect(took).toBe(15_000);
+  });
+
+  it("reports an anchor rendered after the budget as missing", async () => {
+    const url = "https://example.com/docs#too-late";
+    playwrightState.lateHtmlByUrl = {
+      [url]: { html: '<div id="too-late"></div>', afterMs: 16_000 },
+    };
+
+    const { result, took } = await checkWithFakeTimers(url);
+
+    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(took).toBe(15_000);
+  });
+
+  it("reports a forbidden page with its body", async () => {
+    playwrightState.status = 403;
+
+    const result = await checkLinkWithPlaywright("https://example.com/docs#a");
+
+    expect(result).toEqual({
+      ok: false,
+      status: 403,
+      error: "could not check",
+      errorDetail: " Forbidden page",
+    });
+  });
+
+  it("does not wait forever for the body of a forbidden page", async () => {
+    playwrightState.status = 403;
+    playwrightState.responseBodyHangs = true;
+
+    const { result, took } = await checkWithFakeTimers("https://example.com/docs#a");
+
+    expect(result).toEqual({ ok: false, status: 403, error: "could not check", errorDetail: " " });
+    expect(took).toBe(30_000);
   });
 
   describe("GitHub code line links", () => {
@@ -648,34 +670,6 @@ describe("checkLinkWithPlaywright() hash check", () => {
       expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
       expect(playwrightState.hashTimeouts).toEqual([15000]);
     });
-  });
-});
-
-describe("RequestActivity", () => {
-  it("is quiet without any request", () => {
-    expect(new RequestActivity().isQuiet(0)).toBe(true);
-  });
-
-  it("is busy for 2s after a request started or finished", () => {
-    const activity = new RequestActivity();
-    activity.started("a", 1000);
-    activity.ended("a", 4000);
-
-    expect(activity.isQuiet(5999)).toBe(false);
-    expect(activity.isQuiet(6000)).toBe(true);
-  });
-
-  it("is busy while a recent request is pending, ignores long-lived ones", () => {
-    const activity = new RequestActivity();
-    activity.started("long-poll", 0);
-
-    expect(activity.isQuiet(4999)).toBe(false);
-    expect(activity.isQuiet(5000)).toBe(true);
-
-    activity.started("api", 6000);
-    expect(activity.isQuiet(9000)).toBe(false);
-    activity.ended("api", 9000);
-    expect(activity.isQuiet(11000)).toBe(true);
   });
 });
 
@@ -873,20 +867,33 @@ describe("checkLinks() Playwright hash fallback", () => {
     stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
     const page = "https://docs.example.com/reference/get-event";
     const hashes = ["#response-a", "#response-b", "#response-c", "#missing"];
-    // Every field is only expanded (and gets its id) when the page is opened with its hash, after the load
-    playwrightState.htmlAfterLoadByUrl = Object.fromEntries(
-      hashes.slice(0, 3).map((hash) => [`${page}${hash}`, `<div id="${hash.slice(1)}"></div>`]),
+    // Every field is only expanded (and gets its id) when the page is opened with its hash, a few seconds later
+    playwrightState.lateHtmlByUrl = Object.fromEntries(
+      hashes
+        .slice(0, 3)
+        .map((hash) => [
+          `${page}${hash}`,
+          { html: `<div id="${hash.slice(1)}"></div>`, afterMs: 4000 },
+        ]),
     );
 
-    const { results } = await withRun(async () => {
-      const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
-      expect(getRunContext()!.metrics.counters).toMatchObject({
-        playwrightNavigations: 4,
-        playwrightHashFallbacks: 3,
-        playwrightLongHashWaits: 4,
+    vi.useFakeTimers();
+    let results: LinkWithResult[];
+    try {
+      const promise = withRun(async () => {
+        const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
+        expect(getRunContext()!.metrics.counters).toMatchObject({
+          playwrightNavigations: 4,
+          playwrightHashFallbacks: 3,
+          playwrightLongHashWaits: 4,
+        });
+        return checked;
       });
-      return checked;
-    });
+      await vi.advanceTimersByTimeAsync(120_000);
+      ({ results } = await promise);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     for (const hash of hashes.slice(0, 3)) {

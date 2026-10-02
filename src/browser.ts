@@ -8,18 +8,10 @@ import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./utils";
 export const PAGE_OPERATION_TIMEOUT = 30000;
 // How long a hash is waited for after the page loaded (client-side rendered anchors)
 export const HASH_WAIT_TIMEOUT = 3000;
-// A hash of the navigated URL still missing after HASH_WAIT_TIMEOUT is waited for longer, until the page settles
-// (see LATE_ANCHOR_QUIET_PERIOD). This is the overall budget, counted from the first check (HASH_WAIT_TIMEOUT included).
+// A hash of the navigated URL still missing after HASH_WAIT_TIMEOUT is waited for longer. This is the overall budget,
+// counted from the first check (HASH_WAIT_TIMEOUT included): a missing anchor takes all of it.
 // E.g. Mintlify docs expand collapsed sections and add their ids several seconds after hydration.
 export const HASH_FALLBACK_WAIT_TIMEOUT = 15000;
-// A page is settled (no more anchors expected) once it fired `load`, its DOM had no anchor-related changes and
-// its network no activity for this long
-export const LATE_ANCHOR_QUIET_PERIOD = 2000;
-// Requests pending for longer than this are long-lived (long polling, streams, hanging beacons): they don't keep
-// the page from settling
-export const LONG_LIVED_REQUEST_AGE = 5000;
-// How often a late anchor and the page activity are checked
-export const LATE_ANCHOR_POLL_INTERVAL = 500;
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
@@ -291,7 +283,8 @@ const runWithNewPage = async <T>(
     const blocker = createResourceBlocker();
     await context.route("**/*", (route) => blocker(route));
     const page = await context.newPage();
-    // Every page operation is bounded (navigations, waits, reading responses...), even if a caller passes no timeout
+    // Every page operation is bounded (navigations, waits...), even if a caller passes no timeout. Response bodies have
+    // no Playwright timeout, callers bound them (see `readResponseText` in link.ts)
     page.setDefaultTimeout(PAGE_OPERATION_TIMEOUT);
     page.setDefaultNavigationTimeout(PAGE_OPERATION_TIMEOUT);
     return await fn(page);

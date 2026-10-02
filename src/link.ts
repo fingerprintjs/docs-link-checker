@@ -1,11 +1,8 @@
 import { PromisePoolError } from "@supercharge/promise-pool";
-import type { Page } from "playwright";
+import type { Page, Response as PlaywrightResponse } from "playwright";
 import {
   HASH_FALLBACK_WAIT_TIMEOUT,
   HASH_WAIT_TIMEOUT,
-  LATE_ANCHOR_POLL_INTERVAL,
-  LATE_ANCHOR_QUIET_PERIOD,
-  LONG_LIVED_REQUEST_AGE,
   PAGE_OPERATION_TIMEOUT,
   withPage,
 } from "./browser";
@@ -599,122 +596,36 @@ async function waitForSelectorAttached(page: Page, selector: string, timeout: nu
 const GITHUB_CODE_LINE_SELECTOR = "[data-line-number]";
 
 /**
- * Network activity of a page (fed by its request events), to tell when it is idle-ish: no request started or
- * finished for `LATE_ANCHOR_QUIET_PERIOD`, ignoring long-lived requests pending for more than
- * `LONG_LIVED_REQUEST_AGE` (long polling, streams, hanging beacons).
+ * Body of a navigation response, `""` if it can't be read within `PAGE_OPERATION_TIMEOUT` (Playwright has no timeout
+ * for response bodies, a body that never ends would hold the page slot). The page is closed afterwards anyway.
  */
-export class RequestActivity {
-  private readonly pending = new Map<unknown, number>();
-  private lastActivity = Number.NEGATIVE_INFINITY;
-
-  started(request: unknown, now = Date.now()) {
-    this.pending.set(request, now);
-    this.lastActivity = now;
-  }
-
-  ended(request: unknown, now = Date.now()) {
-    this.pending.delete(request);
-    this.lastActivity = now;
-  }
-
-  isQuiet(now = Date.now()): boolean {
-    if (now - this.lastActivity < LATE_ANCHOR_QUIET_PERIOD) {
-      return false;
-    }
-    for (const startedAt of this.pending.values()) {
-      if (now - startedAt < LONG_LIVED_REQUEST_AGE) {
-        return false;
-      }
-    }
-    return true;
-  }
-}
-
-const trackRequests = (page: Page): RequestActivity => {
-  const activity = new RequestActivity();
-  page.on("request", (request) => activity.started(request));
-  page.on("requestfinished", (request) => activity.ended(request));
-  page.on("requestfailed", (request) => activity.ended(request));
-  return activity;
-};
-
-/** State of the page DOM: `load` fired, and for how long no anchor-related element or attribute changed */
-type DomActivity = { loaded: boolean; quietFor: number };
-
-// Page global holding the time of the last DOM change (set by the observer installed by `getDomActivity`)
-const LAST_MUTATION_KEY = "__docsLinkCheckerLastMutation";
-
-/**
- * Reads the DOM activity of the page, installing a `MutationObserver` on the first call (per document).
- * Returns `undefined` if the page can't be evaluated right now (e.g. it is navigating).
- */
-const getDomActivity = async (page: Page): Promise<DomActivity | undefined> => {
-  try {
-    return await page.evaluate((key) => {
-      const state = window as unknown as Record<string, number | undefined>;
-      const now = Date.now();
-      if (state[key] === undefined) {
-        state[key] = now;
-        new MutationObserver(() => {
-          state[key] = Date.now();
-        }).observe(document, {
-          subtree: true,
-          childList: true,
-          // Anchor-related attributes only, so animations (`style`, `class`) don't keep the page "busy"
-          attributes: true,
-          attributeFilter: ["id", "name", "href", "data-line-number"],
-        });
-      }
-      return { loaded: document.readyState === "complete", quietFor: now - (state[key] ?? now) };
-    }, LAST_MUTATION_KEY);
-  } catch (error) {
-    // The browser crashed: let the caller handle it
-    if (page.isClosed()) {
-      throw error;
-    }
-    return undefined;
-  }
-};
+const readResponseText = (response: PlaywrightResponse): Promise<string> =>
+  withTimeout(response.text(), PAGE_OPERATION_TIMEOUT, "Reading the response timed out").catch(
+    () => "",
+  );
 
 /** Settings of the long wait for the anchor of the navigated URL (see `waitForLateAnchor`) */
 type LateAnchorWait = {
   /** End of the overall budget (`Date.now()` based) */
   deadline: number;
-  requests: RequestActivity;
 };
 
-/** `load` fired, and neither the DOM nor the network changed for `LATE_ANCHOR_QUIET_PERIOD` */
-async function isPageSettled(page: Page, requests: RequestActivity): Promise<boolean> {
-  const dom = await getDomActivity(page);
-  return dom?.loaded === true && dom.quietFor >= LATE_ANCHOR_QUIET_PERIOD && requests.isQuiet();
-}
-
 /**
- * Waits for an anchor rendered late, until the deadline or until the page settled: `load` fired, and neither the DOM
- * nor the network changed for `LATE_ANCHOR_QUIET_PERIOD`. A settled page is not going to add the anchor anymore.
+ * Waits for an anchor rendered late until the deadline. A quiet page is no proof the anchor is absent (a timer can
+ * add it any time), so a missing anchor always takes the whole budget.
+ * The wait is bounded by its own timeout (enforced by Playwright, even if the page blocks its main thread).
  */
 async function waitForLateAnchor(
   page: Page,
   selector: string,
-  { deadline, requests }: LateAnchorWait,
+  { deadline }: LateAnchorWait,
 ): Promise<boolean> {
-  for (;;) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      return false;
-    }
-    // Measured before the anchor check: if the page was already settled, a missing anchor is final
-    const settled = await isPageSettled(page, requests);
-    if (
-      await waitForSelectorAttached(page, selector, Math.min(LATE_ANCHOR_POLL_INTERVAL, remaining))
-    ) {
-      return true;
-    }
-    // Re-read after the poll: activity that started while polling means the anchor may still come
-    if (settled && (await isPageSettled(page, requests))) {
-      return false;
-    }
+  const remaining = deadline - Date.now();
+  // A timeout of 0 would mean "no timeout" to Playwright
+  if (remaining <= 0) {
+    return false;
   }
+  return waitForSelectorAttached(page, selector, remaining);
 }
 
 /**
@@ -801,8 +712,8 @@ const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkChec
  * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
  * Some pages render different content per hash (e.g. SPA tabs), so a hash not found in the shared DOM gets
  * a dedicated navigation to its exact URL before it is reported as "hash not found".
- * The anchor of the navigated URL is waited for `HASH_WAIT_TIMEOUT` first, and if it is missing, longer until the page
- * settles, `HASH_FALLBACK_WAIT_TIMEOUT` in total (anchors rendered late, see `waitForLateAnchor`).
+ * The anchor of the navigated URL is waited for `HASH_WAIT_TIMEOUT` first, and if it is missing, longer,
+ * `HASH_FALLBACK_WAIT_TIMEOUT` in total (anchors rendered late, see `waitForLateAnchor`).
  * GitHub code line links are checked against the rendered code view instead (see `isGithubCodeLinePresent`).
  * @returns results by URL
  */
@@ -851,8 +762,6 @@ async function checkUrlsInOneNavigation(
     async (page) => {
       try {
         incrementMetric("playwrightNavigations");
-        // Before the navigation, so the page's own requests are seen (see `waitForLateAnchor`)
-        const requests = trackRequests(page);
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
         const response = await page.goto(firstUrl, {
           waitUntil: "domcontentloaded",
@@ -865,7 +774,7 @@ async function checkUrlsInOneNavigation(
             ok: false,
             error: "could not check",
             status: response.status(),
-            errorDetail: `${response.statusText()} ${await response.text()}`,
+            errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
           });
         }
 
@@ -879,11 +788,7 @@ async function checkUrlsInOneNavigation(
 
         const status = response.status();
         // The overall budget of the long wait starts with the first check, it includes the regular wait
-        const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT, requests };
-        if (hasHash(firstUrl)) {
-          // Start observing DOM changes now, so the page can already be settled when the long wait starts
-          await getDomActivity(page);
-        }
+        const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT };
         const results = new Map(
           await Promise.all(
             urls.map(

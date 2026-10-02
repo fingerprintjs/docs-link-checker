@@ -58,8 +58,6 @@ vi.mock("playwright", () => {
               isClosed: () => closed,
               setDefaultTimeout: () => {},
               setDefaultNavigationTimeout: () => {},
-              // Request events (see `trackRequests` in link.ts), not simulated
-              on: () => {},
               goto: async (url: string) => {
                 const failure = state.nextGotoFailure;
                 state.nextGotoFailure = null;
