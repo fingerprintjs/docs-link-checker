@@ -5,6 +5,10 @@ import { checkLinkWithFetch, checkLinkWithPlaywright } from "./link";
 // Checks outside of a run share one browser, close it when done
 afterAll(closeBrowser);
 
+// A missing anchor is reported once the page settled, after HASH_FALLBACK_WAIT_TIMEOUT (15s) at most, a missing
+// GitHub code line once the code view rendered (plus 3s), plus the navigation itself
+const HASH_CHECK_TEST_TIMEOUT = 30000;
+
 const linkCheckMethods = [
   {
     function: checkLinkWithFetch,
@@ -51,7 +55,7 @@ for (const { function: checkLink, name } of linkCheckMethods) {
     });
 
     it(`${name} should return 'hash not found' for broken hash links (server-rendered)`, {
-      timeout: 10000,
+      timeout: HASH_CHECK_TEST_TIMEOUT,
     }, async () => {
       const result = await checkLink("https://fingerprint.com#does-not-exist");
       expect(result).toMatchObject({ ok: false, status: 200, error: "hash not found" });
@@ -105,12 +109,21 @@ describe("checkLinkWithPlaywright()", () => {
   });
 
   it("should return 'hash not found' for broken hash links (client-rendered)", {
-    timeout: 10000,
+    timeout: HASH_CHECK_TEST_TIMEOUT,
   }, async () => {
     const result = await checkLinkWithPlaywright(
       "https://developer.apple.com/documentation/webkit#this-hash-does-not-exist",
     );
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+
+  it("should return OK for anchors rendered late (Mintlify expands nested fields on hash navigation)", {
+    timeout: HASH_CHECK_TEST_TIMEOUT,
+  }, async () => {
+    const result = await checkLinkWithPlaywright(
+      "https://docs.fingerprint.com/reference/server-api-get-event#response-ip-info-v6-address",
+    );
+    expect(result).toEqual({ ok: true, status: 200 });
   });
 
   it(`should return OK for working L{number} hashes on GitHub `, async () => {
@@ -128,7 +141,7 @@ describe("checkLinkWithPlaywright()", () => {
   });
 
   it(`should return 'hash not found' for broken L{number} hashes on GitHub `, {
-    timeout: 10000,
+    timeout: HASH_CHECK_TEST_TIMEOUT,
   }, async () => {
     const result = await checkLinkWithPlaywright(
       "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L99999",
@@ -137,7 +150,7 @@ describe("checkLinkWithPlaywright()", () => {
   });
 
   it(`should return 'hash not found' for broken L{number}-L{number} hashes on GitHub `, {
-    timeout: 10000,
+    timeout: HASH_CHECK_TEST_TIMEOUT,
   }, async () => {
     const result = await checkLinkWithPlaywright(
       "https://github.com/fingerprintjs/fingerprintjs/blob/master/package.json#L8888-L9999",

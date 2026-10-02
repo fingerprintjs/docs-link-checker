@@ -25,12 +25,14 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     // Timeouts passed to `goto` and set as page defaults
     gotoTimeouts: [] as Array<number | undefined>,
     pageTimeouts: [] as number[],
-    // HTML per navigated URL once the `load` event was awaited (anchors rendered late), falls back to the above
+    // HTML per navigated URL once the page reported it fired `load` (anchors rendered late), falls back to the above
     htmlAfterLoadByUrl: {} as Record<string, string>,
-    // `waitForLoadState` calls and timeouts of hash waits
-    loadStateWaits: [] as string[],
-    loadStateTimesOut: false,
+    // DOM activity the page reports (`load` fired, ms without DOM changes)
+    domActivity: { loaded: true, quietFor: 10_000 },
+    // Timeouts of hash waits
     hashTimeouts: [] as Array<number | undefined>,
+    // A missing selector times out after its whole timeout (instead of right away), for tests with fake timers
+    waitForTakesTimeout: false,
   },
 }));
 
@@ -51,23 +53,25 @@ vi.mock("playwright", () => ({
         newPage: async () => {
           let currentUrl = "";
           let loaded = false;
+          let hashWaits = 0;
           return {
             isClosed: () => false,
             setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
             setDefaultNavigationTimeout: (timeout: number) =>
               playwrightState.pageTimeouts.push(timeout),
-            waitForLoadState: async (state: string) => {
-              playwrightState.loadStateWaits.push(state);
-              if (playwrightState.loadStateTimesOut) {
-                const error = new Error("Timeout");
-                error.name = "TimeoutError";
-                throw error;
+            // Request events (network activity) are not simulated: the network is always quiet
+            on: () => {},
+            // `getDomActivity`. The page fires `load` (if it ever does) after the first hash wait.
+            evaluate: async () => {
+              if (playwrightState.domActivity.loaded && hashWaits > 0) {
+                loaded = true;
               }
-              loaded = true;
+              return { ...playwrightState.domActivity };
             },
             goto: async (url: string, options?: { timeout?: number }) => {
               currentUrl = url;
               loaded = false;
+              hashWaits = 0;
               playwrightState.visited.push(url);
               playwrightState.gotoTimeouts.push(options?.timeout);
               if (playwrightState.gotoDelayMs > 0) {
@@ -84,12 +88,16 @@ vi.mock("playwright", () => ({
                 waitFor: async (options?: { timeout?: number }) => {
                   playwrightState.selectors.push(selector);
                   playwrightState.hashTimeouts.push(options?.timeout);
+                  hashWaits++;
                   // Throws for invalid selectors, like Playwright would
                   const html =
                     (loaded ? playwrightState.htmlAfterLoadByUrl[currentUrl] : undefined) ??
                     playwrightState.htmlByUrl[currentUrl] ??
                     playwrightState.html;
                   if (cheerio.load(html)(selector).length === 0) {
+                    if (playwrightState.waitForTakesTimeout) {
+                      await new Promise((resolve) => setTimeout(resolve, options?.timeout));
+                    }
                     const error = new Error("Timeout");
                     error.name = "TimeoutError";
                     throw error;
@@ -110,6 +118,7 @@ import {
   checkLinkWithPlaywright,
   getSpecialFragmentNote,
   interleaveByHost,
+  RequestActivity,
   shouldRecheckWithPlaywright,
 } from "./link";
 import { withRun } from "./run";
@@ -138,9 +147,9 @@ beforeEach(() => {
   playwrightState.gotoTimeouts = [];
   playwrightState.pageTimeouts = [];
   playwrightState.htmlAfterLoadByUrl = {};
-  playwrightState.loadStateWaits = [];
-  playwrightState.loadStateTimesOut = false;
+  playwrightState.domActivity = { loaded: true, quietFor: 10_000 };
   playwrightState.hashTimeouts = [];
+  playwrightState.waitForTakesTimeout = false;
   playwrightState.status = 200;
   checkLinkWithGithubApiMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -532,17 +541,20 @@ describe("checkLinkWithPlaywright() hash check", () => {
     expect(playwrightState.selectors).not.toEqual([]);
   });
 
-  it("finds a fast anchor with the short wait, without waiting for the full load", async () => {
+  it("finds a fast anchor with the short wait, without the long wait", async () => {
     playwrightState.html = '<div id="fast"></div>';
 
-    const result = await checkLinkWithPlaywright("https://example.com/docs#fast");
+    const result = await withRun(async () => {
+      const checked = await checkLinkWithPlaywright("https://example.com/docs#fast");
+      expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
+      return checked;
+    });
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(playwrightState.loadStateWaits).toEqual([]);
     expect(playwrightState.hashTimeouts).toEqual([3000]);
   });
 
-  it("waits for the full load and longer for an anchor rendered late (same navigation)", async () => {
+  it("waits longer for an anchor rendered late (same navigation)", async () => {
     const url = "https://docs.example.com/reference/get-event#response-ip-info-v6-address";
     // Only added after hydration (e.g. Mintlify expands nested response fields on hash navigation)
     playwrightState.htmlAfterLoadByUrl = { [url]: '<div id="response-ip-info-v6-address"></div>' };
@@ -551,27 +563,119 @@ describe("checkLinkWithPlaywright() hash check", () => {
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(playwrightState.visited).toEqual([url]);
-    expect(playwrightState.loadStateWaits).toEqual(["load"]);
-    expect(playwrightState.hashTimeouts).toEqual([3000, 15000]);
+    expect(playwrightState.hashTimeouts).toEqual([3000, 500]);
   });
 
-  it("reports a hash still missing after the long wait as 'hash not found'", async () => {
+  it("stops waiting for a missing anchor as soon as the page settled (loaded, no DOM changes)", async () => {
     const result = await checkLinkWithPlaywright("https://example.com/docs#never");
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
     expect(playwrightState.visited).toEqual(["https://example.com/docs#never"]);
-    expect(playwrightState.hashTimeouts).toEqual([3000, 15000]);
+    // One more check after the page was seen settled, no full budget
+    expect(playwrightState.hashTimeouts).toEqual([3000, 500]);
   });
 
-  it("still checks the anchor when the page never fires `load`", async () => {
-    playwrightState.loadStateTimesOut = true;
+  it.each([
+    ["never fires `load`", { loaded: false, quietFor: 10_000 }],
+    ["keeps changing its DOM", { loaded: true, quietFor: 100 }],
+  ])("waits for a missing anchor at most 15s in total when the page %s", async (_, activity) => {
+    vi.useFakeTimers();
+    try {
+      playwrightState.waitForTakesTimeout = true;
+      playwrightState.domActivity = activity;
+      const start = Date.now();
 
-    const result = await checkLinkWithPlaywright("https://example.com/slow#missing");
+      let finishedAt = Number.NaN;
+      const promise = checkLinkWithPlaywright("https://example.com/busy#missing").then((r) => {
+        finishedAt = Date.now();
+        return r;
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await promise;
 
-    // The `load` timeout is not reported as a broken page, the hash is checked anyway
-    expect(playwrightState.loadStateWaits).toEqual(["load"]);
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-    expect(playwrightState.hashTimeouts).toEqual([3000, 15000]);
+      expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+      // The regular wait is part of the overall budget (not 15s on top of it)
+      expect(playwrightState.hashTimeouts[0]).toBe(3000);
+      const waited = playwrightState.hashTimeouts.reduce<number>((sum, t) => sum + (t ?? 0), 0);
+      expect(waited).toBe(15_000);
+      expect(playwrightState.hashTimeouts.slice(1).every((t) => t !== undefined && t <= 500)).toBe(
+        true,
+      );
+      expect(finishedAt - start).toBe(15_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe("GitHub code line links", () => {
+    const file = "https://github.com/owner/repo/blob/main/a.js";
+    const codeView =
+      '<div data-line-number="1"></div><div data-line-number="2"></div><div data-line-number="3"></div>';
+
+    it.each(["#L2", "#L1-L3"])("finds line %s in the code view", async (hash) => {
+      playwrightState.html = codeView;
+
+      const result = await checkLinkWithPlaywright(`${file}${hash}`);
+
+      expect(result).toEqual({ ok: true, status: 200 });
+    });
+
+    it.each(["#L99", "#L99-L120"])(
+      "reports line %s beyond the end of the file without the long wait",
+      async (hash) => {
+        playwrightState.html = codeView;
+
+        const result = await withRun(async () => {
+          const checked = await checkLinkWithPlaywright(`${file}${hash}`);
+          expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
+          return checked;
+        });
+
+        expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+        // The code view (or the line) first, then the line itself briefly
+        expect(playwrightState.selectors.at(0)).toContain("[data-line-number]");
+        expect(playwrightState.selectors.at(1)).toContain('[data-line-number="99"]');
+        expect(playwrightState.selectors.at(1)).not.toContain("[data-line-number],");
+        expect(playwrightState.hashTimeouts).toEqual([15000, 3000]);
+      },
+    );
+
+    it("reports a line as not found when the code view never renders", async () => {
+      playwrightState.html = "<div>This file is too big to show</div>";
+
+      const result = await checkLinkWithPlaywright(`${file}#L2`);
+
+      expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
+      expect(playwrightState.hashTimeouts).toEqual([15000]);
+    });
+  });
+});
+
+describe("RequestActivity", () => {
+  it("is quiet without any request", () => {
+    expect(new RequestActivity().isQuiet(0)).toBe(true);
+  });
+
+  it("is busy for 2s after a request started or finished", () => {
+    const activity = new RequestActivity();
+    activity.started("a", 1000);
+    activity.ended("a", 4000);
+
+    expect(activity.isQuiet(5999)).toBe(false);
+    expect(activity.isQuiet(6000)).toBe(true);
+  });
+
+  it("is busy while a recent request is pending, ignores long-lived ones", () => {
+    const activity = new RequestActivity();
+    activity.started("long-poll", 0);
+
+    expect(activity.isQuiet(4999)).toBe(false);
+    expect(activity.isQuiet(5000)).toBe(true);
+
+    activity.started("api", 6000);
+    expect(activity.isQuiet(9000)).toBe(false);
+    activity.ended("api", 9000);
+    expect(activity.isQuiet(11000)).toBe(true);
   });
 });
 

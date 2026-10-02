@@ -3,6 +3,9 @@ import type { Page } from "playwright";
 import {
   HASH_FALLBACK_WAIT_TIMEOUT,
   HASH_WAIT_TIMEOUT,
+  LATE_ANCHOR_POLL_INTERVAL,
+  LATE_ANCHOR_QUIET_PERIOD,
+  LONG_LIVED_REQUEST_AGE,
   PAGE_OPERATION_TIMEOUT,
   withPage,
 } from "./browser";
@@ -14,7 +17,6 @@ import {
   isGithubUrl,
   isGithubWikiLink,
 } from "./github/gh_url";
-
 import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
 import { fetchWithHostLimit } from "./http";
 import { withTimeout } from "./limiter";
@@ -576,20 +578,12 @@ export const checkLinkWithFetch = async (
   return result;
 };
 
-async function isHashPresentPlaywright(
-  page: Page,
-  hash: string,
-  url: string,
-  timeout = HASH_WAIT_TIMEOUT,
-) {
-  // All values are escaped, so any hash produces a valid selector
-  const selectors = getHashSelectors(hash, url);
-  const locator = page.locator(selectors.join(", ")).first();
-
+/** Waits up to `timeout` for an element matching `selector` to be in the DOM */
+async function waitForSelectorAttached(page: Page, selector: string, timeout: number) {
   try {
     // Wait for the element to be in the DOM (client-side rendered pages add it later).
     // Anchors like `<a id="x"></a>` are valid targets but never "visible", so visibility is not required.
-    await locator.waitFor({ state: "attached", timeout: timeout });
+    await page.locator(selector).first().waitFor({ state: "attached", timeout });
     return true;
   } catch (error) {
     // If the timeout is reached, return false instead of throwing an error
@@ -601,12 +595,175 @@ async function isHashPresentPlaywright(
   }
 }
 
+// Line numbers of the GitHub code view (`<div data-line-number="12">`)
+const GITHUB_CODE_LINE_SELECTOR = "[data-line-number]";
+
+/**
+ * Network activity of a page (fed by its request events), to tell when it is idle-ish: no request started or
+ * finished for `LATE_ANCHOR_QUIET_PERIOD`, ignoring long-lived requests pending for more than
+ * `LONG_LIVED_REQUEST_AGE` (long polling, streams, hanging beacons).
+ */
+export class RequestActivity {
+  private readonly pending = new Map<unknown, number>();
+  private lastActivity = Number.NEGATIVE_INFINITY;
+
+  started(request: unknown, now = Date.now()) {
+    this.pending.set(request, now);
+    this.lastActivity = now;
+  }
+
+  ended(request: unknown, now = Date.now()) {
+    this.pending.delete(request);
+    this.lastActivity = now;
+  }
+
+  isQuiet(now = Date.now()): boolean {
+    if (now - this.lastActivity < LATE_ANCHOR_QUIET_PERIOD) {
+      return false;
+    }
+    for (const startedAt of this.pending.values()) {
+      if (now - startedAt < LONG_LIVED_REQUEST_AGE) {
+        return false;
+      }
+    }
+    return true;
+  }
+}
+
+const trackRequests = (page: Page): RequestActivity => {
+  const activity = new RequestActivity();
+  page.on("request", (request) => activity.started(request));
+  page.on("requestfinished", (request) => activity.ended(request));
+  page.on("requestfailed", (request) => activity.ended(request));
+  return activity;
+};
+
+/** State of the page DOM: `load` fired, and for how long no anchor-related element or attribute changed */
+type DomActivity = { loaded: boolean; quietFor: number };
+
+// Page global holding the time of the last DOM change (set by the observer installed by `getDomActivity`)
+const LAST_MUTATION_KEY = "__docsLinkCheckerLastMutation";
+
+/**
+ * Reads the DOM activity of the page, installing a `MutationObserver` on the first call (per document).
+ * Returns `undefined` if the page can't be evaluated right now (e.g. it is navigating).
+ */
+const getDomActivity = async (page: Page): Promise<DomActivity | undefined> => {
+  try {
+    return await page.evaluate((key) => {
+      const state = window as unknown as Record<string, number | undefined>;
+      const now = Date.now();
+      if (state[key] === undefined) {
+        state[key] = now;
+        new MutationObserver(() => {
+          state[key] = Date.now();
+        }).observe(document, {
+          subtree: true,
+          childList: true,
+          // Anchor-related attributes only, so animations (`style`, `class`) don't keep the page "busy"
+          attributes: true,
+          attributeFilter: ["id", "name", "href", "data-line-number"],
+        });
+      }
+      return { loaded: document.readyState === "complete", quietFor: now - (state[key] ?? now) };
+    }, LAST_MUTATION_KEY);
+  } catch (error) {
+    // The browser crashed: let the caller handle it
+    if (page.isClosed()) {
+      throw error;
+    }
+    return undefined;
+  }
+};
+
+/** Settings of the long wait for the anchor of the navigated URL (see `waitForLateAnchor`) */
+type LateAnchorWait = {
+  /** End of the overall budget (`Date.now()` based) */
+  deadline: number;
+  requests: RequestActivity;
+};
+
+/**
+ * Waits for an anchor rendered late, until the deadline or until the page settled: `load` fired, and neither the DOM
+ * nor the network changed for `LATE_ANCHOR_QUIET_PERIOD`. A settled page is not going to add the anchor anymore.
+ */
+async function waitForLateAnchor(
+  page: Page,
+  selector: string,
+  { deadline, requests }: LateAnchorWait,
+): Promise<boolean> {
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return false;
+    }
+    // Measured before the anchor check: if the page was already settled, a missing anchor is final
+    const dom = await getDomActivity(page);
+    const settled =
+      dom?.loaded === true && dom.quietFor >= LATE_ANCHOR_QUIET_PERIOD && requests.isQuiet();
+    if (
+      await waitForSelectorAttached(page, selector, Math.min(LATE_ANCHOR_POLL_INTERVAL, remaining))
+    ) {
+      return true;
+    }
+    if (settled) {
+      return false;
+    }
+  }
+}
+
+/**
+ * GitHub code line links (`#L12`, `#L12-L15`) are checked against the line numbers of the code view, not an anchor:
+ * once the code view is rendered, the line is there or the file is shorter. No long wait for late anchors.
+ */
+async function isGithubCodeLinePresent(page: Page, lineSelector: string) {
+  // The code view (any line number) or the line itself, the page might take a while to render the code view
+  if (
+    !(await waitForSelectorAttached(
+      page,
+      `${lineSelector}, ${GITHUB_CODE_LINE_SELECTOR}`,
+      HASH_FALLBACK_WAIT_TIMEOUT,
+    ))
+  ) {
+    return false;
+  }
+  // The code view is rendered: give the line a moment (long files are rendered progressively around the linked line)
+  return waitForSelectorAttached(page, lineSelector, HASH_WAIT_TIMEOUT);
+}
+
+/**
+ * Checks the hash of `url` in the page DOM: waits `HASH_WAIT_TIMEOUT` for its anchor, then (with `lateWait`, for the
+ * navigated URL only) longer for an anchor rendered late, see `waitForLateAnchor`.
+ */
+async function isHashPresentPlaywright(
+  page: Page,
+  hash: string,
+  url: string,
+  lateWait?: LateAnchorWait,
+) {
+  // All values are escaped, so any hash produces a valid selector
+  const selector = getHashSelectors(hash, url).join(", ");
+  if (isGithubCodeLineLink(url)) {
+    return isGithubCodeLinePresent(page, selector);
+  }
+  if (await waitForSelectorAttached(page, selector, HASH_WAIT_TIMEOUT)) {
+    return true;
+  }
+  if (!lateWait) {
+    return false;
+  }
+  // The page was opened with this URL's hash: the anchor might be rendered late (client-side rendered docs,
+  // sections expanded on hash navigation)
+  incrementMetric("playwrightLongHashWaits");
+  return waitForLateAnchor(page, selector, lateWait);
+}
+
 const getPlaywrightHashResult = async (
   page: Page,
   url: string,
   status: number,
   verbose: boolean,
-  hashTimeout = HASH_WAIT_TIMEOUT,
+  lateWait?: LateAnchorWait,
 ): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash.replace("#", "");
   if (!hash) {
@@ -618,7 +775,7 @@ const getPlaywrightHashResult = async (
     return { ok: true, status, note };
   }
 
-  if (!(await isHashPresentPlaywright(page, hash, url, hashTimeout))) {
+  if (!(await isHashPresentPlaywright(page, hash, url, lateWait))) {
     log(`Hash not found`, verbose);
     return { ok: false, status, error: "hash not found" };
   }
@@ -630,18 +787,6 @@ const getPlaywrightHashResult = async (
 const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
   result?.ok === false && result.error === "hash not found";
 
-/** Waits for the `load` event (bounded), a page that never finishes loading is still checked */
-const waitForFullLoad = async (page: Page) => {
-  try {
-    await page.waitForLoadState("load", { timeout: HASH_FALLBACK_WAIT_TIMEOUT });
-  } catch (error) {
-    // The browser crashed: let the caller handle it
-    if (page.isClosed()) {
-      throw error;
-    }
-  }
-};
-
 /** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
 const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkCheckResult =>
   results.get(url) ?? { ok: false, error: "unexpected error", errorDetail: `No result for ${url}` };
@@ -651,8 +796,9 @@ const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkChec
  * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
  * Some pages render different content per hash (e.g. SPA tabs), so a hash not found in the shared DOM gets
  * a dedicated navigation to its exact URL before it is reported as "hash not found".
- * The anchor of the navigated URL is waited for `HASH_WAIT_TIMEOUT` first, and if it is missing, again after the
- * full page load for up to `HASH_FALLBACK_WAIT_TIMEOUT` (anchors rendered late, see `checkUrlsInOneNavigation`).
+ * The anchor of the navigated URL is waited for `HASH_WAIT_TIMEOUT` first, and if it is missing, longer until the page
+ * settles, `HASH_FALLBACK_WAIT_TIMEOUT` in total (anchors rendered late, see `waitForLateAnchor`).
+ * GitHub code line links are checked against the rendered code view instead (see `isGithubCodeLinePresent`).
  * @returns results by URL
  */
 export async function checkUrlsOnPageWithPlaywright(
@@ -700,6 +846,8 @@ async function checkUrlsInOneNavigation(
     async (page) => {
       try {
         incrementMetric("playwrightNavigations");
+        // Before the navigation, so the page's own requests are seen (see `waitForLateAnchor`)
+        const requests = trackRequests(page);
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
         const response = await page.goto(firstUrl, {
           waitUntil: "domcontentloaded",
@@ -725,31 +873,30 @@ async function checkUrlsInOneNavigation(
         }
 
         const status = response.status();
+        // The overall budget of the long wait starts with the first check, it includes the regular wait
+        const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT, requests };
+        if (hasHash(firstUrl)) {
+          // Start observing DOM changes now, so the page can already be settled when the long wait starts
+          await getDomActivity(page);
+        }
         const results = new Map(
           await Promise.all(
             urls.map(
               async (url) =>
-                [url, await getPlaywrightHashResult(page, url, status, verbose)] as const,
+                [
+                  url,
+                  // Only the navigated URL gets the long wait: the page was opened with its hash
+                  await getPlaywrightHashResult(
+                    page,
+                    url,
+                    status,
+                    verbose,
+                    url === firstUrl ? lateWait : undefined,
+                  ),
+                ] as const,
             ),
           ),
         );
-        // The page was opened with the first URL's hash: if its anchor is still missing, it might be rendered late
-        // (client-side rendered docs, sections expanded on hash navigation). Wait for the full load and give it more
-        // time. Only for anchors not found yet, found anchors return as soon as they appear.
-        if (isHashNotFound(results.get(firstUrl))) {
-          incrementMetric("playwrightLongHashWaits");
-          await waitForFullLoad(page);
-          results.set(
-            firstUrl,
-            await getPlaywrightHashResult(
-              page,
-              firstUrl,
-              status,
-              verbose,
-              HASH_FALLBACK_WAIT_TIMEOUT,
-            ),
-          );
-        }
         return results;
       } catch (error) {
         // The browser crashed: let `withPage` relaunch it and retry
