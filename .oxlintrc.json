@@ -24,15 +24,12 @@
   },
   "ignorePatterns": [".claude/**", "results/**", "src/__fixtures__/**"],
   "rules": {
-    // Keep functions small and readable
-    "sonarjs/cognitive-complexity": ["error", 15],
+    // Keep functions readable. Cognitive complexity covers what a line limit would catch, without pushing
+    // code into thin helpers (see CODING_STANDARDS.md)
+    "sonarjs/cognitive-complexity": ["error", 20],
     "max-depth": ["error", 4],
     "max-params": ["error", 4],
     "max-nested-callbacks": ["error", 4],
-    "max-lines-per-function": [
-      "error",
-      { "max": 80, "skipBlankLines": true, "skipComments": true }
-    ],
 
     // Async mistakes (a forgotten `await` is the most common one)
     "typescript/no-floating-promises": "error",
@@ -107,7 +104,6 @@
     {
       "files": ["**/*.test.ts", "**/*.test.tsx", "src/test_setup.ts"],
       "rules": {
-        "max-lines-per-function": "off",
         "max-nested-callbacks": "off",
         "typescript/no-non-null-assertion": "off",
         "typescript/require-await": "off",

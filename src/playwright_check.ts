@@ -203,7 +203,7 @@ async function checkUrlsInOneNavigation(
     await assertDestinationAllowed(firstUrl);
   } catch (error) {
     if (error instanceof DestinationNotAllowedError) {
-      return sameResultFor(urls, getBlockedDestinationResult(error));
+      return new Map(urls.map((url) => [url, getBlockedDestinationResult(error)]));
     }
     throw error;
   }
@@ -235,9 +235,6 @@ async function checkUrlsInOneNavigation(
   }
 }
 
-const sameResultFor = (urls: string[], result: LinkCheckResult) =>
-  new Map(urls.map((url) => [url, result]));
-
 /** A navigation of `navigateAndCheck` to do again, after waiting for the host pauses outside of the page slot */
 type NavigationRetry =
   /** 502, 503 or 504, the host of `pausedUrl` (the final URL after redirects) is paused for the backoff */
@@ -245,92 +242,30 @@ type NavigationRetry =
   /** A host was paused while waiting for the page slot, nothing was requested */
   | { reason: "paused" };
 
-type NavigationOptions = {
-  verbose: boolean;
-  headless: boolean;
-  /** Server error retries done so far */
-  retries: number;
-  /** URLs whose host must not be paused when navigating */
-  pausedUrls: string[];
-};
-
 /**
- * A 502, 503 or 504 navigation response: a retry (the host of the response is paused for the backoff, see
- * `getServerErrorRetryDelay`), or the final result when the server asks to wait too long or the retries are used up
- */
-const handleServerError = (
-  response: PlaywrightResponse,
-  firstUrl: string,
-  retries: number,
-): NavigationRetry | LinkCheckResult => {
-  const status = response.status();
-  const delayMs = getServerErrorRetryDelay(retries, response.headers()["retry-after"] ?? null);
-  if (delayMs === undefined) {
-    return getServerErrorResult(status, response.statusText());
-  }
-  // After a redirect, the server error comes from the final URL: back off for its host
-  const failedUrl = response.url() || firstUrl;
-  console.log(formatServerErrorRetry(failedUrl, status, delayMs));
-  incrementMetric("serverErrorRetries");
-  // The page is closed right away, the retry waits for the pause outside of the page slot
-  getHostLimiter().pause(failedUrl, delayMs);
-  return { reason: "server error", pausedUrl: failedUrl };
-};
-
-/** Result for a navigation response the hashes can't be checked on (blocked or failed), `undefined` if it is OK */
-const getNavigationFailure = async (
-  response: PlaywrightResponse | null,
-): Promise<LinkCheckResult | undefined> => {
-  if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
-    return {
-      ok: false,
-      error: "could not check",
-      status: response.status(),
-      errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
-    };
-  }
-  if (!response || !OKAY_STATUS_CODES.includes(response.status())) {
-    return { ok: false, error: "broken link", status: response?.status() ?? 0 };
-  }
-  return undefined;
-};
-
-/** Checks the hash of every URL in the DOM of the navigated page, in parallel */
-const checkHashesOnPage = async (
-  page: Page,
-  urls: string[],
-  { status, verbose }: { status: number; verbose: boolean },
-): Promise<Map<string, LinkCheckResult>> => {
-  const [firstUrl] = urls;
-  // The overall budget of the long wait starts with the first check, it includes the regular wait
-  const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT };
-  return new Map(
-    await Promise.all(
-      urls.map(
-        async (url) =>
-          [
-            url,
-            // Only the navigated URL gets the long wait: the page was opened with its hash
-            await getPlaywrightHashResult(page, url, {
-              status,
-              verbose,
-              lateWait: url === firstUrl ? lateWait : undefined,
-            }),
-          ] as const,
-      ),
-    ),
-  );
-};
-
-/**
- * One navigation of `checkUrlsInOneNavigation`. Returns a retry after a 502, 503 or 504 that should be retried,
- * or when one of the `pausedUrls` hosts got paused while waiting for the page slot.
+ * One navigation of `checkUrlsInOneNavigation`. Returns a retry after a 502, 503 or 504 that should be retried
+ * (the host of the response is paused for the backoff, see `getServerErrorRetryDelay`), or when one of the
+ * `pausedUrls` hosts got paused while waiting for the page slot.
  */
 async function navigateAndCheck(
   urls: string[],
-  { verbose, headless, retries, pausedUrls }: NavigationOptions,
+  {
+    verbose,
+    headless,
+    retries,
+    pausedUrls,
+  }: {
+    verbose: boolean;
+    headless: boolean;
+    /** Server error retries done so far */
+    retries: number;
+    /** URLs whose host must not be paused when navigating */
+    pausedUrls: string[];
+  },
 ): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
   const [firstUrl = ""] = urls;
+  const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
+
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
   // Errors while navigating and checking the page are reported as broken links.
   return withPage(
@@ -347,22 +282,72 @@ async function navigateAndCheck(
           waitUntil: "domcontentloaded",
           timeout: PAGE_OPERATION_TIMEOUT,
         });
+
         log(`Navigation response: ${response?.status()}`, verbose);
         if (response && TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status())) {
-          const outcome = handleServerError(response, firstUrl, retries);
-          return "reason" in outcome ? outcome : sameResultFor(urls, outcome);
+          const status = response.status();
+          const delayMs = getServerErrorRetryDelay(
+            retries,
+            response.headers()["retry-after"] ?? null,
+          );
+          if (delayMs === undefined) {
+            return sameForAll(getServerErrorResult(status, response.statusText()));
+          }
+          // After a redirect, the server error comes from the final URL: back off for its host
+          const failedUrl = response.url() || firstUrl;
+          console.log(formatServerErrorRetry(failedUrl, status, delayMs));
+          incrementMetric("serverErrorRetries");
+          // The page is closed right away, the retry waits for the pause outside of the page slot
+          getHostLimiter().pause(failedUrl, delayMs);
+          return { reason: "server error", pausedUrl: failedUrl };
         }
-        const failure = await getNavigationFailure(response);
-        if (failure || !response) {
-          return sameResultFor(urls, failure ?? { ok: false, error: "broken link", status: 0 });
+
+        if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
+          return sameForAll({
+            ok: false,
+            error: "could not check",
+            status: response.status(),
+            errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
+          });
         }
-        return await checkHashesOnPage(page, urls, { status: response.status(), verbose });
+
+        if (!response || !OKAY_STATUS_CODES.includes(response.status())) {
+          return sameForAll({
+            ok: false,
+            error: "broken link",
+            status: response?.status() ?? 0,
+          });
+        }
+
+        const status = response.status();
+        // The overall budget of the long wait starts with the first check, it includes the regular wait
+        const lateWait = { deadline: Date.now() + HASH_FALLBACK_WAIT_TIMEOUT };
+        return new Map(
+          await Promise.all(
+            urls.map(
+              async (url) =>
+                [
+                  url,
+                  // Only the navigated URL gets the long wait: the page was opened with its hash
+                  await getPlaywrightHashResult(page, url, {
+                    status,
+                    verbose,
+                    lateWait: url === firstUrl ? lateWait : undefined,
+                  }),
+                ] as const,
+            ),
+          ),
+        );
       } catch (error) {
         // The browser crashed: let `withPage` relaunch it and retry
         if (page.isClosed()) {
           throw error;
         }
-        return sameResultFor(urls, { ok: false, error: "broken link", errorDetail: String(error) });
+        return sameForAll({
+          ok: false,
+          error: "broken link",
+          errorDetail: String(error),
+        });
       }
     },
     { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined, headless },

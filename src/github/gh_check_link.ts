@@ -44,19 +44,6 @@ const SECTION_CHECKS = new Map<string, SectionCheck>([
   ["commit", ({ owner, repo, pathParts }) => checkGitHubCommitLink(owner, repo, pathParts)],
 ]);
 
-/** A user or an organization (`https://github.com/owner`) */
-const checkOwnerLink = async (owner: string, url: string): Promise<LinkCheckResult> => {
-  const result = await checkIfOwnerExists(owner);
-  // Not an account: maybe one of GitHub's own pages missing from the reserved routes, check the page itself
-  if (!result.ok && result.error === "broken link") {
-    const page = await checkLinkWithFetch(url);
-    if (page.ok) {
-      return page;
-    }
-  }
-  return result;
-};
-
 /**
  * Use GitHub API (Octokit) to check if link is valid
  * Because using `fetch` run into rate limit issues really fast
@@ -86,7 +73,15 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
 
   // `https://github.com/owner` (with or without a trailing slash): a user or an organization, not a repository
   if (!repo) {
-    return checkOwnerLink(owner, url);
+    const result = await checkIfOwnerExists(owner);
+    // Not an account: maybe one of GitHub's own pages missing from the reserved routes, check the page itself
+    if (!result.ok && result.error === "broken link") {
+      const page = await checkLinkWithFetch(url);
+      if (page.ok) {
+        return page;
+      }
+    }
+    return result;
   }
 
   const [section, ...sectionParts] = pathParts;
