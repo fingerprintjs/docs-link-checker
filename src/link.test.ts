@@ -20,6 +20,10 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     // HTML per navigated URL (hash included), falls back to `html`
     htmlByUrl: {} as Record<string, string>,
     status: 200,
+    // Statuses of the next navigations (one per `goto`), then `status`
+    statuses: [] as number[],
+    // Headers of the navigation response (lowercase names, like Playwright)
+    headers: {} as Record<string, string>,
     // Simulated navigation time
     gotoDelayMs: 0,
     // Timeouts passed to `goto` and set as page defaults
@@ -67,9 +71,11 @@ vi.mock("playwright", () => ({
                 await new Promise((resolve) => setTimeout(resolve, playwrightState.gotoDelayMs));
               }
               navigatedAt = Date.now();
+              const status = playwrightState.statuses.shift() ?? playwrightState.status;
               return {
-                status: () => playwrightState.status,
+                status: () => status,
                 statusText: () => "",
+                headers: () => playwrightState.headers,
                 text: () =>
                   playwrightState.responseBodyHangs
                     ? new Promise<string>(() => {})
@@ -108,6 +114,8 @@ vi.mock("playwright", () => ({
   },
 }));
 
+import { setServerErrorRetryDelays } from "./http";
+import { HostLimiter } from "./limiter";
 import {
   checkLinks,
   checkLinkWithFetch,
@@ -118,6 +126,7 @@ import {
 } from "./link";
 import { withRun } from "./run";
 import { getRunContext } from "./run_context";
+import { setHostLimiter } from "./utils";
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -146,6 +155,8 @@ beforeEach(() => {
   playwrightState.hashTimeouts = [];
   playwrightState.waitForTakesTimeout = false;
   playwrightState.status = 200;
+  playwrightState.statuses = [];
+  playwrightState.headers = {};
   checkLinkWithGithubApiMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -153,6 +164,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Host pauses (server error backoffs) don't leak into other tests
+  setHostLimiter(undefined);
+  setServerErrorRetryDelays(undefined);
 });
 
 describe("checkLinks() deduplication", () => {
@@ -278,6 +292,8 @@ describe("checkLinks() Playwright escalation", () => {
   it.each(fetchCases)(
     "fetch result: %s -> re-checked with Playwright: %s",
     async (_name, handler, escalate) => {
+      // No backoff for the 503 case
+      setServerErrorRetryDelays([0]);
       stubFetch(handler);
       const href = "https://example.com/some/page";
 
@@ -917,6 +933,166 @@ describe("checkLinks() Playwright hash fallback", () => {
     await checkLinks({ links: [link("https://example.com/p#a"), link("https://example.com/p#b")] });
 
     expect(playwrightState.visited).toEqual(["https://example.com/p#a"]);
+  });
+});
+
+describe("server errors (502, 503, 504)", () => {
+  /** Runs `check` with fake timers, returns the result and how long it took (simulated time) */
+  const withFakeTimers = async <T>(check: () => Promise<T>) => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.now();
+      let finishedAt = Number.NaN;
+      const promise = check().then((r) => {
+        finishedAt = Date.now();
+        return r;
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      return { result: await promise, took: finishedAt - start };
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it("fetch: a HEAD 503 falls back to GET right away, a successful GET is OK", async () => {
+    let failures = 1;
+    const fetchMock = stubFetch(() =>
+      failures-- > 0 ? new Response("busy", { status: 503 }) : new Response("ok", { status: 200 }),
+    );
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithFetch("https://busy.example.com/page"),
+    );
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    // HEAD is not retried itself, its GET fallback is
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
+    expect(took).toBe(0);
+  });
+
+  it.each([502, 503, 504])(
+    "fetch: reports a %s that persists after the retries as 'could not check', not broken",
+    async (status) => {
+      const fetchMock = stubFetch(() => new Response("busy", { status }));
+
+      const { result, took } = await withFakeTimers(() =>
+        checkLinkWithFetch("https://busy.example.com/page"),
+      );
+
+      expect(result).toMatchObject({ ok: false, error: "could not check", status });
+      expect(result.ok === false && result.errorDetail).toContain(`Server error ${status}`);
+      // 1 HEAD, then GET with 2 retries after 2s and 5s
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
+        "HEAD",
+        "GET",
+        "GET",
+        "GET",
+      ]);
+      expect(took).toBe(7000);
+    },
+  );
+
+  it("fetch: retries a GET (page with a hash) 503 and checks the hash", async () => {
+    let failures = 2;
+    const fetchMock = stubFetch(() =>
+      failures-- > 0
+        ? new Response("busy", { status: 503 })
+        : new Response('<h2 id="x">X</h2>', { status: 200 }),
+    );
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithFetch("https://busy.example.com/page#x"),
+    );
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(took).toBe(7000);
+  });
+
+  it("Playwright: retries the navigation after a 503 and checks the code line", async () => {
+    playwrightState.statuses = [503];
+    playwrightState.html = '<div data-line-number="167"></div>';
+    const url =
+      "https://github.com/WebKit/WebKit/blob/167dc5118a3f6228a19df40e673ea0a6d03b9bec/Source/WebCore/Modules/webaudio/AudioBuffer.cpp#L167";
+
+    const { result, took } = await withFakeTimers(() =>
+      withRun(async () => {
+        const checked = await checkLinkWithPlaywright(url);
+        expect(getRunContext()!.metrics.counters.serverErrorRetries).toBe(1);
+        return checked;
+      }),
+    );
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toEqual([url, url]);
+    expect(took).toBe(2000);
+  });
+
+  it("Playwright: respects Retry-After of a 503 navigation", async () => {
+    playwrightState.statuses = [503];
+    playwrightState.headers = { "retry-after": "8" };
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithPlaywright("https://busy.example.com/page"),
+    );
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toHaveLength(2);
+    expect(took).toBe(8000);
+  });
+
+  it("Playwright: gives up right away when Retry-After is longer than the maximum delay", async () => {
+    playwrightState.status = 503;
+    playwrightState.headers = { "retry-after": "120" };
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithPlaywright("https://busy.example.com/page"),
+    );
+
+    expect(result).toMatchObject({ ok: false, error: "could not check", status: 503 });
+    expect(playwrightState.visited).toHaveLength(1);
+    expect(took).toBe(0);
+  });
+
+  it("checkLinks(): a GitHub code line link still 503 after the retries is 'could not check'", async () => {
+    playwrightState.status = 503;
+    const href =
+      "https://github.com/chromium/chromium/blob/main/components/lookalikes/core/lookalike_url_util.cc#L593";
+
+    const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].result).toMatchObject({
+      ok: false,
+      error: "could not check",
+      status: 503,
+    });
+    // 1 navigation and 2 retries, no more
+    expect(playwrightState.visited).toEqual([href, href, href]);
+  });
+
+  it("checkLinks(): a fetch 503 persisting in the browser too is 'could not check'", async () => {
+    stubFetch(() => new Response(null, { status: 503 }));
+    playwrightState.status = 503;
+    const href = "https://busy.example.com/page";
+
+    const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
+
+    expect(result.results[0].result).toMatchObject({ ok: false, error: "could not check" });
+    expect(playwrightState.visited).toEqual([href, href, href]);
+  });
+
+  it("Playwright: waits for a host pause (e.g. set by a fetch server error) before navigating", async () => {
+    const limiter = new HostLimiter(8);
+    setHostLimiter(limiter);
+
+    const { result, took } = await withFakeTimers(async () => {
+      limiter.pause("https://busy.example.com/", 3000);
+      return checkLinkWithPlaywright("https://busy.example.com/page");
+    });
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(took).toBe(3000);
   });
 });
 

@@ -328,3 +328,45 @@ describe("checkLinkWithGithubApi() with GitHub's own pages", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("GitHub API server errors", () => {
+  const serverError = (status: number) =>
+    Object.assign(new Error("Service Unavailable"), { status });
+
+  it("reports a repository check failing with a 5xx (after Octokit's retries) as unexpected error, not broken", async () => {
+    octokit.repos.get.mockRejectedValue(serverError(503));
+
+    const result = await checkLinkWithGithubApi("https://github.com/owner/busy-repo");
+
+    // Unexpected errors from the API are re-checked with Playwright (see `shouldRecheckWithPlaywright`)
+    expect(result).toMatchObject({ ok: false, error: "unexpected error", status: 503 });
+  });
+
+  it("still reports a missing repository as broken", async () => {
+    octokit.repos.get.mockRejectedValue(octokit.notFound());
+
+    const result = await checkLinkWithGithubApi("https://github.com/owner/missing-repo");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+
+  it("reports a tree check failing with a 5xx as unexpected error, not broken", async () => {
+    octokit.git.getRef.mockRejectedValue(octokit.notFound());
+    octokit.git.getCommit.mockRejectedValue(serverError(502));
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/some-branch");
+
+    expect(result).toMatchObject({ ok: false, error: "unexpected error", status: 502 });
+  });
+
+  it("still reports a missing branch or commit as broken", async () => {
+    octokit.git.getRef.mockRejectedValue(octokit.notFound());
+    octokit.git.getCommit.mockRejectedValue(
+      Object.assign(new Error("Unprocessable"), { status: 422 }),
+    );
+
+    const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/missing");
+
+    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+  });
+});

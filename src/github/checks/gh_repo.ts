@@ -1,5 +1,5 @@
 import type { LinkCheckResult } from "../../types";
-import { getRepoCached, getUserCached } from "../gh_cache";
+import { getRepoCached, getUserCached, isTransientApiError } from "../gh_cache";
 
 /**
  * Check if a repository exists
@@ -14,7 +14,16 @@ export const checkIfRepositoryExists = async (
   try {
     await getRepoCached(owner, repo);
     return { ok: true, status: 200 };
-  } catch {
+  } catch (error) {
+    // Server errors (Octokit already retried them) and rate limits say nothing about the repository
+    if (isTransientApiError(error)) {
+      return {
+        ok: false,
+        error: "unexpected error",
+        status: (error as { status?: number }).status,
+        errorDetail: String(error),
+      };
+    }
     return {
       ok: false,
       error: "broken link",

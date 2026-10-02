@@ -1,7 +1,7 @@
 import type { RequestError } from "@octokit/types";
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { getContentCached } from "../gh_cache";
+import { getContentCached, isTransientApiError } from "../gh_cache";
 import { getMyOctokit } from "../github_client";
 
 /**
@@ -47,6 +47,19 @@ export const checkGitHubTreeLink = async (
     if (commitResult.data) {
       console.log("no path specified, commit exists");
       return { ok: true, status: 200 };
+    }
+
+    // Server errors (Octokit already retried them) and rate limits say nothing about the branch or commit
+    const failure = [branchResult.error, commitResult.error].find(
+      (error) => error && isTransientApiError(error),
+    );
+    if (failure) {
+      return {
+        ok: false,
+        error: "unexpected error",
+        status: (failure as Partial<RequestError>).status,
+        errorDetail: String(failure),
+      };
     }
 
     return {

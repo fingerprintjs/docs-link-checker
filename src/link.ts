@@ -15,7 +15,12 @@ import {
   isGithubWikiLink,
 } from "./github/gh_url";
 import { type AnchorIndex, buildAnchorIndex, getHashSelectors, isHashInAnchorIndex } from "./hash";
-import { fetchWithHostLimit } from "./http";
+import {
+  fetchWithHostLimit,
+  formatServerErrorRetry,
+  getServerErrorRetryDelay,
+  MAX_SERVER_ERROR_RETRIES,
+} from "./http";
 import { withTimeout } from "./limiter";
 import { withRun } from "./run";
 import { incrementMetric, timePhase } from "./run_context";
@@ -23,12 +28,14 @@ import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import {
   CONCURRENCY_LIMIT,
   FORBIDDEN_STATUS_CODES,
+  getHostLimiter,
   getRandomUserAgent,
   log,
   OKAY_STATUS_CODES,
   PLAYWRIGHT_CONCURRENCY_LIMIT,
   parallelProcess,
   TASK_TIMEOUT,
+  TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./utils";
 
 export { closeBrowser } from "./browser";
@@ -80,6 +87,17 @@ export const getBlockedDestinationResult = (
   error: "could not check",
   errorDetail: error.message,
   destinationBlocked: true,
+});
+
+/**
+ * Result for a 502, 503 or 504 that persisted after the retries (`TRANSIENT_SERVER_ERROR_STATUS_CODES`): the server
+ * is overloaded or rate limiting (github.com returns 503 under load), it says nothing about the link
+ */
+export const getServerErrorResult = (status: number, statusText: string): LinkCheckResult => ({
+  ok: false,
+  error: "could not check",
+  status,
+  errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
 });
 
 // Status codes returned by fetch that might be caused by bot protection, rate limiting or the request itself
@@ -390,13 +408,18 @@ export const fetchPage = async (
 
   // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
   // unread bodies are cancelled (see `fetchWithHostLimit`)
+  // A HEAD request is not retried after a server error: the GET fallback is (see `shouldRetryHeadWithGet`), so a
+  // failing server gets at most 1 HEAD and `1 + MAX_SERVER_ERROR_RETRIES` GET requests
   const request = (method: "GET" | "HEAD") =>
-    fetchWithHostLimit(url, { method, headers }, async (response) =>
-      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
-      // An error page body is kept for the error detail (HEAD responses have none).
-      method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status))
-        ? response.text()
-        : "",
+    fetchWithHostLimit(
+      url,
+      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : undefined },
+      async (response) =>
+        // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
+        // An error page body is kept for the error detail (HEAD responses have none).
+        method === "GET" && (needBody || !OKAY_STATUS_CODES.includes(response.status))
+          ? response.text()
+          : "",
     );
 
   try {
@@ -419,6 +442,14 @@ export const fetchPage = async (
           // Raw header without a unit: it can be seconds or an HTTP date
           errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
         },
+      };
+    }
+
+    // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
+    if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+      return {
+        ok: false,
+        result: getServerErrorResult(response.status, response.statusText),
       };
     }
 
@@ -756,10 +787,36 @@ async function checkUrlsInOneNavigation(
     throw error;
   }
 
+  const hostLimiter = getHostLimiter();
+  for (let retries = 0; ; retries++) {
+    // Back off while the host is paused (after a server error or a 429 of this or another check), before taking a
+    // page slot, so the other checks keep the browser busy in the meantime
+    await hostLimiter.waitUntilResumed(firstUrl);
+    const outcome = await navigateAndCheck(urls, verbose, headless, retries);
+    if (outcome !== "retry") {
+      return outcome;
+    }
+  }
+}
+
+/**
+ * One navigation of `checkUrlsInOneNavigation`. Returns `"retry"` after a 502, 503 or 504 that should be retried
+ * (the host is paused for the backoff, see `getServerErrorRetryDelay`).
+ * @param retries server error retries done so far
+ */
+async function navigateAndCheck(
+  urls: string[],
+  verbose: boolean,
+  headless: boolean,
+  retries: number,
+): Promise<Map<string, LinkCheckResult> | "retry"> {
+  const [firstUrl] = urls;
+  const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
+
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
   // Errors while navigating and checking the page are reported as broken links.
   return withPage(
-    async (page) => {
+    async (page): Promise<Map<string, LinkCheckResult> | "retry"> => {
       try {
         incrementMetric("playwrightNavigations");
         // Heavy resources are blocked (see `withPage`), anchors rendered client-side are waited for below
@@ -769,6 +826,22 @@ async function checkUrlsInOneNavigation(
         });
 
         log(`Navigation response: ${response?.status()}`, verbose);
+        if (response && TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status())) {
+          const status = response.status();
+          const delayMs = getServerErrorRetryDelay(
+            retries,
+            response.headers()["retry-after"] ?? null,
+          );
+          if (delayMs === undefined) {
+            return sameForAll(getServerErrorResult(status, response.statusText()));
+          }
+          console.log(formatServerErrorRetry(firstUrl, status, delayMs));
+          incrementMetric("serverErrorRetries");
+          // The page is closed right away, the retry waits for the pause outside of the page slot
+          getHostLimiter().pause(firstUrl, delayMs);
+          return "retry";
+        }
+
         if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
           return sameForAll({
             ok: false,

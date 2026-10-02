@@ -53,6 +53,13 @@ export class Semaphore {
 
 type HostState = { semaphore: Semaphore; pausedUntil: number };
 
+/** Waits until the pause of the host ends (a pause can be extended while waiting) */
+const waitForPause = async (state: HostState) => {
+  while (state.pausedUntil > Date.now()) {
+    await sleep(state.pausedUntil - Date.now());
+  }
+};
+
 /**
  * Limits concurrent requests per hostname (one semaphore per host).
  * A host can also be paused (e.g. after a 429 with `Retry-After`), new requests to it wait until the pause ends.
@@ -85,11 +92,20 @@ export class HostLimiter {
       return fn();
     }
     return state.semaphore.run(async () => {
-      while (state.pausedUntil > Date.now()) {
-        await sleep(state.pausedUntil - Date.now());
-      }
+      await waitForPause(state);
       return fn();
     });
+  }
+
+  /**
+   * Waits until the URL's host is no longer paused, without taking a slot. For requests that are not limited per host
+   * but should still back off (Playwright navigations).
+   */
+  async waitUntilResumed(url: string): Promise<void> {
+    const state = this.getHost(url);
+    if (state) {
+      await waitForPause(state);
+    }
   }
 
   /** Pauses new requests to the URL's host for `ms` milliseconds */

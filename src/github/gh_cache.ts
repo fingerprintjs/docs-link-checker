@@ -14,6 +14,15 @@ export type ContentResponse = Awaited<ReturnType<Octokit["repos"]["getContent"]>
 // "Not found" is a definitive answer worth caching. Other errors (rate limits, 5xx) are retried on the next call.
 const isNotFound = (error: unknown) => (error as { status?: number } | undefined)?.status === 404;
 
+/**
+ * A failed API request that says nothing about the link: a server error or rate limit (after Octokit's own retries),
+ * or no HTTP response at all (network error)
+ */
+export const isTransientApiError = (error: unknown): boolean => {
+  const status = (error as { status?: number } | undefined)?.status;
+  return status === undefined || status === 429 || status >= 500;
+};
+
 const cachedRequest = <T>(key: string, request: () => Promise<T>): Promise<T> =>
   runCached(`github:${key}`, request, {
     cacheError: isNotFound,
