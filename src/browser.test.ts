@@ -92,7 +92,7 @@ vi.mock("playwright", () => {
 import { getBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
-import { closeRunBrowser,withRun } from "./run";
+import { closeRunBrowser, withRun } from "./run";
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
