@@ -21,8 +21,17 @@ export const parseLineAnchor = (
  * Number of lines GitHub shows for a text file: a trailing newline does not start a new line (`"a\nb\n"` has 2 lines),
  * an empty file has none
  */
-export const countLines = (text: string): number =>
-  text === "" ? 0 : text.replace(/\n$/, "").split("\n").length;
+export const countLines = (text: string): number => {
+  if (text === "") {
+    return 0;
+  }
+  // One pass over the text without allocating per line (files can have millions of lines)
+  let newlines = 0;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    newlines++;
+  }
+  return text.endsWith("\n") ? newlines : newlines + 1;
+};
 
 /**
  * Checks a GitHub line anchor (without `#`, see `parseLineAnchor`) against the number of lines of a file.

@@ -183,7 +183,7 @@ jobs:
 * Fingerprint.com is only checked for links to our resources and GitHub, external links trigger too many false positives for now.
 * Link [text fragments](https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments) are not checked.
 * Code quality, test coverage and CI does not meet production standards.
-* Github `#L{number}` links are only checked against the number of lines of the file (not, e.g., whether the line still shows what the link meant).
+* GitHub `#L{number}` links are only checked against the number of lines of the file (not, e.g., whether the line still shows what the link meant).
 
 ## Motivation
 
@@ -207,7 +207,7 @@ So a proper documentation link checker must:
 - [x] Nicer Readme
 - [x] Clean up promise pool
 - [x] Run tests in CI
-- [x] Fix Github `#L{number}` links occasional false positives (checked with the GitHub API)
+- [x] Fix GitHub `#L{number}` links occasional false positives (checked with the GitHub API)
 - [ ] Add more tests for everything
 - [ ] Nicer report styling
 - [x] Add `eslint`/`biome`

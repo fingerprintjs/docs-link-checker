@@ -987,7 +987,7 @@ describe("server errors (502, 503, 504)", () => {
     }
   };
 
-  it("fetch: a HEAD 503 falls back to GET right away, a successful GET is OK", async () => {
+  it("fetch: a HEAD 503 falls back to GET after the backoff, a successful GET is OK", async () => {
     let failures = 1;
     const fetchMock = stubFetch(() =>
       failures-- > 0 ? new Response("busy", { status: 503 }) : new Response("ok", { status: 200 }),
@@ -998,8 +998,39 @@ describe("server errors (502, 503, 504)", () => {
     );
 
     expect(result).toEqual({ ok: true, status: 200 });
-    // HEAD is not retried itself, its GET fallback is
+    // HEAD is not retried itself, its GET fallback is (after the first backoff, with the host paused)
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
+    expect(took).toBe(2000);
+  });
+
+  it("fetch: a HEAD 503 waits for its Retry-After before the GET fallback", async () => {
+    let failures = 1;
+    const fetchMock = stubFetch(() =>
+      failures-- > 0
+        ? new Response(null, { status: 503, headers: { "Retry-After": "8" } })
+        : new Response("ok", { status: 200 }),
+    );
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithFetch("https://busy.example.com/page"),
+    );
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(took).toBe(8000);
+  });
+
+  it("fetch: gives up on a HEAD 503 whose Retry-After is too long, without a GET", async () => {
+    const fetchMock = stubFetch(
+      () => new Response(null, { status: 503, headers: { "Retry-After": "120" } }),
+    );
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithFetch("https://busy.example.com/page"),
+    );
+
+    expect(result).toMatchObject({ ok: false, error: "could not check", status: 503 });
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
     expect(took).toBe(0);
   });
 
@@ -1014,14 +1045,9 @@ describe("server errors (502, 503, 504)", () => {
 
       expect(result).toMatchObject({ ok: false, error: "could not check", status });
       expect(result.ok === false && result.errorDetail).toContain(`Server error ${status}`);
-      // 1 HEAD, then GET with 2 retries after 2s and 5s
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
-        "HEAD",
-        "GET",
-        "GET",
-        "GET",
-      ]);
-      expect(took).toBe(7000);
+      // 1 HEAD, then (after 2s) a GET as its first retry and one more GET retry (after 2s)
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET", "GET"]);
+      expect(took).toBe(4000);
     },
   );
 

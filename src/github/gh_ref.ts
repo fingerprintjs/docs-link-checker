@@ -71,18 +71,16 @@ export const getRefPathContent = async (
     return { found: false, error: listError };
   }
   const maxRefSegments = segments.length - (requirePath ? 1 : 0);
-  const refSegmentCounts = candidates
-    .map((name) => name.split("/").length)
-    .filter(
-      (count) =>
-        count >= 2 &&
-        count <= maxRefSegments &&
-        candidates.includes(segments.slice(0, count).join("/")),
-    )
-    // Longest first: a branch `a/b` and a tag `a/b/c` can both exist
-    .sort((a, b) => b - a);
+  const candidateRefs = new Set(candidates);
+  // The URL prefixes that are listed refs, longest first: a branch `a/b` and a tag `a/b/c` can both exist
+  const refSegmentCounts: number[] = [];
+  for (let count = maxRefSegments; count >= 2; count--) {
+    if (candidateRefs.has(segments.slice(0, count).join("/"))) {
+      refSegmentCounts.push(count);
+    }
+  }
 
-  for (const count of new Set(refSegmentCounts)) {
+  for (const count of refSegmentCounts) {
     const ref = segments.slice(0, count).join("/");
     const refPath = segments.slice(count).join("/");
     if (!refPath) {

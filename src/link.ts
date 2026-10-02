@@ -393,12 +393,12 @@ export const fetchPage = async (
 
   // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
   // unread bodies are cancelled (see `fetchWithHostLimit`)
-  // A HEAD request is not retried after a server error: the GET fallback is (see `shouldRetryHeadWithGet`), so a
-  // failing server gets at most 1 HEAD and `1 + MAX_SERVER_ERROR_RETRIES` GET requests
-  const request = (method: "GET" | "HEAD") =>
+  // A HEAD request is not retried after a server error: the GET fallback is (see `shouldRetryHeadWithGet`), and the
+  // HEAD counts as the first attempt, so a failing server gets at most `1 + MAX_SERVER_ERROR_RETRIES` requests
+  const request = (method: "GET" | "HEAD", serverErrorRetries?: number) =>
     fetchWithHostLimit(
       url,
-      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : undefined },
+      { method, headers, serverErrorRetries: method === "HEAD" ? 0 : serverErrorRetries },
       async (response) =>
         // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
         // An error page body is kept for the error detail (HEAD responses have none).
@@ -411,8 +411,21 @@ export const fetchPage = async (
     let response = await request(needBody ? "GET" : "HEAD");
     // Some servers don't support (or block) HEAD requests, or answer them differently, retry once with GET
     if (!needBody && shouldRetryHeadWithGet(response.status)) {
+      // A server error on HEAD follows the server error retry policy before the GET: wait for `Retry-After` (or the
+      // backoff) with the whole host paused, or give up when it asks for too long. The GET is its first retry.
+      let getServerErrorRetries: number | undefined;
+      if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
+        const delayMs = getServerErrorRetryDelay(0, response.headers.get("Retry-After"));
+        if (delayMs === undefined) {
+          return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
+        }
+        console.log(formatServerErrorRetry(url, response.status, delayMs));
+        incrementMetric("serverErrorRetries");
+        getHostLimiter().pause(url, delayMs);
+        getServerErrorRetries = MAX_SERVER_ERROR_RETRIES - 1;
+      }
       log(`HEAD returned ${response.status}, retrying with GET`, verbose);
-      response = await request("GET");
+      response = await request("GET", getServerErrorRetries);
     }
 
     // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
