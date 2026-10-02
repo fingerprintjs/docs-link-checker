@@ -1,5 +1,5 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { runCached } from "./run_context";
 
 /**
@@ -17,6 +17,10 @@ import { runCached } from "./run_context";
  * - Limitation: `fetch` resolves the name again when connecting, so a DNS rebinding attack (a name answering
  *   with a public address to the check and a private one right after) is not prevented. That would need
  *   connecting to the checked address, which Node's built-in `fetch` doesn't allow without extra dependencies.
+ * - IPv4-compatible (`::a.b.c.d`), IPv4-translated (`::ffff:0:a.b.c.d`), NAT64 (`64:ff9b::a.b.c.d`) and 6to4
+ *   (`2002:a.b.c.d::`) forms are blocked wholesale, including ones embedding a public IPv4 address: docs never
+ *   link to them, and `net.BlockList` has no way to unwrap them to apply the IPv4 rules (unlike the IPv4-mapped
+ *   form `::ffff:a.b.c.d`, which it unwraps on its own).
  *
  * Set `LINK_CHECK_ALLOW_PRIVATE_HOSTS=true` (CLI `--allow-private-hosts`) to allow them, e.g. to check a local
  * dev server. Only do that for trusted documents.
@@ -35,110 +39,40 @@ export class DestinationNotAllowedError extends Error {
   }
 }
 
-const parseIPv4 = (address: string): number[] | undefined => {
-  const parts = address.split(".");
-  if (parts.length !== 4) return undefined;
-  const bytes = parts.map((part) => (/^\d{1,3}$/.test(part) ? Number(part) : Number.NaN));
-  return bytes.every((byte) => byte >= 0 && byte <= 255) ? bytes : undefined;
-};
+const blockedAddresses = new BlockList();
+const addIPv4 = (net: string, prefix: number) => blockedAddresses.addSubnet(net, prefix, "ipv4");
+const addIPv6 = (net: string, prefix: number) => blockedAddresses.addSubnet(net, prefix, "ipv6");
 
-/** Non-public IPv4 ranges, by the first bytes of the address (4 bytes, see `parseIPv4`) */
-const isNonPublicIPv4 = ([a = 0, b = 0, c = 0]: number[]): boolean =>
-  a === 0 || // "this network" 0.0.0.0/8 (unspecified)
-  a === 10 || // private 10/8
-  a === 127 || // loopback 127/8
-  (a === 100 && b >= 64 && b <= 127) || // CGNAT 100.64/10
-  (a === 169 && b === 254) || // link-local 169.254/16 (cloud metadata)
-  (a === 172 && b >= 16 && b <= 31) || // private 172.16/12
-  (a === 192 && b === 168) || // private 192.168/16
-  (a === 192 && b === 0 && c === 0) || // IETF protocol assignments 192.0.0/24
-  (a === 198 && (b === 18 || b === 19)) || // benchmarking 198.18/15
-  a >= 224; // multicast 224/4, reserved 240/4 and broadcast
+addIPv4("0.0.0.0", 8); // "this network" (unspecified)
+addIPv4("10.0.0.0", 8); // private
+addIPv4("127.0.0.0", 8); // loopback
+addIPv4("100.64.0.0", 10); // CGNAT
+addIPv4("169.254.0.0", 16); // link-local (cloud metadata)
+addIPv4("172.16.0.0", 12); // private
+addIPv4("192.168.0.0", 16); // private
+addIPv4("192.0.0.0", 24); // IETF protocol assignments
+addIPv4("198.18.0.0", 15); // benchmarking
+addIPv4("224.0.0.0", 4); // multicast
+addIPv4("240.0.0.0", 4); // reserved, incl. broadcast 255.255.255.255
 
-const toGroups = (part: string): number[] =>
-  part === ""
-    ? []
-    : part
-        .split(":")
-        .map((group) => (/^[\da-f]{1,4}$/.test(group) ? Number.parseInt(group, 16) : Number.NaN));
-
-/** Expands an IPv6 address to 8 16-bit groups (also with an embedded dotted IPv4 tail), `undefined` if invalid */
-export const parseIPv6 = (address: string): number[] | undefined => {
-  let text = address.toLowerCase();
-  const zone = text.indexOf("%");
-  if (zone !== -1) text = text.slice(0, zone);
-
-  // `::ffff:1.2.3.4`: the dotted IPv4 tail is the last two groups
-  let tail: number[] = [];
-  const lastColon = text.lastIndexOf(":");
-  if (text.slice(lastColon + 1).includes(".")) {
-    const ipv4 = parseIPv4(text.slice(lastColon + 1));
-    if (!ipv4) return undefined;
-    const [b0 = 0, b1 = 0, b2 = 0, b3 = 0] = ipv4;
-    tail = [(b0 << 8) | b1, (b2 << 8) | b3];
-    text = text.slice(0, lastColon + 1);
-    if (!text.endsWith("::")) text = text.slice(0, -1);
-  }
-
-  const halves = text.split("::");
-  if (halves.length > 2) return undefined;
-  let groups: number[];
-  const [headText = "", restText] = halves;
-  if (restText !== undefined) {
-    const [head, rest] = [toGroups(headText), toGroups(restText)];
-    const missing = 8 - tail.length - head.length - rest.length;
-    if (missing < 0) return undefined;
-    groups = [...head, ...Array.from({ length: missing }, () => 0), ...rest];
-  } else {
-    groups = toGroups(text);
-  }
-  groups = [...groups, ...tail];
-  return groups.length === 8 && groups.every((group) => group >= 0 && group <= 0xffff)
-    ? groups
-    : undefined;
-};
-
-const embeddedIPv4 = (high: number, low: number) => [high >> 8, high & 0xff, low >> 8, low & 0xff];
-
-/** @param groups the 8 groups of the address (see `parseIPv6`) */
-const isNonPublicIPv6 = (groups: number[]): boolean => {
-  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups;
-  const firstSixZero = g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0;
-  if (firstSixZero && g5 === 0 && g6 === 0 && (g7 === 0 || g7 === 1)) {
-    return true; // unspecified :: and loopback ::1
-  }
-  if (firstSixZero && (g5 === 0xffff || g5 === 0)) {
-    return isNonPublicIPv4(embeddedIPv4(g6, g7)); // IPv4-mapped ::ffff:a.b.c.d, IPv4-compatible ::a.b.c.d
-  }
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0xffff && g5 === 0) {
-    return isNonPublicIPv4(embeddedIPv4(g6, g7)); // IPv4-translated ::ffff:0:a.b.c.d
-  }
-  if (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
-    return isNonPublicIPv4(embeddedIPv4(g6, g7)); // NAT64 64:ff9b::a.b.c.d
-  }
-  if (g0 === 0x2002) {
-    return isNonPublicIPv4(embeddedIPv4(g1, g2)); // 6to4 2002:a.b.c.d::
-  }
-  return (
-    (g0 & 0xffc0) === 0xfe80 || // link-local fe80::/10
-    (g0 & 0xffc0) === 0xfec0 || // deprecated site-local fec0::/10
-    (g0 & 0xfe00) === 0xfc00 || // unique local fc00::/7
-    (g0 & 0xff00) === 0xff00 || // multicast ff00::/8
-    (g0 === 0x2001 && g1 === 0xdb8) // documentation 2001:db8::/32
-  );
-};
+// `net.BlockList` matches an IPv4-mapped address (`::ffff:a.b.c.d`) against the IPv4 rules above automatically.
+addIPv6("0:0:0:0:0:0:0:0", 128); // unspecified ::
+addIPv6("0:0:0:0:0:0:0:1", 128); // loopback ::1
+addIPv6("fe80::", 10); // link-local
+addIPv6("fec0::", 10); // deprecated site-local
+addIPv6("fc00::", 7); // unique local
+addIPv6("ff00::", 8); // multicast
+addIPv6("2001:db8::", 32); // documentation
+addIPv6("0:0:0:0:0:0:0:0", 96); // IPv4-compatible ::a.b.c.d
+addIPv6("0:0:0:0:ffff:0:0:0", 96); // IPv4-translated ::ffff:0:a.b.c.d
+addIPv6("64:ff9b:0:0:0:0:0:0", 96); // NAT64
+addIPv6("2002:0:0:0:0:0:0:0", 16); // 6to4
 
 /** Is the IP address non-public? Anything that is not a valid IP address counts as non-public (fail closed). */
 export const isNonPublicAddress = (address: string): boolean => {
   const version = isIP(address);
-  if (version === 4) {
-    const bytes = parseIPv4(address);
-    return bytes === undefined || isNonPublicIPv4(bytes);
-  }
-  if (version === 6) {
-    const groups = parseIPv6(address);
-    return groups === undefined || isNonPublicIPv6(groups);
-  }
+  if (version === 4) return blockedAddresses.check(address, "ipv4");
+  if (version === 6) return blockedAddresses.check(address, "ipv6");
   return true;
 };
 
