@@ -6,7 +6,10 @@ export type Link = {
   line?: number;
 };
 
-export type LinkWithResult = Link & { result: LinkCheckResult };
+/** How the final result of a link was decided, see `CheckMethod` and `shouldRecheckWithPlaywright` in `src/link.ts` */
+export type CheckedWith = "fetch" | "github-api" | "playwright";
+
+export type LinkWithResult = Link & { result: LinkCheckResult; checkedWith?: CheckedWith };
 
 export type LinkCheckResult =
   | {

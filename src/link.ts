@@ -7,7 +7,7 @@ import { withTimeout } from "./limiter";
 import { hasHash, stripHash } from "./link_common";
 import { checkUrlsOnPageWithPlaywright, resultFor } from "./playwright_check";
 import { incrementMetric, timePhase, withRun } from "./run";
-import type { Link, LinkCheckResult, LinkWithResult } from "./types";
+import type { CheckedWith, Link, LinkCheckResult, LinkWithResult } from "./types";
 import { CONCURRENCY_LIMIT, parallelProcess } from "./utils";
 import { getErrorMessage } from "./utils/errors";
 
@@ -204,6 +204,8 @@ const checkLinksInRun = async ({
 
   // Filled in by the two passes below, one entry per unique href
   const results = new Map<string, LinkCheckResult>();
+  // How each href's final result was decided, reported alongside it (see `CheckedWith`)
+  const checkedWith = new Map<string, CheckedWith>();
   const toRecheck: string[] = [];
 
   const { errors: fetchErrors } = await timePhase("Check links (fetch, GitHub API)", () =>
@@ -218,6 +220,9 @@ const checkLinksInRun = async ({
           toRecheck.push(href);
         } else {
           results.set(href, result);
+          if (method !== "invalid") {
+            checkedWith.set(href, method);
+          }
         }
       },
     }),
@@ -228,6 +233,10 @@ const checkLinksInRun = async ({
       error: "unexpected error",
       errorDetail: getErrorMessage(error),
     });
+    const method = getInitialCheckMethod(item.href);
+    if (method !== "invalid") {
+      checkedWith.set(item.href, method);
+    }
   }
 
   // One navigation per page, all hashes pointing to that page are checked in the same DOM
@@ -245,6 +254,7 @@ const checkLinksInRun = async ({
         const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
         for (const href of hrefs) {
           results.set(href, resultFor(resultsByHref, href));
+          checkedWith.set(href, "playwright");
         }
       },
     }),
@@ -253,6 +263,7 @@ const checkLinksInRun = async ({
     const errorDetail = getErrorMessage(error);
     for (const href of hrefs) {
       results.set(href, { ok: false, error: "unexpected error", errorDetail });
+      checkedWith.set(href, "playwright");
     }
   }
 
@@ -265,5 +276,6 @@ const checkLinksInRun = async ({
       error: "unexpected error",
       errorDetail: `No result for ${link.href}`,
     },
+    checkedWith: checkedWith.get(link.href),
   }));
 };
