@@ -100,8 +100,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
-          # Full history, so the rebase before the push finds the common commit
-          fetch-depth: 0
 
       - uses: ./.github/actions/setup-environment
         id: setup
@@ -118,20 +116,25 @@ jobs:
           # Needs org-wide GitHub API access (list the fingerprintjs org's repositories), only the App token has it
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
-      - name: Commit and push the refreshed corpus
+      # Through the contents API, not git push: the repository requires signed commits, and GitHub signs the
+      # commits it creates for the API. `sha` is the corpus blob the job started from, so a concurrent change fails.
+      - name: Commit the refreshed corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if git diff --quiet -- bench/corpus.json; then
             echo "bench/corpus.json is unchanged, nothing to commit."
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bench/corpus.json
-          git commit -m "chore: refresh benchmark corpus"
-          # The corpus takes minutes to build, the branch may have moved meanwhile (only this job writes the corpus)
-          git pull --rebase origin "${{ github.head_ref }}"
-          git push origin "HEAD:${{ github.head_ref }}"
+          jq -n \
+            --arg message "chore: refresh benchmark corpus" \
+            --arg branch "${{ github.head_ref }}" \
+            --arg sha "$(git rev-parse HEAD:bench/corpus.json)" \
+            --rawfile content <(base64 -w0 bench/corpus.json) \
+            '{message: $message, branch: $branch, sha: $sha, content: $content}' > "$RUNNER_TEMP/corpus-commit.json"
+          gh api -X PUT "repos/${{ github.repository }}/contents/bench/corpus.json" \
+            --input "$RUNNER_TEMP/corpus-commit.json" --jq '"Committed " + .commit.sha'
 
       - name: Remove the label
         if: always()
