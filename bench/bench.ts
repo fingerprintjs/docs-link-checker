@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { aggregateRounds } from "./aggregate";
 import { type CorrectnessEntry, renderReport } from "./report";
-import { linksOf, loadEntrypoints, type RoundResult, runRound } from "./runner";
+import { linksOf, type RoundResult, runRound } from "./runner";
 import type { Corpus } from "./types";
 
 const DEFAULT_OUTPUT_DIR = "results/bench";
@@ -75,7 +75,7 @@ const parseCliArgs = (argv: string[]): CliOptions => {
   return { base: values.base, rounds, outputDir: values["output-dir"] ?? DEFAULT_OUTPUT_DIR };
 };
 
-const main = async () => {
+const main = () => {
   const options = parseCliArgs(process.argv.slice(2));
   const corpus = loadCorpus();
   const links = linksOf(corpus.links);
@@ -85,27 +85,26 @@ const main = async () => {
     sampleRate: corpus.sampleRate,
     population: corpus.population,
     sample: corpus.sample,
+    missingSources: corpus.missingSources ?? [],
   };
 
-  const head = await loadEntrypoints();
-  const base = options.base ? await loadEntrypoints(options.base) : undefined;
-
   console.log(
-    base
+    options.base
       ? `Running ${options.rounds} interleaved round(s) of base vs head on ${links.length} links...`
       : `Running ${options.rounds} round(s) on ${links.length} links...`,
   );
 
   const headRounds: RoundResult[] = [];
   const baseRounds: RoundResult[] = [];
-  // Interleaved (base, head, base, head...) so both sides see similar network conditions in each round
+  // Interleaved (base, head, base, head...), each round its own process (see runRound), so both sides see
+  // similar network conditions and neither leaks module-level state into the other.
   for (let i = 0; i < options.rounds; i++) {
-    if (base) {
+    if (options.base) {
       console.log(`Round ${i + 1}/${options.rounds}: base...`);
-      baseRounds.push(await runRound(base, links));
+      baseRounds.push(runRound(options.base, links));
     }
     console.log(`Round ${i + 1}/${options.rounds}: head...`);
-    headRounds.push(await runRound(head, links));
+    headRounds.push(runRound(undefined, links));
   }
 
   const headStats = aggregateRounds(headRounds);
@@ -114,7 +113,7 @@ const main = async () => {
     throw new Error("No round ran, this should never happen (rounds >= 1 is validated above).");
   }
 
-  const correctness = base
+  const correctness = options.base
     ? diffOutcomes(
         baseRounds[baseRounds.length - 1]?.outcomeByHref ?? new Map<string, string>(),
         lastHeadRound.outcomeByHref,
@@ -128,7 +127,7 @@ const main = async () => {
     rounds: options.rounds,
     corpus: corpusInfo,
     head: headStats,
-    base: base ? aggregateRounds(baseRounds) : undefined,
+    base: options.base ? aggregateRounds(baseRounds) : undefined,
     correctness,
   });
 
@@ -150,4 +149,4 @@ const main = async () => {
   console.log(`Wrote ${markdownPath} and ${resultPath}`);
 };
 
-await main();
+main();

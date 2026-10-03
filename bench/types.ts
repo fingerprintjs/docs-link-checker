@@ -35,5 +35,10 @@ export type Corpus = {
   population: Composition;
   /** Composition of `links` (after sampling), to compare against `population` */
   sample: Composition;
+  /**
+   * Sources that could not be collected when the corpus was generated (e.g. "github" when the GitHub API can't
+   * list an org's repositories), so the corpus is known to under-represent them. Absent or empty when complete.
+   */
+  missingSources?: string[];
   links: CorpusLink[];
 };
