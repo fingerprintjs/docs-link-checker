@@ -206,8 +206,11 @@ A speed benchmark checks the time and request counts of `checkLinks` against a f
   base and head, each round its own process (`bench/round.ts`, only ever importing from `../src`, copied into `<dir>`
   for a base round so it runs against that checkout's own code and `node_modules`) so neither side's module-level
   state (e.g. the shared page-slot limiter) leaks into the other, and both see similar network conditions. The report
-  shows median and min-max per side with a verdict per metric (counters: any change is reported; time: "worse"/
-  "better" needs both a >15% and a >5s difference, to tell a real regression from noise). A list of links whose
+  shows median and min-max per side with a verdict per metric (counters: "worse"/"better" needs the base and head
+  min-max ranges to not overlap, since live sites make these counts wobble a bit between rounds even with identical
+  code; time: "worse"/"better" needs both a >15% and a >5s difference, to tell a real regression from noise). Corpus
+  size counters (total links, unique URLs, unique pages) get no better/worse verdict since any difference there means
+  the two sides checked different input, not a regression. A list of links whose
   outcome differs between the two sides (or against the corpus' recorded outcome without `--base`) is reported
   separately as possible flakiness (live network), not as a failure.
 - On every pull request, `.github/workflows/benchmark.yaml` runs `pnpm bench --base <base checkout>` and posts the

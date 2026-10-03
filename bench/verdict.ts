@@ -44,3 +44,20 @@ export const verdictForTime = (baseMedian: number, headMedian: number): Verdict 
   }
   return "same";
 };
+
+/**
+ * Verdict for a counter (HTTP requests, Playwright navigations, hash waits, ...): "same" when `base` and `head`'s
+ * min-max ranges overlap, otherwise "worse" if `head` is higher and "better" if lower. Live sites make these counts
+ * wobble a bit round to round even with identical code (e.g. a long hash wait needed on one round but not the
+ * next), so, unlike time, a median difference alone isn't a reliable signal: only a gap between the two ranges is.
+ * Fewer requests/navigations/waits is always better for every counter we report this way.
+ */
+export const verdictForCounter = (base: Stat, head: Stat): Verdict => {
+  if (head.min > base.max) {
+    return "worse";
+  }
+  if (head.max < base.min) {
+    return "better";
+  }
+  return "same";
+};

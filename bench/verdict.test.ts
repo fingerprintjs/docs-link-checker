@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { median, summarize, verdictForTime } from "./verdict";
+import { median, summarize, verdictForCounter, verdictForTime } from "./verdict";
 
 describe("median()", () => {
   it("returns the middle value for an odd-length array, regardless of input order", () => {
@@ -44,5 +44,32 @@ describe("verdictForTime()", () => {
   it("handles a base of 0 without dividing by zero", () => {
     expect(verdictForTime(0, 0)).toBe("same");
     expect(verdictForTime(0, 6000)).toBe("worse");
+  });
+});
+
+describe("verdictForCounter()", () => {
+  it("is 'same' when the base and head ranges overlap", () => {
+    // base 19-23, head 20-22: overlapping despite different medians, like round-to-round noise on a live site
+    expect(
+      verdictForCounter({ median: 21, min: 19, max: 23 }, { median: 21, min: 20, max: 22 }),
+    ).toBe("same");
+  });
+
+  it("is 'worse' when head's range is entirely above base's", () => {
+    expect(
+      verdictForCounter({ median: 10, min: 8, max: 12 }, { median: 20, min: 18, max: 22 }),
+    ).toBe("worse");
+  });
+
+  it("is 'better' when head's range is entirely below base's", () => {
+    expect(
+      verdictForCounter({ median: 20, min: 18, max: 22 }, { median: 10, min: 8, max: 12 }),
+    ).toBe("better");
+  });
+
+  it("is 'same' for identical single values on both sides", () => {
+    expect(verdictForCounter({ median: 5, min: 5, max: 5 }, { median: 5, min: 5, max: 5 })).toBe(
+      "same",
+    );
   });
 });

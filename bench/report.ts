@@ -1,7 +1,7 @@
 import type { AggregatedSide } from "./aggregate";
 import { COMMENT_MARKER } from "./comment_marker";
 import type { Composition } from "./types";
-import { type Stat, verdictForTime } from "./verdict";
+import { type Stat, verdictForCounter, verdictForTime } from "./verdict";
 
 export type CorrectnessEntry = {
   href: string;
@@ -44,10 +44,23 @@ const timeRow = (label: string, base: Stat, head: Stat): string => {
   return `| ${label} | ${formatStat(base, formatMs)} | ${formatStat(head, formatMs)} | ${VERDICT_ICON[verdict]} ${verdict} |`;
 };
 
-/** One markdown table row comparing a counter: any change is reported, there is no pass/fail threshold for it */
+// Counters describing the corpus size itself, not something `checkLinks` did: any difference means the two sides
+// checked a different input (not a regression), so these skip the better/worse verdict, just flagging the change
+const CORPUS_SIZE_COUNTERS = new Set(["totalLinks", "uniqueUrls", "uniquePages"]);
+
+/** One markdown table row comparing a counter: fewer is better, except corpus-size counters (any diff = different input) */
 const counterRow = (label: string, base: Stat, head: Stat): string => {
   const diff = head.median - base.median;
-  const note = diff === 0 ? "same" : `${diff > 0 ? "+" : ""}${diff}`;
+  const delta = `${diff > 0 ? "+" : ""}${diff}`;
+  if (CORPUS_SIZE_COUNTERS.has(label)) {
+    const note = diff === 0 ? `${VERDICT_ICON.same} same` : `different input (${delta})`;
+    return `| ${label} | ${formatStat(base, String)} | ${formatStat(head, String)} | ${note} |`;
+  }
+  const verdict = verdictForCounter(base, head);
+  const note =
+    verdict === "same"
+      ? `${VERDICT_ICON[verdict]} ${verdict}`
+      : `${VERDICT_ICON[verdict]} ${verdict} (${delta})`;
   return `| ${label} | ${formatStat(base, String)} | ${formatStat(head, String)} | ${note} |`;
 };
 

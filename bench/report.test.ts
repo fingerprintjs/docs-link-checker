@@ -64,6 +64,41 @@ describe("renderReport()", () => {
     expect(report).toContain("no significant change");
   });
 
+  it("reports a counter as 'same' when base and head ranges overlap despite different medians", () => {
+    const report = renderReport({
+      rounds: 2,
+      corpus,
+      base: { ...side(10_000), counters: { playwrightLongHashWaits: stat(21, 19, 23) } },
+      head: { ...side(10_000), counters: { playwrightLongHashWaits: stat(20, 18, 22) } },
+      correctness: [],
+    });
+    expect(report).toContain("| playwrightLongHashWaits | 21 (19-23) | 20 (18-22) | ⚪ same |");
+  });
+
+  it("reports a counter as 'worse' when head's range is entirely above base's", () => {
+    const report = renderReport({
+      rounds: 2,
+      corpus,
+      base: { ...side(10_000), counters: { httpRequests: stat(10) } },
+      head: { ...side(10_000), counters: { httpRequests: stat(20) } },
+      correctness: [],
+    });
+    expect(report).toContain("| httpRequests | 10 | 20 | 🔴 worse (+10) |");
+  });
+
+  it("reports a corpus-size counter change without a better/worse verdict", () => {
+    const report = renderReport({
+      rounds: 2,
+      corpus,
+      base: { ...side(10_000), counters: { totalLinks: stat(100) } },
+      head: { ...side(10_000), counters: { totalLinks: stat(120) } },
+      correctness: [],
+    });
+    expect(report).toContain("| totalLinks | 100 | 120 | different input (+20) |");
+    expect(report).not.toContain("| totalLinks | 100 | 120 | 🟢");
+    expect(report).not.toContain("| totalLinks | 100 | 120 | 🔴");
+  });
+
   it("renders a solo summary (no verdict) without --base", () => {
     const report = renderReport({ rounds: 1, corpus, head: side(5000), correctness: [] });
     expect(report).not.toContain("Base");
