@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { RunMetrics } from "../src/run";
 import type { Link } from "../src/types";
 import type { CorpusLink } from "./types";
@@ -55,11 +55,13 @@ const prepareRound = (dir: string | undefined): { scriptPath: string; workDir: s
   if (!dir) {
     return { scriptPath: ROUND_SCRIPT, workDir: PROJECT_ROOT };
   }
-  const targetDir = join(dir, ".bench");
+  // Absolute: the round runs with `cwd` set to the checkout, a relative `dir` would then resolve twice
+  const workDir = resolve(dir);
+  const targetDir = join(workDir, ".bench");
   mkdirSync(targetDir, { recursive: true });
   const scriptPath = join(targetDir, "round.ts");
   copyFileSync(ROUND_SCRIPT, scriptPath);
-  return { scriptPath, workDir: dir };
+  return { scriptPath, workDir };
 };
 
 /**
