@@ -4,8 +4,12 @@ name: Benchmark
 # runner and interleaved rounds (see bench/bench.ts and the "Benchmark" section of README.md).
 # Reports the result (job summary + a sticky PR comment, updated on each push), never fails the PR on a slowdown:
 # only a crash of the benchmark itself (not the links it checks) fails this job.
+#
+# Adding the "refresh-bench-corpus" label to a PR regenerates bench/corpus.json (the GitHub README source needs an
+# org-scoped GH_TOKEN only this workflow has) and commits it to the PR branch, see the refresh-corpus job below.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
@@ -14,6 +18,8 @@ permissions:
 jobs:
   benchmark:
     name: Speed benchmark (base vs head)
+    # Not on "labeled": that only adds/removes a label, running the benchmark again would be redundant
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -42,6 +48,7 @@ jobs:
       - name: Run benchmark (base vs head, interleaved rounds)
         run: pnpm bench --base base-checkout
         env:
+          # GitHub API link checks only, not for posting the PR comment below (see its own step)
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
       - name: Upload benchmark result
@@ -55,7 +62,8 @@ jobs:
       - name: Post or update sticky PR comment
         if: always()
         env:
-          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+          # The job's own token (pull-requests: write above) is enough to comment, no need for the App token
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           MARKER='<!-- docs-link-checker-benchmark -->'
@@ -69,7 +77,56 @@ jobs:
           COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
             --jq "[.[] | select(.body | startswith(\"${MARKER}\"))][0].id // empty")
           if [ -n "$COMMENT_ID" ]; then
-            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH -f body=@"$REPORT"
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH -F body=@"$REPORT"
           else
-            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body=@"$REPORT"
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@"$REPORT"
           fi
+
+  refresh-corpus:
+    name: Refresh benchmark corpus
+    if: github.event.action == 'labeled' && github.event.label.name == 'refresh-bench-corpus'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+
+      - uses: ./.github/actions/setup-environment
+        id: setup
+        with:
+          app_id: ${{ vars.APP_ID }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Regenerate corpus
+        run: |
+          START=$(date +%s)
+          pnpm bench:corpus
+          echo "Corpus refresh took $(( $(date +%s) - START ))s." | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          # Needs org-wide GitHub API access (list the fingerprintjs org's repositories), only the App token has it
+          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+
+      - name: Commit and push the refreshed corpus
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- bench/corpus.json; then
+            echo "bench/corpus.json is unchanged, nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bench/corpus.json
+          git commit -m "chore: refresh benchmark corpus"
+          git push origin "HEAD:${{ github.head_ref }}"
+
+      - name: Remove the label
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr edit "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --remove-label refresh-bench-corpus

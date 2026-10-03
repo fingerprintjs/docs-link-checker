@@ -197,18 +197,26 @@ A speed benchmark checks the time and request counts of `checkLinks` against a f
   in the 45-90s range. The corpus file records both the sample's and the full population's composition (links,
   unique URLs, pages, broken down by source and check method), shown side by side in the benchmark report. Regenerate
   it with `pnpm bench:corpus` (needs `GH_TOKEN` and network access) after the checked sources or `--include` prefixes
-  change, or every few months so it doesn't drift too far from the live sites.
+  change, or every few months so it doesn't drift too far from the live sites. If a source can't be collected (e.g.
+  this environment's GitHub API access can't list an org's repositories), it's recorded in the corpus itself
+  (`missingSources`) and flagged in the benchmark report instead of silently producing an incomplete corpus.
 - `pnpm bench` runs one round against the current tree and prints a summary (total time, phase times, counters like
   HTTP requests, Playwright navigations and hash fallbacks).
 - `pnpm bench --base <dir>` (e.g. a `git worktree add` checkout of `main`) runs an A/B comparison: rounds alternate
-  base and head on the same machine to even out network noise, and the report shows median and min-max per side
-  with a verdict per metric (counters: any change is reported; time: "worse"/"better" needs both a >15% and a >5s
-  difference, to tell a real regression from noise). A list of links whose outcome differs between the two sides
-  (or against the corpus' recorded outcome without `--base`) is reported separately as possible flakiness (live
-  network), not as a failure.
+  base and head, each round its own process (`bench/round.ts`, only ever importing from `../src`, copied into `<dir>`
+  for a base round so it runs against that checkout's own code and `node_modules`) so neither side's module-level
+  state (e.g. the shared page-slot limiter) leaks into the other, and both see similar network conditions. The report
+  shows median and min-max per side with a verdict per metric (counters: any change is reported; time: "worse"/
+  "better" needs both a >15% and a >5s difference, to tell a real regression from noise). A list of links whose
+  outcome differs between the two sides (or against the corpus' recorded outcome without `--base`) is reported
+  separately as possible flakiness (live network), not as a failure.
 - On every pull request, `.github/workflows/benchmark.yaml` runs `pnpm bench --base <base checkout>` and posts the
   result as a job summary and a single PR comment that is updated on each push (found by a hidden marker). It never
   fails the PR on a slowdown, only if the benchmark itself crashes.
+- Add the `refresh-bench-corpus` label to a PR to regenerate `bench/corpus.json` in CI (the `refresh-corpus` job in
+  the same workflow): it needs the GitHub App's org-scoped token for the README source, which this sandbox's own
+  `GH_TOKEN` can't provide. The job commits the refreshed corpus to the PR branch (as `github-actions[bot]`), logs
+  the population/sample composition and how long the refresh took, then removes the label.
 
 ## Limitations
 
