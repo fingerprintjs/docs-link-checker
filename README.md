@@ -184,6 +184,32 @@ jobs:
 - GitHub URLs are decoded before they are passed to the GitHub API (tags like `%40scope%2Fpkg%401.0.0`), and `https://github.com/<owner>` is checked as a user or organization (and as a page if the API doesn't know the account). GitHub's own pages (`/features`, `/topics/...`, `/marketplace/...`...) are checked as regular pages.
 - Each run launches one shared Chromium (only if needed) that blocks images, media, fonts and analytics scripts. Links to the same page with different hashes share one fetch or browser navigation, and GitHub API responses are cached for the run. The run metrics (links, unique URLs and pages, requests, navigations, duration per phase) are logged at the end.
 
+## Benchmark
+
+A speed benchmark checks the time and request counts of `checkLinks` against a frozen, real-world corpus of links.
+
+- `bench/corpus.json` is a representative sample of real links: collected from the same sources and settings as our
+  production workflow (`checkLinks:docs`, `checkLinks:github`, `checkLinks:web`), checked once so each link's check
+  method (`fetch`, the GitHub API or Playwright) and outcome are known, then sampled by taking the same fraction of
+  pages (URL without hash, every link on it kept together since they share one fetch or navigation) from every
+  source, so the sample's mix of sources, check paths and duplicate-link ratios matches the full run instead of
+  being skewed towards any one of them (e.g. just the slow Playwright pages). The fraction is tuned so one run stays
+  in the 45-90s range. The corpus file records both the sample's and the full population's composition (links,
+  unique URLs, pages, broken down by source and check method), shown side by side in the benchmark report. Regenerate
+  it with `pnpm bench:corpus` (needs `GH_TOKEN` and network access) after the checked sources or `--include` prefixes
+  change, or every few months so it doesn't drift too far from the live sites.
+- `pnpm bench` runs one round against the current tree and prints a summary (total time, phase times, counters like
+  HTTP requests, Playwright navigations and hash fallbacks).
+- `pnpm bench --base <dir>` (e.g. a `git worktree add` checkout of `main`) runs an A/B comparison: rounds alternate
+  base and head on the same machine to even out network noise, and the report shows median and min-max per side
+  with a verdict per metric (counters: any change is reported; time: "worse"/"better" needs both a >15% and a >5s
+  difference, to tell a real regression from noise). A list of links whose outcome differs between the two sides
+  (or against the corpus' recorded outcome without `--base`) is reported separately as possible flakiness (live
+  network), not as a failure.
+- On every pull request, `.github/workflows/benchmark.yaml` runs `pnpm bench --base <base checkout>` and posts the
+  result as a job summary and a single PR comment that is updated on each push (found by a hidden marker). It never
+  fails the PR on a slowdown, only if the benchmark itself crashes.
+
 ## Limitations
 
 > [!WARNING]  

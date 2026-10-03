@@ -1,0 +1,75 @@
+name: Benchmark
+
+# Speed benchmark: checks bench/corpus.json with the PR's head commit, A/B against its base branch, on the same
+# runner and interleaved rounds (see bench/bench.ts and the "Benchmark" section of README.md).
+# Reports the result (job summary + a sticky PR comment, updated on each push), never fails the PR on a slowdown:
+# only a crash of the benchmark itself (not the links it checks) fails this job.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Speed benchmark (base vs head)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout head (this PR)
+        uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-environment
+        id: setup
+        with:
+          app_id: ${{ vars.APP_ID }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout base branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-checkout
+
+      # The base checkout needs its own node_modules (its src/ imports playwright, cheerio, octokit...), the
+      # Playwright browser binary and GH_TOKEN from the head checkout's setup are reused (not repo-specific).
+      - name: Install base checkout dependencies
+        working-directory: base-checkout
+        run: pnpm install --frozen-lockfile
+
+      - name: Run benchmark (base vs head, interleaved rounds)
+        run: pnpm bench --base base-checkout
+        env:
+          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+
+      - name: Upload benchmark result
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-result
+          path: results/bench/
+          retention-days: 30
+
+      - name: Post or update sticky PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+        run: |
+          set -euo pipefail
+          MARKER='<!-- docs-link-checker-benchmark -->'
+          REPORT=results/bench/benchmark.md
+          if [ ! -f "$REPORT" ]; then
+            echo "No benchmark report found, skipping comment (the benchmark step must have crashed)."
+            exit 0
+          fi
+          REPO="${{ github.repository }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"${MARKER}\"))][0].id // empty")
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH -f body=@"$REPORT"
+          else
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body=@"$REPORT"
+          fi

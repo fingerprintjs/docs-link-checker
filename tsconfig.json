@@ -28,6 +28,6 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["src/**/*", "checks/**/*"],
+  "include": ["src/**/*", "checks/**/*", "bench/**/*"],
   "exclude": ["node_modules", "dist"]
 }
