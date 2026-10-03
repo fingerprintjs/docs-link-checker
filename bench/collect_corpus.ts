@@ -31,7 +31,9 @@ const GITHUB_ORG = "fingerprintjs";
 // Fraction of page groups kept per source (see `proportionalSample`). Tuned so a benchmark round stays in the
 // 45-90s range on a CI runner: it's fine (and expected) if this keeps only a handful of Playwright pages, the
 // sample is meant to represent the whole population, not just its slowest phase (see README.md "Benchmark").
-const SAMPLE_RATE = 0.68;
+// Override with CORPUS_SAMPLE_RATE while tuning (actual request latency varies a lot by network, re-check the
+// round time with `pnpm bench` after changing it, and keep the corpus file itself to a reasonable size).
+const SAMPLE_RATE = Number(process.env.CORPUS_SAMPLE_RATE) || 0.08;
 
 type SourcedLink = Link & { source: CorpusSource };
 
