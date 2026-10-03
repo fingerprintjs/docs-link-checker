@@ -19,6 +19,8 @@ export type ReportInput = {
     /** Composition of every link checked when the corpus was generated, and of the sample committed to it */
     population: Composition;
     sample: Composition;
+    /** Sources that could not be collected when the corpus was generated, see `Corpus.missingSources` */
+    missingSources: string[];
   };
   head: AggregatedSide;
   /** Only set with `--base`: an A/B comparison, not just a solo report of `head` */
@@ -93,7 +95,12 @@ const renderSolo = ({ rounds, head }: ReportInput): string[] => {
 };
 
 /** Markdown table comparing the corpus' sample composition against the full population it was drawn from */
-const renderComposition = ({ sampleRate, population, sample }: ReportInput["corpus"]): string[] => {
+const renderComposition = ({
+  sampleRate,
+  population,
+  sample,
+  missingSources,
+}: ReportInput["corpus"]): string[] => {
   const sourceNames = [
     ...new Set([...Object.keys(population.bySource), ...Object.keys(sample.bySource)]),
   ];
@@ -101,6 +108,12 @@ const renderComposition = ({ sampleRate, population, sample }: ReportInput["corp
     ...new Set([...Object.keys(population.byCheckedWith), ...Object.keys(sample.byCheckedWith)]),
   ];
   return [
+    ...(missingSources.length > 0
+      ? [
+          `⚠️ Missing source(s) in this corpus: ${missingSources.join(", ")} (could not be collected when it was generated, see the corpus generation log). Add the \`refresh-bench-corpus\` label to a PR to regenerate it in CI.`,
+          "",
+        ]
+      : []),
     `<details><summary>Corpus composition (sample rate ${sampleRate}): sample vs the full population it was drawn from</summary>`,
     "",
     "| | Population | Sample |",

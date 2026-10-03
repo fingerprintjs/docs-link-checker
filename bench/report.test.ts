@@ -31,6 +31,7 @@ const corpus = {
   sampleRate: 0.1,
   population: composition(100),
   sample: composition(10),
+  missingSources: [] as string[],
 };
 
 describe("renderReport()", () => {
@@ -90,5 +91,21 @@ describe("renderReport()", () => {
     expect(report).toContain("| Links | 100 | 10 |");
     expect(report).toContain("| Source: docs | 100 | 10 |");
     expect(report).toContain("| Checked with: fetch | 100 | 10 |");
+  });
+
+  it("warns about sources missing from the corpus", () => {
+    const report = renderReport({
+      rounds: 1,
+      corpus: { ...corpus, missingSources: ["github"] },
+      head: side(1000),
+      correctness: [],
+    });
+    expect(report).toContain("Missing source(s) in this corpus: github");
+    expect(report).toContain("refresh-bench-corpus");
+  });
+
+  it("does not show a missing-sources warning when the corpus is complete", () => {
+    const report = renderReport({ rounds: 1, corpus, head: side(1000), correctness: [] });
+    expect(report).not.toContain("Missing source(s)");
   });
 });

@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-03T22:28:09.893Z",
-  "gitSha": "9491fbd3f89797b6e1506e0d0dbba5f883562ee5",
+  "generatedAt": "2026-10-03T22:38:04.146Z",
+  "gitSha": "e8d33af08f10bb8436c4f947c98f77c958651687",
   "sources": ["checkLinks:docs", "checkLinks:github", "checkLinks:web"],
   "sampleRate": 0.08,
   "population": {
@@ -29,6 +29,7 @@
       "playwright": 54
     }
   },
+  "missingSources": ["github"],
   "links": [
     {
       "page": "https://docs.fingerprint.com/docs/dotnet-server-quickstart",

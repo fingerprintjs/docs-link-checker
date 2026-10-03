@@ -20,6 +20,7 @@ import type { Link, LinkWithResult } from "../src/types";
 import { getErrorMessage } from "../src/utils/errors";
 import { createPrefixFilter } from "../src/website";
 import { summarizeComposition } from "./composition";
+import { serializeCorpus } from "./corpus_format";
 import { proportionalSample } from "./sample";
 import type { Corpus, CorpusLink, CorpusSource } from "./types";
 
@@ -37,26 +38,30 @@ const SAMPLE_RATE = Number(process.env.CORPUS_SAMPLE_RATE) || 0.08;
 
 type SourcedLink = Link & { source: CorpusSource };
 
-/** README links of the org, or `[]` if they can't be listed (e.g. no org-wide GitHub API access in this environment) */
-const collectReadmeLinks = async (): Promise<Link[]> => {
+/**
+ * README links of the org. A listing failure (e.g. no org-wide GitHub API access) must not silently produce a
+ * corpus that's missing a whole source: it's logged loudly here, and the caller records it in the corpus itself
+ * (`Corpus.missingSources`), so the gap is visible in the benchmark report too, not just in this script's log.
+ */
+const collectReadmeLinks = async (): Promise<{ links: Link[]; missing: boolean }> => {
   let readmes: Awaited<ReturnType<typeof getReadmesFromOrg>>;
   try {
     readmes = await getReadmesFromOrg(GITHUB_ORG);
   } catch (error) {
     console.warn(
-      `Could not list README files of the ${GITHUB_ORG} org, corpus will not include README links: ${getErrorMessage(error)}`,
+      `WARNING: could not list README files of the ${GITHUB_ORG} org, corpus will not include README links: ${getErrorMessage(error)}`,
     );
-    return [];
+    return { links: [], missing: true };
   }
-  return filterOutIrrelevantLinks(await getReadmeLinks(readmes));
+  return { links: filterOutIrrelevantLinks(await getReadmeLinks(readmes)), missing: false };
 };
 
 const withSource = (links: Link[], source: CorpusSource): SourcedLink[] =>
   links.map((link) => ({ ...link, source }));
 
-const collectLinks = async (): Promise<SourcedLink[]> => {
+const collectLinks = async (): Promise<{ links: SourcedLink[]; missingSources: string[] }> => {
   console.log("Reading sitemaps and README files...");
-  const [devPages, webPages, readmeLinks] = await Promise.all([
+  const [devPages, webPages, readmes] = await Promise.all([
     getWebsitePages(DEV_URL),
     getWebsitePages(WEB_URL),
     collectReadmeLinks(),
@@ -67,13 +72,16 @@ const collectLinks = async (): Promise<SourcedLink[]> => {
     linkFilter: createPrefixFilter(WEB_INCLUDE),
   });
   console.log(
-    `Collected ${devLinks.length} dev.fingerprint.com + ${webLinks.length} fingerprint.com + ${readmeLinks.length} README links.`,
+    `Collected ${devLinks.length} dev.fingerprint.com + ${webLinks.length} fingerprint.com + ${readmes.links.length} README links.`,
   );
-  return [
-    ...withSource(devLinks, "docs"),
-    ...withSource(webLinks, "web"),
-    ...withSource(readmeLinks, "github"),
-  ];
+  return {
+    links: [
+      ...withSource(devLinks, "docs"),
+      ...withSource(webLinks, "web"),
+      ...withSource(readmes.links, "github"),
+    ],
+    missingSources: readmes.missing ? ["github"] : [],
+  };
 };
 
 const toCorpusLink = (link: LinkWithResult, source: CorpusSource): CorpusLink => ({
@@ -88,7 +96,8 @@ const toCorpusLink = (link: LinkWithResult, source: CorpusSource): CorpusLink =>
 });
 
 const main = async () => {
-  const links = await collectLinks();
+  const start = performance.now();
+  const { links, missingSources } = await collectLinks();
   console.log(`Checking ${links.length} links once to learn checkedWith and outcome...`);
   // checkLinks returns one result per input link, in the same order (see its `links.map(...)` return), so pairing
   // by index recovers the source tag without carrying it through checkLinks itself.
@@ -115,12 +124,17 @@ const main = async () => {
     sampleRate: SAMPLE_RATE,
     population: summarizeComposition(population),
     sample: summarizeComposition(sampled),
+    missingSources,
     links: sampled,
   };
 
   const corpusPath = join(import.meta.dirname, "corpus.json");
-  writeFileSync(corpusPath, `${JSON.stringify(corpus, null, 2)}\n`);
-  console.log(`Wrote ${corpusPath}: ${corpus.links.length} links.`);
+  writeFileSync(corpusPath, serializeCorpus(corpus));
+  const elapsedSeconds = ((performance.now() - start) / 1000).toFixed(1);
+  console.log(`Wrote ${corpusPath}: ${corpus.links.length} links. Took ${elapsedSeconds}s.`);
+  if (missingSources.length > 0) {
+    console.warn(`WARNING: corpus is missing source(s): ${missingSources.join(", ")}.`);
+  }
   console.log("Population:", corpus.population);
   console.log("Sample:", corpus.sample);
 };
