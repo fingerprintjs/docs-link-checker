@@ -110,8 +110,8 @@ const METRICS = {
   uniquePages: "Unique pages (URLs without hash)",
   // Distinct page fetches of link checks (per URL without hash and method), whatever the number of links to the page
   uniquePagesFetched: "Unique pages fetched",
-  // Every `fetch()` call: each redirect hop, 429 retry and HEAD-to-GET fallback counts
-  httpRequests: "HTTP requests (incl. redirects, retries and HEAD-to-GET fallbacks)",
+  // Every `fetch()` call: each redirect hop and retry counts
+  httpRequests: "HTTP requests (incl. redirects and retries)",
   playwrightNavigations: "Playwright navigations",
   // Requests and navigations retried after a 502, 503 or 504 (included in the counts above)
   serverErrorRetries: "Retries after a server error (502, 503, 504)",

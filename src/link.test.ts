@@ -407,67 +407,25 @@ describe("checkLinkWithFetch()", () => {
     expect(!result.ok && result.errorDetail).toContain("TimeoutError");
   });
 
-  it.each([405, 403, 501])("retries once with GET when HEAD returns %s", async (status) => {
-    const fetchMock = stubFetch((_url, init) =>
-      init.method === "HEAD" ? new Response(null, { status }) : new Response("ok", { status: 200 }),
-    );
-
-    const result = await checkLinkWithFetch("https://example.com/no-head");
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-  });
-
-  it("fails when GET also fails after HEAD", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 405 }));
-
-    const result = await checkLinkWithFetch("https://example.com/no-head");
-
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 405 });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([400, 404, 410, 500, 503])(
-    "retries once with GET when HEAD returns %s (servers answering HEAD differently)",
-    async (status) => {
-      // support.google.com and chatgpt.com answer 404 to HEAD and 200 to GET
-      const fetchMock = stubFetch((_url, init) =>
-        init.method === "HEAD"
-          ? new Response(null, { status })
-          : new Response("ok", { status: 200 }),
-      );
-
-      const result = await checkLinkWithFetch("https://support.example.com/answer/1");
-
-      expect(result).toEqual({ ok: true, status: 200 });
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    },
-  );
-
-  it("reports 404 when GET also returns 404 after HEAD", async () => {
+  it("sends GET also for a link without a hash, and reports its failure", async () => {
     const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
 
     const result = await checkLinkWithFetch("https://example.com/missing");
 
     expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
   });
 
-  it("does not retry with GET when HEAD succeeds", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+  it("accepts a page that answers HEAD with 404 and GET with 200", async () => {
+    // support.google.com and chatgpt.com
+    stubFetch((_url, init) =>
+      init.method === "HEAD" ? new Response(null, { status: 404 }) : new Response("ok"),
+    );
 
-    await checkLinkWithFetch("https://example.com/ok");
-
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
-  });
-
-  it("does not retry with GET when HEAD is rate limited (429)", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
-
-    const result = await checkLinkWithFetch("https://example.com/limited");
-
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 429 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
+    expect(await checkLinkWithFetch("https://support.example.com/answer/1")).toEqual({
+      ok: true,
+      status: 200,
+    });
   });
 
   it.each(["#zippy=%2Cdata-sharing", "#zippy="])(
@@ -738,7 +696,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // One GET for the page, also used by the link without a hash (no extra HEAD request)
+    // One GET for the page, also used by the link without a hash
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]![1]?.method).toBe("GET");
     expect(results).toHaveLength(10);
@@ -760,14 +718,6 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     });
     // Every link keeps its own source page
     expect(new Set(results.map((r) => r.page)).size).toBe(10);
-  });
-
-  it("uses HEAD for pages that are never linked with a hash", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
-
-    await checkLinks({ links: [link("https://example.com/a"), link("https://example.com/b")] });
-
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "HEAD"]);
   });
 
   it("reports a broken page for every hash pointing to it (one request)", async () => {
@@ -937,39 +887,6 @@ describe("server errors (502, 503, 504)", () => {
     }
   };
 
-  it("fetch: a HEAD 503 falls back to GET right away (HEAD itself is never retried)", async () => {
-    let failures = 1;
-    const fetchMock = stubFetch(() =>
-      failures-- > 0 ? new Response("busy", { status: 503 }) : new Response("ok", { status: 200 }),
-    );
-
-    const { result, took } = await withFakeTimers(() =>
-      checkLinkWithFetch("https://busy.example.com/page"),
-    );
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    // No backoff: the GET fallback is sent right away and succeeds on its first attempt
-    expect(took).toBe(0);
-  });
-
-  it("fetch: the HEAD's Retry-After does not delay the GET fallback (HEAD has no retry policy of its own)", async () => {
-    let failures = 1;
-    const fetchMock = stubFetch(() =>
-      failures-- > 0
-        ? new Response(null, { status: 503, headers: { "Retry-After": "120" } })
-        : new Response("ok", { status: 200 }),
-    );
-
-    const { result, took } = await withFakeTimers(() =>
-      checkLinkWithFetch("https://busy.example.com/page"),
-    );
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    expect(took).toBe(0);
-  });
-
   it.each([502, 503, 504])(
     "fetch: reports a %s that persists after the retries as 'could not check', not broken",
     async (status) => {
@@ -981,13 +898,8 @@ describe("server errors (502, 503, 504)", () => {
 
       expect(result).toMatchObject({ ok: false, error: "could not check", status });
       expect(!result.ok && result.errorDetail).toContain(`Server error ${status}`);
-      // HEAD (not retried), then the GET fallback with the normal retry policy (2 retries, backoff 2s then 5s)
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
-        "HEAD",
-        "GET",
-        "GET",
-        "GET",
-      ]);
+      // 2 retries, backoff 2s then 5s
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
       expect(took).toBe(7000);
     },
   );
