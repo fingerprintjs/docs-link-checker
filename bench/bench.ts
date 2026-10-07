@@ -146,7 +146,7 @@ const counterVerdict = (base: Stat, head: Stat): Verdict => {
 
 // More `ok` results is better, for the other counters fewer is better
 const counterVerdictOf = (name: string, base: Stat, head: Stat): Verdict =>
-  name === "ok" ? counterVerdict(head, base) : counterVerdict(base, head);
+  name === "result: ok" ? counterVerdict(head, base) : counterVerdict(base, head);
 
 const formatMs = (ms: number) =>
   ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
