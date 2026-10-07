@@ -120,6 +120,29 @@ const getPlaywrightHashResult = async (
 const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
   result?.ok === false && result.error === "hash not found";
 
+/**
+ * Sets the hash of `url` in the open page and waits `HASH_WAIT_TIMEOUT` for its anchor (content rendered per hash).
+ * A failure (e.g. the page navigated away) means not found, a closed page (browser crash) is rethrown.
+ */
+async function isHashPresentAfterSettingIt(page: Page, url: string) {
+  const { hash } = new URL(url);
+  try {
+    await page.evaluate((newHash) => {
+      location.hash = newHash;
+    }, hash);
+    return await waitForSelectorAttached(
+      page,
+      getHashSelectors(hash.slice(1), url).join(", "),
+      HASH_WAIT_TIMEOUT,
+    );
+  } catch (error) {
+    if (page.isClosed()) {
+      throw error;
+    }
+    return false;
+  }
+}
+
 /** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
 export const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkCheckResult =>
   results.get(url) ?? {
@@ -253,11 +276,7 @@ async function navigateAndCheck(
         for (const url of urls.slice(1)) {
           if (isHashNotFound(results.get(url)) && !isGithubCodeLineLink(url)) {
             incrementMetric("playwrightHashFallbacks");
-            await page.evaluate((hash) => {
-              location.hash = hash;
-            }, new URL(url).hash);
-            const selector = getHashSelectors(new URL(url).hash.slice(1), url).join(", ");
-            if (await waitForSelectorAttached(page, selector, HASH_WAIT_TIMEOUT)) {
+            if (await isHashPresentAfterSettingIt(page, url)) {
               results.set(url, { ok: true, status });
             }
           }

@@ -38,6 +38,8 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     lateHtmlByUrl: {} as Record<string, { html: string; afterMs: number }>,
     // Hashes set in the open page (`location.hash = hash`), the fake page then renders the HTML of its new URL
     hashesSet: [] as string[],
+    // Setting the hash throws (e.g. the page navigated away)
+    evaluateFails: false,
     // Timeouts of hash waits
     hashTimeouts: [] as Array<number | undefined>,
     // The navigation response body never ends (Playwright has no timeout for it)
@@ -92,6 +94,9 @@ vi.mock("playwright", () => ({
             },
             // Only used to set the hash of the page, like `location.hash = hash`
             evaluate: async (_fn: unknown, hash: string) => {
+              if (playwrightState.evaluateFails) {
+                throw new Error("Execution context was destroyed");
+              }
               playwrightState.hashesSet.push(hash);
               currentUrl = currentUrl.replace(/#.*/, "") + hash;
             },
@@ -163,6 +168,7 @@ beforeEach(() => {
   playwrightState.responseBodyHangs = false;
   playwrightState.hashTimeouts = [];
   playwrightState.hashesSet = [];
+  playwrightState.evaluateFails = false;
   playwrightState.waitForTakesTimeout = false;
   playwrightState.status = 200;
   playwrightState.statuses = [];
@@ -846,6 +852,16 @@ describe("checkLinks() Playwright hashes of one page", () => {
     expect(playwrightState.visited).toEqual([`${page}#tab-a`]);
     expect(playwrightState.hashesSet).toEqual(["#tab-b", "#missing"]);
     expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightHashFallbacks: 2 });
+  });
+
+  it("keeps 'hash not found' for a hash whose in-page retry fails, other results stay", async () => {
+    playwrightState.evaluateFails = true;
+    playwrightState.htmlByUrl = { [`${page}#a`]: '<div id="a"></div>' };
+
+    const { byHash } = await checkHashes(["#a", "#missing"]);
+
+    expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
   });
 
   it("spends the 15s budget once per page, not once per missing hash", async () => {
