@@ -130,32 +130,12 @@ const buildProgram = (
     })
     .addHelpText("after", ENV_HELP);
 
-  const fromEnv = <T>(parse: () => T) => {
-    try {
-      return parse();
-    } catch (error) {
-      return program.error(getErrorMessage(error));
-    }
-  };
-  const allowPrivateHosts = fromEnv(() => {
-    const value = env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
-    if (value && value !== "true" && value !== "false") {
-      throw new Error(
-        `Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "${value}", expected "true" or "false".`,
-      );
-    }
-    return value === "true";
-  });
-  const sampleRate = fromEnv(() => getSampleRate(env.LINK_CHECK_SAMPLE_RATE));
-  const hostConcurrency = fromEnv(() => parseHostConcurrency(env.LINK_CHECK_HOST_CONCURRENCY));
-
   const addCommonOptions = (command: Command) =>
     command
       .option(
         "--sample-rate <0-1>",
         "Check only a deterministic share of the pages / README files / markdown files",
         validated(getSampleRate, ["LINK_CHECK_SAMPLE_RATE", "--sample-rate"]),
-        sampleRate,
       )
       .option(
         "--fail-on-broken",
@@ -191,29 +171,56 @@ const buildProgram = (
         "--host-concurrency <n>",
         "Max concurrent requests per host",
         validated(parseHostConcurrency, ["LINK_CHECK_HOST_CONCURRENCY", "--host-concurrency"]),
-        hostConcurrency,
       )
       .option(
         "--allow-private-hosts",
         "Allow links to private and local addresses (localhost, 10.x, 169.254.x...), blocked by default. Only for trusted documents, e.g. a local dev server",
-        allowPrivateHosts,
       )
       .option("--no-allow-private-hosts", "Block links to private and local addresses")
       .addHelpText("after", ENV_HELP);
 
-  /** The common options, after checks that need several of them */
+  /**
+   * The common options, with the environment variables as defaults for the flags that are absent.
+   * Env values are validated only when used, so `--help` and flags that override them still work.
+   */
   const getCommonOptions = (command: Command): CommonOptions => {
-    const options = command.opts<CommonOptions>();
+    const options = command.opts<
+      Omit<CommonOptions, "sampleRate" | "hostConcurrency" | "allowPrivateHosts"> &
+        Partial<Pick<CommonOptions, "sampleRate" | "hostConcurrency" | "allowPrivateHosts">>
+    >();
+    const fromEnv = <T>(value: T | undefined, parse: () => T): T => {
+      try {
+        return value ?? parse();
+      } catch (error) {
+        return command.error(getErrorMessage(error));
+      }
+    };
+    const sampleRate = fromEnv(options.sampleRate, () => getSampleRate(env.LINK_CHECK_SAMPLE_RATE));
+    const hostConcurrency = fromEnv(options.hostConcurrency, () =>
+      parseHostConcurrency(env.LINK_CHECK_HOST_CONCURRENCY),
+    );
+    const allowPrivateHosts = fromEnv(options.allowPrivateHosts, () => {
+      const value = env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
+      if (value && value !== "true" && value !== "false") {
+        throw new Error(
+          `Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "${value}", expected "true" or "false".`,
+        );
+      }
+      return value === "true";
+    });
     if (options.pruneBaseline && !options.updateBaseline) {
       command.error("--prune-baseline can only be used with --update-baseline.");
     }
-    if (options.pruneBaseline && options.sampleRate < 1) {
+    if (options.pruneBaseline && sampleRate < 1) {
       command.error(
         "--prune-baseline needs a full run (sample rate 1), entries of pages that were not checked would be removed.",
       );
     }
     return {
       ...options,
+      sampleRate,
+      hostConcurrency,
+      allowPrivateHosts,
       baseline: options.baseline ?? (options.updateBaseline ? DEFAULT_BASELINE_FILE : undefined),
     };
   };

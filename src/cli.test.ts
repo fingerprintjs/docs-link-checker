@@ -208,16 +208,30 @@ describe("runCli()", () => {
       expect(stderr).toContain(message);
     });
 
-    it("rejects invalid environment variables with exit code 2", async () => {
-      for (const [name, value] of [
-        ["LINK_CHECK_SAMPLE_RATE", "abc"],
-        ["LINK_CHECK_HOST_CONCURRENCY", "-1"],
-        ["LINK_CHECK_ALLOW_PRIVATE_HOSTS", "yes"],
-      ] as const) {
+    const badEnv = [
+      ["LINK_CHECK_SAMPLE_RATE", "abc"],
+      ["LINK_CHECK_HOST_CONCURRENCY", "-1"],
+      ["LINK_CHECK_ALLOW_PRIVATE_HOSTS", "yes"],
+    ] as const;
+
+    it("rejects invalid environment variables when they are used (exit code 2)", async () => {
+      for (const [name, value] of badEnv) {
         stderr = "";
         expect(await runCli(["files", "a.md"], io({ [name]: value }))).toBe(2);
         expect(stderr).toContain(`Invalid ${name} "${value}"`);
       }
+    });
+
+    it("ignores invalid environment variables for --help and for flags that override them", async () => {
+      const env = Object.fromEntries(badEnv);
+      expect(await runCli(["--help"], io(env))).toBe(0);
+      expect(await runCli(["site", "--help"], io(env))).toBe(0);
+      expect(
+        await checkOptions(
+          ["--sample-rate", "0.5", "--host-concurrency", "3", "--allow-private-hosts"],
+          env,
+        ),
+      ).toMatchObject({ sampleRate: 0.5, hostConcurrency: 3, allowPrivateHosts: true });
     });
 
     it("prints help for help, --help and <command> --help to stdout", async () => {
