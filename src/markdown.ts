@@ -1,74 +1,44 @@
 import * as cheerio from "cheerio";
 import GithubSlugger from "github-slugger";
-import { marked, Parser, type Token, type Tokens } from "marked";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { toString } from "mdast-util-to-string";
+import { gfm } from "micromark-extension-gfm";
+import { visit } from "unist-util-visit";
 
 /**
  * Markdown parsing shared by local file checks and GitHub README checks: extracting links (with line numbers)
  * and the anchors GitHub renders for headings and explicit HTML anchors.
+ * Uses mdast (https://github.com/syntax-tree/mdast) with GFM, the same dialect GitHub renders.
  */
 
 export type MarkdownLink = { href: string; text: string; line?: number };
 
-// `Token` includes a generic token with any `type`, so checking `type` alone does not narrow it
-const isLinkToken = (token: Token): token is Tokens.Link => token.type === "link";
+const parse = (markdown: string) =>
+  fromMarkdown(markdown, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
 
-const stripFormatting = (text: string) => text.replace(/\*\*|__|\*|_|~~|`/g, "");
-
-/** Offsets of the line starts, to convert an offset to a 1-based line number */
-const getLineStarts = (source: string): number[] => {
-  const starts = [0];
-  for (let i = 0; i < source.length; i++) {
-    if (source[i] === "\n") starts.push(i + 1);
-  }
-  return starts;
-};
-
-const lineAt = (lineStarts: number[], offset: number): number => {
-  let [low, high] = [0, lineStarts.length - 1];
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if ((lineStarts[middle] ?? 0) <= offset) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return low + 1;
-};
+// Rendered text, like GitHub shows it: no raw HTML tags, no image alt text
+const textOf = (node: Parameters<typeof toString>[0]) =>
+  toString(node, { includeHtml: false, includeImageAlt: false });
 
 /**
- * Extracts links from markdown with the line they are on (links in code blocks are ignored). Tokens have no
- * positions, so the line is found by searching the raw link text in the source, in document order. Links whose
- * raw text can't be found have no line.
+ * Extracts links from markdown with the line they are on (links in code blocks are ignored).
+ * Reference links (`[text][ref]`) are resolved with their definitions, undefined references are not links.
  */
 export const extractMarkdownLinks = (markdown: string): MarkdownLink[] => {
-  // marked normalizes line endings, do the same so raw token text can be found in the source
-  const source = markdown.replace(/\r\n?/g, "\n");
-  const lineStarts = getLineStarts(source);
+  const tree = parse(markdown);
+  const definitions = new Map<string, string>();
+  visit(tree, "definition", (node) => {
+    // The first definition wins, like in CommonMark
+    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
+  });
+
   const links: MarkdownLink[] = [];
-  let cursor = 0;
-
-  const findLine = (raw: string): number | undefined => {
-    // Links inside blockquotes and lists can span lines that were re-indented by the lexer, search the first line
-    const candidates = [raw, raw.split("\n", 1)[0] ?? raw];
-    for (const candidate of candidates) {
-      const offset = source.indexOf(candidate, cursor);
-      if (offset !== -1) {
-        cursor = offset + candidate.length;
-        return lineAt(lineStarts, offset);
-      }
-    }
-    return undefined;
-  };
-
-  // The callback is synchronous, walkTokens returns its (empty) results
-  void marked.walkTokens(marked.lexer(source), (token: Token) => {
-    if (isLinkToken(token)) {
-      links.push({
-        href: token.href,
-        text: stripFormatting(token.text),
-        line: findLine(token.raw),
-      });
+  visit(tree, (node) => {
+    if (node.type !== "link" && node.type !== "linkReference") return;
+    const href = node.type === "link" ? node.url : definitions.get(node.identifier);
+    if (href !== undefined) {
+      links.push({ href, text: textOf(node), line: node.position?.start.line });
     }
   });
   return links;
@@ -101,16 +71,11 @@ export const getMarkdownAnchors = (markdown: string): Set<string> => {
   const slugger = new GithubSlugger();
   const anchors = new Set<string>();
 
-  // The callback is synchronous, walkTokens returns its (empty) results
-  void marked.walkTokens(marked.lexer(markdown), (token: Token) => {
-    if (token.type === "heading") {
-      // Slug is based on the rendered text content of the heading (no markdown syntax, link URLs or HTML tags)
-      const headingHtml = Parser.parseInline(token.tokens ?? []);
-      const headingText = cheerio.load(headingHtml, null, false).text().trim();
-      anchors.add(slugger.slug(headingText));
-    }
-    if (token.type === "html") {
-      for (const anchor of getHtmlAnchors(token.raw)) {
+  visit(parse(markdown), (node) => {
+    if (node.type === "heading") {
+      anchors.add(slugger.slug(textOf(node).trim()));
+    } else if (node.type === "html") {
+      for (const anchor of getHtmlAnchors(node.value)) {
         anchors.add(anchor.toLowerCase());
       }
     }

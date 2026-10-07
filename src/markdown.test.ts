@@ -58,6 +58,12 @@ describe("getMarkdownAnchors() and hasMatchingAnchor()", () => {
     expect(anchors).toContain("usage-with-code-and-bold-and-a-link");
   });
 
+  it("drops inline HTML tags and image alt text from heading slugs", () => {
+    expect(getMarkdownAnchors("# Press <kbd>Ctrl</kbd> ![logo](a.png) now")).toContain(
+      "press-ctrl--now",
+    );
+  });
+
   it("adds -1, -2 suffixes to duplicate headings", () => {
     expect(anchors).toContain("usage");
     expect(anchors).toContain("usage-1");
