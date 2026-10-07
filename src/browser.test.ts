@@ -78,6 +78,7 @@ vi.mock("playwright", () => {
                   ok: () => true,
                 };
               },
+              waitForFunction: async () => {},
               locator: () => ({ first: () => ({ waitFor: async () => {} }) }),
             };
           },
