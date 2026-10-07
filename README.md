@@ -188,7 +188,7 @@ jobs:
 
 - `bench/corpus.json` is a static 8% sample (6,812 links) of real links from dev.fingerprint.com, fingerprint.com and the fingerprintjs org READMEs. Replace it by hand if needed, it is a JSON array of `{ page, href, text }`.
 - `pnpm bench` times one round on the current tree. `pnpm bench --base <dir>` compares against another checkout (e.g. `git worktree add base-checkout origin/main`, then `pnpm install` in it), `--rounds <n>` sets rounds per side (default 2 with `--base`, 1 without).
-- Each round is its own process, base and head of a round run at the same time, rounds run one after another. The report shows median and min-max of total time, phase times and run counters.
+- Each round is its own process, base and head of a round run at the same time, rounds run one after another. The report shows median and min-max of total time, phase times, run counters and the number of link results by outcome (`result: ok`, `result: hash not found`...), to see if a speed change altered results.
 - On every PR, CI posts the report as one PR comment (updated on each push). The headline is 🟢/🔴/⚪ on total time: worse or better only if the median differs by more than 15% and 5s. Counters are worse or better only if the base and head min-max ranges do not overlap. A slowdown never fails the PR.
 
 ## Limitations

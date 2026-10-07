@@ -50,10 +50,15 @@ const isRound = (value: unknown): value is Round =>
 const runRound = async (outFile: string) => {
   const start = performance.now();
   const metrics = await withRun({}, async () => {
-    await checkLinks({ links: corpus });
+    const results = await checkLinks({ links: corpus });
     const context = getRunContext();
     if (!context) {
       throw new Error("No run context inside withRun");
+    }
+    // Counted like the other counters, so the report shows if a speed change altered results
+    for (const { result } of results) {
+      const name = `result: ${result.ok ? "ok" : result.error}`;
+      context.metrics.counters[name] = (context.metrics.counters[name] ?? 0) + 1;
     }
     return context.metrics;
   });
