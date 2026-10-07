@@ -81,7 +81,7 @@ const entrySchema = z.preprocess(
 
 const baselineSchema = z.preprocess(
   (data) => (Array.isArray(data) ? { ignore: data } : data),
-  z.strictObject({ $schema: z.string().optional(), ignore: z.array(entrySchema) }),
+  z.strictObject({ $schema: z.unknown().optional(), ignore: z.array(entrySchema) }),
 );
 
 /**

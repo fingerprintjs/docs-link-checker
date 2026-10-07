@@ -31,6 +31,7 @@ describe("validateBaseline()", () => {
       ignore: [{ pattern: "https://a.com/**" }, { pattern: "https://b/*" }],
     });
     expect(validateBaseline({ $schema: "x", ignore: [] })).toEqual({ ignore: [] });
+    expect(validateBaseline({ $schema: null, ignore: [] })).toEqual({ ignore: [] });
   });
 
   it.each([
