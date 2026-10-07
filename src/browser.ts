@@ -10,8 +10,9 @@ export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
 export const PAGE_OPERATION_TIMEOUT = 30000;
 // How long a hash is waited for after the page loaded (client-side rendered anchors)
 export const HASH_WAIT_TIMEOUT = 3000;
-// A hash of the navigated URL still missing after HASH_WAIT_TIMEOUT is waited for longer. This is the overall budget,
-// counted from the first check (HASH_WAIT_TIMEOUT included): a missing anchor takes all of it.
+// A hash still missing after HASH_WAIT_TIMEOUT is waited for longer, together with the other hashes of its page.
+// This is the overall budget of the page, counted from the first check (HASH_WAIT_TIMEOUT included): a missing
+// anchor takes all of it.
 // E.g. Mintlify docs expand collapsed sections and add their ids several seconds after hydration.
 export const HASH_FALLBACK_WAIT_TIMEOUT = 15000;
 

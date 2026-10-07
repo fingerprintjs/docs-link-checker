@@ -54,16 +54,15 @@ export const setServerErrorRetryDelays = (delays: number[] | undefined) => {
 
 /**
  * Delay before the next retry of a transient server error (`TRANSIENT_SERVER_ERROR_STATUS_CODES`), `undefined` to give
- * up: after `maxRetries` retries, or when `Retry-After` asks for more than `MAX_SERVER_ERROR_RETRY_DELAY`.
+ * up: after `MAX_SERVER_ERROR_RETRIES` retries, or when `Retry-After` asks for more than `MAX_SERVER_ERROR_RETRY_DELAY`.
  * A `Retry-After` is respected (never retried sooner), the backoff is the minimum.
  * @param retries retries done so far
  */
 export const getServerErrorRetryDelay = (
   retries: number,
   retryAfter: string | null,
-  maxRetries = MAX_SERVER_ERROR_RETRIES,
 ): number | undefined => {
-  if (retries >= maxRetries) {
+  if (retries >= MAX_SERVER_ERROR_RETRIES) {
     return undefined;
   }
   const backoff = serverErrorRetryDelays[Math.min(retries, serverErrorRetryDelays.length - 1)] ?? 0;
@@ -98,8 +97,6 @@ export type LimitedRequestOptions = {
   headers?: HeadersInit;
   /** Timeout of each request (each redirect hop), default `FETCH_TIMEOUT` */
   timeoutMs?: number;
-  /** Retries after a 502, 503 or 504, default `MAX_SERVER_ERROR_RETRIES` */
-  serverErrorRetries?: number;
 };
 
 /** Log message for a rate-limited request that is retried (the header can be seconds or an HTTP date) */
@@ -140,8 +137,8 @@ type HopResult<T> =
  *   redirected from many hosts to the same destination still respect the destination's limit.
  * - A 429 with a usable `Retry-After` pauses the whole host *before* the slot is released (so no queued request to
  *   that host starts during the pause), then the request is retried, at most `MAX_RATE_LIMIT_RETRIES` times.
- * - A 502, 503 or 504 is retried too (at most `serverErrorRetries` times), after a backoff or the `Retry-After` delay
- *   (see `getServerErrorRetryDelay`). The host is paused in the same way, so concurrent requests to an overloaded host
+ * - A 502, 503 or 504 is retried too (at most `MAX_SERVER_ERROR_RETRIES` times), after a backoff or the
+ *   `Retry-After` delay (see `getServerErrorRetryDelay`). The host is paused in the same way, so concurrent requests to an overloaded host
  *   back off as well.
  * - The final response (possibly still a 429 or 5xx) is returned. `read` consumes what it needs of the body inside the slot,
  *   any unread body (also of redirect and 429 responses) is cancelled before the slot is released.
@@ -151,12 +148,7 @@ type HopResult<T> =
  */
 export const fetchWithHostLimit = async <T>(
   url: string,
-  {
-    method = "GET",
-    headers,
-    timeoutMs = FETCH_TIMEOUT,
-    serverErrorRetries = MAX_SERVER_ERROR_RETRIES,
-  }: LimitedRequestOptions,
+  { method = "GET", headers, timeoutMs = FETCH_TIMEOUT }: LimitedRequestOptions,
   read: (response: Response) => Promise<T>,
 ): Promise<LimitedResponse<T>> => {
   const hostLimiter = getHostLimiter();
@@ -208,7 +200,6 @@ export const fetchWithHostLimit = async <T>(
           const delayMs = getServerErrorRetryDelay(
             serverErrorRetryCount,
             response.headers.get("Retry-After"),
-            serverErrorRetries,
           );
           if (delayMs !== undefined) {
             console.log(formatServerErrorRetry(requestUrl, response.status, delayMs));

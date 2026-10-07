@@ -238,7 +238,7 @@ const checkLinksInRun = async ({
     parallelProcess({
       items: pageGroups,
       concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
-      // No timeout for the whole group: it can include many per-hash fallback navigations waiting for page slots.
+      // No timeout for the whole group: it can wait for a page slot and for the host to resume.
       // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT,
       // HASH_FALLBACK_WAIT_TIMEOUT).
       processFn: async (hrefs) => {

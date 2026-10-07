@@ -69,7 +69,7 @@ describe("run context", () => {
         2000,
       ),
     ).toBe(
-      "Run metrics:\n  HTTP requests (incl. redirects, retries and HEAD-to-GET fallbacks): 3\n  Phases:\n    Extract links: 1.5s\n  Total: 2.0s",
+      "Run metrics:\n  HTTP requests (incl. redirects and retries): 3\n  Phases:\n    Extract links: 1.5s\n  Total: 2.0s",
     );
   });
 });
@@ -105,19 +105,15 @@ describe("checkLinks() metrics", () => {
     });
   });
 
-  it("counts every HTTP request (redirect hops, HEAD-to-GET fallbacks) separately from unique pages", async () => {
+  it("counts every HTTP request (redirect hops) separately from unique pages", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url === "https://example.com/old")
-          return new Response(null, { status: 301, headers: { Location: "/new" } });
-        // The redirect target refuses HEAD
-        return init?.method === "HEAD"
-          ? new Response(null, { status: 405 })
-          : new Response("ok", { status: 200 });
-      }),
+      vi.fn(async (input: string | URL) =>
+        String(input) === "https://example.com/old"
+          ? new Response(null, { status: 301, headers: { Location: "/new" } })
+          : new Response("ok", { status: 200 }),
+      ),
     );
     const { checkLinks } = await import("./link");
 
@@ -128,7 +124,7 @@ describe("checkLinks() metrics", () => {
       return getRunContext()!.metrics.counters;
     });
 
-    // HEAD /old (301), HEAD /new (405), then the GET fallback: GET /old (301), GET /new (200)
-    expect(counters).toMatchObject({ uniquePagesFetched: 1, httpRequests: 4 });
+    // GET /old (301), GET /new (200)
+    expect(counters).toMatchObject({ uniquePagesFetched: 1, httpRequests: 2 });
   });
 });

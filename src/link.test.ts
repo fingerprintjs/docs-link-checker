@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LinkCheckResult, LinkWithResult } from "./types";
+import type { LinkCheckResult } from "./types";
 
 /**
  * Offline tests for `link.ts`: `fetch`, the GitHub API check and Playwright are all mocked.
@@ -36,6 +36,12 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     // HTML per navigated URL rendered `afterMs` after the navigation (anchors rendered late, e.g. by a timer on an
     // already loaded and quiet page), falls back to the above before that. For tests with fake timers.
     lateHtmlByUrl: {} as Record<string, { html: string; afterMs: number }>,
+    // Hashes set in the open page (`location.hash = hash`), the fake page then renders the HTML of its new URL
+    hashesSet: [] as string[],
+    // Setting the hash throws (e.g. the page navigated away)
+    evaluateFails: false,
+    // Setting the hash never returns (the page main thread is hung)
+    evaluateHangs: false,
     // Timeouts of hash waits
     hashTimeouts: [] as Array<number | undefined>,
     // The navigation response body never ends (Playwright has no timeout for it)
@@ -87,6 +93,26 @@ vi.mock("playwright", () => ({
                     ? new Promise<string>(() => {})
                     : Promise.resolve("Forbidden page"),
               };
+            },
+            // Only used to set the hash of the page: runs the callback against a fake `location`
+            evaluate: async (fn: (hash: string) => void, hash: string) => {
+              if (playwrightState.evaluateFails) {
+                throw new Error("Execution context was destroyed");
+              }
+              if (playwrightState.evaluateHangs) {
+                return new Promise<void>(() => {});
+              }
+              vi.stubGlobal("location", {
+                set hash(value: string) {
+                  playwrightState.hashesSet.push(value);
+                  currentUrl = currentUrl.replace(/#.*/, "") + value;
+                },
+              });
+              try {
+                fn(hash);
+              } finally {
+                vi.unstubAllGlobals();
+              }
             },
             locator: (selector: string) => ({
               first: () => ({
@@ -155,6 +181,9 @@ beforeEach(() => {
   playwrightState.lateHtmlByUrl = {};
   playwrightState.responseBodyHangs = false;
   playwrightState.hashTimeouts = [];
+  playwrightState.hashesSet = [];
+  playwrightState.evaluateFails = false;
+  playwrightState.evaluateHangs = false;
   playwrightState.waitForTakesTimeout = false;
   playwrightState.status = 200;
   playwrightState.statuses = [];
@@ -399,67 +428,25 @@ describe("checkLinkWithFetch()", () => {
     expect(!result.ok && result.errorDetail).toContain("TimeoutError");
   });
 
-  it.each([405, 403, 501])("retries once with GET when HEAD returns %s", async (status) => {
-    const fetchMock = stubFetch((_url, init) =>
-      init.method === "HEAD" ? new Response(null, { status }) : new Response("ok", { status: 200 }),
-    );
-
-    const result = await checkLinkWithFetch("https://example.com/no-head");
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-  });
-
-  it("fails when GET also fails after HEAD", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 405 }));
-
-    const result = await checkLinkWithFetch("https://example.com/no-head");
-
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 405 });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([400, 404, 410, 500, 503])(
-    "retries once with GET when HEAD returns %s (servers answering HEAD differently)",
-    async (status) => {
-      // support.google.com and chatgpt.com answer 404 to HEAD and 200 to GET
-      const fetchMock = stubFetch((_url, init) =>
-        init.method === "HEAD"
-          ? new Response(null, { status })
-          : new Response("ok", { status: 200 }),
-      );
-
-      const result = await checkLinkWithFetch("https://support.example.com/answer/1");
-
-      expect(result).toEqual({ ok: true, status: 200 });
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    },
-  );
-
-  it("reports 404 when GET also returns 404 after HEAD", async () => {
+  it("sends GET also for a link without a hash, and reports its failure", async () => {
     const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
 
     const result = await checkLinkWithFetch("https://example.com/missing");
 
     expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
   });
 
-  it("does not retry with GET when HEAD succeeds", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
+  it("accepts a page that answers HEAD with 404 and GET with 200", async () => {
+    // support.google.com and chatgpt.com
+    stubFetch((_url, init) =>
+      init.method === "HEAD" ? new Response(null, { status: 404 }) : new Response("ok"),
+    );
 
-    await checkLinkWithFetch("https://example.com/ok");
-
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
-  });
-
-  it("does not retry with GET when HEAD is rate limited (429)", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
-
-    const result = await checkLinkWithFetch("https://example.com/limited");
-
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 429 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD"]);
+    expect(await checkLinkWithFetch("https://support.example.com/answer/1")).toEqual({
+      ok: true,
+      status: 200,
+    });
   });
 
   it.each(["#zippy=%2Cdata-sharing", "#zippy="])(
@@ -730,7 +717,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // One GET for the page, also used by the link without a hash (no extra HEAD request)
+    // One GET for the page, also used by the link without a hash
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]![1]?.method).toBe("GET");
     expect(results).toHaveLength(10);
@@ -754,14 +741,6 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     expect(new Set(results.map((r) => r.page)).size).toBe(10);
   });
 
-  it("uses HEAD for pages that are never linked with a hash", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
-
-    await checkLinks({ links: [link("https://example.com/a"), link("https://example.com/b")] });
-
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "HEAD"]);
-  });
-
   it("reports a broken page for every hash pointing to it (one request)", async () => {
     const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
     const links = ["#a", "#b", "#c"].map((hash) => link(`https://example.com/gone${hash}`));
@@ -782,11 +761,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // One shared navigation, plus a dedicated one for the hash missing in the shared DOM
-    expect(playwrightState.visited).toEqual([
-      "https://example.com/spa#one",
-      "https://example.com/spa#three",
-    ]);
+    expect(playwrightState.visited).toEqual(["https://example.com/spa#one"]);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     expect(resultByHref.get("https://example.com/spa#one")).toEqual({ ok: true, status: 200 });
     expect(resultByHref.get("https://example.com/spa#two")).toEqual({ ok: true, status: 200 });
@@ -807,8 +782,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // Found line numbers share one navigation, the missing one gets a dedicated navigation
-    expect(playwrightState.visited).toEqual([`${file}#L5`, `${file}#L99`]);
+    expect(playwrightState.visited).toEqual([`${file}#L5`]);
     expect(results.filter((r) => r.result.ok).map((r) => r.href)).toEqual([
       `${file}#L5`,
       `${file}#L6`,
@@ -829,124 +803,103 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // One navigation per page, plus a dedicated one for `#x` (not in the shared DOM of page `a`)
     expect(playwrightState.visited).toEqual([
       "https://blocked.example.com/a",
       "https://blocked.example.com/b",
-      "https://blocked.example.com/a#x",
     ]);
     expect(results).toHaveLength(3);
   });
 });
 
-describe("checkLinks() Playwright hash fallback", () => {
-  it("re-checks a hash missing in the shared DOM with a dedicated navigation (SPA tabs)", async () => {
+describe("checkLinks() Playwright hashes of one page", () => {
+  const page = "https://docs.example.com/app";
+
+  /** Checks the hashes of `page` with fake timers, returns results by hash, the metrics and the simulated time taken */
+  const checkHashes = async (hashes: string[]) => {
     stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-    // The SPA renders a different tab per hash
-    playwrightState.htmlByUrl = {
-      "https://example.com/app#tab-a": '<div id="tab-a"></div>',
-      "https://example.com/app#tab-b": '<div id="tab-b"></div>',
-    };
-    const links = ["#tab-a", "#tab-b", "#missing"].map((hash) =>
-      link(`https://example.com/app${hash}`),
-    );
-
-    const results = await withRun({}, async () => {
-      const checked = await checkLinks({ links });
-      expect(getRunContext()!.metrics.counters).toMatchObject({
-        playwrightNavigations: 3,
-        playwrightHashFallbacks: 2,
-      });
-      return checked;
-    });
-
-    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
-    expect(resultByHref.get("https://example.com/app#tab-a")).toEqual({ ok: true, status: 200 });
-    expect(resultByHref.get("https://example.com/app#tab-b")).toEqual({ ok: true, status: 200 });
-    expect(resultByHref.get("https://example.com/app#missing")).toEqual({
-      ok: false,
-      status: 200,
-      error: "hash not found",
-    });
-    expect(playwrightState.visited).toEqual([
-      "https://example.com/app#tab-a",
-      "https://example.com/app#tab-b",
-      "https://example.com/app#missing",
-    ]);
-  });
-
-  it("does not time out a page group whose fallback navigations together take longer than the task timeout", async () => {
+    playwrightState.waitForTakesTimeout = true;
     vi.useFakeTimers();
     try {
-      stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-      // Every tab is only rendered on its own URL: 1 shared navigation + 11 fallbacks, 5 page slots,
-      // 25s per navigation (each within its own 30s timeout) -> about 100s in total, more than TASK_TIMEOUT (80s)
-      playwrightState.gotoDelayMs = 25_000;
-      const hrefs = Array.from({ length: 12 }, (_, i) => `https://example.com/app#tab-${i}`);
-      playwrightState.htmlByUrl = Object.fromEntries(
-        hrefs.map((href, i) => [href, `<div id="tab-${i}"></div>`]),
-      );
-
-      const promise = checkLinks({ links: hrefs.map((href) => link(href)) });
-      await vi.advanceTimersByTimeAsync(300_000);
-      const results = await promise;
-
-      expect(results).toHaveLength(12);
-      expect(results.every((r) => r.result.ok)).toBe(true);
-      expect(playwrightState.visited).toHaveLength(12);
-      // Every navigation is bounded on its own
-      expect(playwrightState.gotoTimeouts).toEqual(Array(12).fill(30000));
-      expect(new Set(playwrightState.pageTimeouts)).toEqual(new Set([30000]));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("waits for late anchors of every hash of a page (shared navigation and dedicated fallbacks)", async () => {
-    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-    const page = "https://docs.example.com/reference/get-event";
-    const hashes = ["#response-a", "#response-b", "#response-c", "#missing"];
-    // Every field is only expanded (and gets its id) when the page is opened with its hash, a few seconds later
-    playwrightState.lateHtmlByUrl = Object.fromEntries(
-      hashes
-        .slice(0, 3)
-        .map((hash) => [
-          `${page}${hash}`,
-          { html: `<div id="${hash.slice(1)}"></div>`, afterMs: 4000 },
-        ]),
-    );
-
-    vi.useFakeTimers();
-    let results: LinkWithResult[];
-    try {
+      const start = Date.now();
+      let finishedAt = Number.NaN;
       const promise = withRun({}, async () => {
         const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
-        expect(getRunContext()!.metrics.counters).toMatchObject({
-          playwrightNavigations: 4,
-          playwrightHashFallbacks: 3,
-          playwrightLongHashWaits: 4,
-        });
-        return checked;
+        finishedAt = Date.now();
+        return { checked, counters: { ...getRunContext()!.metrics.counters } };
       });
       await vi.advanceTimersByTimeAsync(120_000);
-      results = await promise;
+      const { checked, counters } = await promise;
+      const byHash = new Map(checked.map((r) => [r.href.slice(page.length), r.result]));
+      return { byHash, counters, took: finishedAt - start };
     } finally {
       vi.useRealTimers();
     }
+  };
 
-    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
-    for (const hash of hashes.slice(0, 3)) {
-      expect(resultByHref.get(`${page}${hash}`)).toEqual({ ok: true, status: 200 });
+  it("finds late anchors of every hash with one navigation and one shared wait", async () => {
+    // Both anchors are added by a timer 4s after the navigation (e.g. expanded nested fields)
+    playwrightState.lateHtmlByUrl = {
+      [`${page}#a`]: { html: '<div id="a"></div><div id="b"></div>', afterMs: 4000 },
+    };
+
+    const { byHash, counters, took } = await checkHashes(["#a", "#b"]);
+
+    expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#b")).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toEqual([`${page}#a`]);
+    expect(playwrightState.hashesSet).toEqual([]);
+    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightLongHashWaits: 2 });
+    expect(took).toBe(4000);
+  });
+
+  it("finds a hash that is rendered only after the hash is set in the open page (SPA tabs)", async () => {
+    playwrightState.htmlByUrl = {
+      [`${page}#tab-a`]: '<div id="tab-a"></div>',
+      [`${page}#tab-b`]: '<div id="tab-b"></div>',
+    };
+
+    const { byHash, counters } = await checkHashes(["#tab-a", "#tab-b", "#missing"]);
+
+    expect(byHash.get("#tab-a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#tab-b")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    // No navigation per hash
+    expect(playwrightState.visited).toEqual([`${page}#tab-a`]);
+    expect(playwrightState.hashesSet).toEqual(["#tab-b", "#missing"]);
+    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightHashFallbacks: 2 });
+  });
+
+  it("keeps 'hash not found' for a hash whose in-page retry fails, other results stay", async () => {
+    playwrightState.evaluateFails = true;
+    playwrightState.htmlByUrl = { [`${page}#a`]: '<div id="a"></div>' };
+
+    const { byHash } = await checkHashes(["#a", "#missing"]);
+
+    expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+
+  it("stops the in-page retries of a page that hangs, other results stay", async () => {
+    playwrightState.evaluateHangs = true;
+    playwrightState.htmlByUrl = { [`${page}#a`]: '<div id="a"></div>' };
+
+    const { byHash, took } = await checkHashes(["#a", "#missing", "#missing2"]);
+
+    expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(byHash.get("#missing2")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    // 15s shared wait, then one 3s timeout (the next hash is not tried)
+    expect(took).toBe(15_000 + 3000);
+  });
+
+  it("spends the 15s budget once per page, not once per missing hash", async () => {
+    const { byHash, took } = await checkHashes(["#a", "#b", "#c", "#d"]);
+
+    for (const hash of ["#a", "#b", "#c", "#d"]) {
+      expect(byHash.get(hash)).toEqual({ ok: false, status: 200, error: "hash not found" });
     }
-    expect(resultByHref.get(`${page}#missing`)).toEqual({
-      ok: false,
-      status: 200,
-      error: "hash not found",
-    });
-    // One navigation per hash, no extra navigation for the long wait
-    expect(playwrightState.visited.toSorted()).toEqual(
-      hashes.map((hash) => `${page}${hash}`).toSorted(),
-    );
+    // 15s shared wait, then 3s for each of the 3 hashes set in the page
+    expect(took).toBe(15_000 + 3 * 3000);
   });
 
   it("does not add navigations when every hash is in the shared DOM", async () => {
@@ -956,6 +909,7 @@ describe("checkLinks() Playwright hash fallback", () => {
     await checkLinks({ links: [link("https://example.com/p#a"), link("https://example.com/p#b")] });
 
     expect(playwrightState.visited).toEqual(["https://example.com/p#a"]);
+    expect(playwrightState.hashesSet).toEqual([]);
   });
 });
 
@@ -977,39 +931,6 @@ describe("server errors (502, 503, 504)", () => {
     }
   };
 
-  it("fetch: a HEAD 503 falls back to GET right away (HEAD itself is never retried)", async () => {
-    let failures = 1;
-    const fetchMock = stubFetch(() =>
-      failures-- > 0 ? new Response("busy", { status: 503 }) : new Response("ok", { status: 200 }),
-    );
-
-    const { result, took } = await withFakeTimers(() =>
-      checkLinkWithFetch("https://busy.example.com/page"),
-    );
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    // No backoff: the GET fallback is sent right away and succeeds on its first attempt
-    expect(took).toBe(0);
-  });
-
-  it("fetch: the HEAD's Retry-After does not delay the GET fallback (HEAD has no retry policy of its own)", async () => {
-    let failures = 1;
-    const fetchMock = stubFetch(() =>
-      failures-- > 0
-        ? new Response(null, { status: 503, headers: { "Retry-After": "120" } })
-        : new Response("ok", { status: 200 }),
-    );
-
-    const { result, took } = await withFakeTimers(() =>
-      checkLinkWithFetch("https://busy.example.com/page"),
-    );
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    expect(took).toBe(0);
-  });
-
   it.each([502, 503, 504])(
     "fetch: reports a %s that persists after the retries as 'could not check', not broken",
     async (status) => {
@@ -1021,13 +942,8 @@ describe("server errors (502, 503, 504)", () => {
 
       expect(result).toMatchObject({ ok: false, error: "could not check", status });
       expect(!result.ok && result.errorDetail).toContain(`Server error ${status}`);
-      // HEAD (not retried), then the GET fallback with the normal retry policy (2 retries, backoff 2s then 5s)
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
-        "HEAD",
-        "GET",
-        "GET",
-        "GET",
-      ]);
+      // 2 retries, backoff 2s then 5s
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
       expect(took).toBe(7000);
     },
   );

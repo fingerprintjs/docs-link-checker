@@ -196,16 +196,13 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
     expect(took).toBe(0);
   });
 
-  it("does not retry with `serverErrorRetries: 0`, or other 5xx statuses", async () => {
+  it("does not retry other 5xx statuses", async () => {
     setHostLimiter(new HostLimiter(2));
-    const fetchMock = stubFetch(
-      (url) => new Response(null, { status: url.endsWith("/500") ? 500 : 503 }),
-    );
+    const fetchMock = stubFetch(() => new Response(null, { status: 500 }));
 
-    await fetchWithHostLimit("https://busy.example.com/503", { serverErrorRetries: 0 }, text);
     await fetchWithHostLimit("https://busy.example.com/500", {}, text);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("getServerErrorRetryDelay() is bounded: backoff, Retry-After as a minimum, at most 10s", () => {
@@ -217,7 +214,6 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
     expect(getServerErrorRetryDelay(1, "10")).toBe(10_000);
     expect(getServerErrorRetryDelay(0, "11")).toBeUndefined();
     expect(getServerErrorRetryDelay(0, "invalid")).toBe(2000);
-    expect(getServerErrorRetryDelay(0, null, 0)).toBeUndefined();
   });
 });
 
@@ -429,21 +425,17 @@ describe("unread response bodies are cancelled before the host slot is released"
     expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
   });
 
-  it("link checks cancel both the HEAD body before the GET fallback and the unneeded GET body", async () => {
+  it("link checks cancel the GET body when it is not needed", async () => {
     const limiter = new HostLimiter(1);
     setHostLimiter(limiter);
-    const url = "https://example.com/no-head";
-    const head = trackedResponse(405, limiter, url);
+    const url = "https://example.com/big-file";
     const get = trackedResponse(200, limiter, url);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_input: string | URL, init?: RequestInit) =>
-        init?.method === "HEAD" ? head.response : get.response,
-      ),
+      vi.fn(async () => get.response),
     );
 
     expect(await checkLinkWithFetch(url)).toEqual({ ok: true, status: 200 });
-    expect(head.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
     expect(get.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
   });
 });
