@@ -15,7 +15,7 @@ export const HASH_WAIT_TIMEOUT = 3000;
 // anchor takes all of it.
 // E.g. Mintlify docs expand collapsed sections and add their ids a few seconds after hydration.
 // Kept short: every anchor that never appears costs the whole budget.
-export const HASH_FALLBACK_WAIT_TIMEOUT = 12000;
+export const HASH_FALLBACK_WAIT_TIMEOUT = 8000;
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
