@@ -16,7 +16,7 @@ export const HASH_WAIT_TIMEOUT = 3000;
 // E.g. Mintlify docs expand collapsed sections and add their ids several seconds after hydration.
 export const HASH_FALLBACK_WAIT_TIMEOUT = 15000;
 // The long wait ends early once the DOM has not changed for this long: the page is done rendering
-export const DOM_QUIET_TIME = 2000;
+export const DOM_QUIET_TIME = 5000;
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
