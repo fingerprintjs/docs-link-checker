@@ -1,3 +1,4 @@
+import { Headers } from "undici";
 import { DestinationNotAllowedError } from "./destination";
 import { type AnchorIndex, buildAnchorIndex, isHashInAnchorIndex } from "./hash";
 import {

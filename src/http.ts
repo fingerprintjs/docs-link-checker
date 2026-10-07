@@ -1,4 +1,5 @@
-import { assertDestinationAllowed } from "./destination";
+import { fetch, type Headers, type HeadersInit, type Response } from "undici";
+import { assertDestinationAllowed, DestinationNotAllowedError, getDispatcher } from "./destination";
 import { parseRetryAfter } from "./limiter";
 import { getHostLimiter, incrementMetric } from "./run";
 
@@ -168,8 +169,9 @@ export const fetchWithHostLimit = async <T>(
   for (;;) {
     const requestUrl = currentUrl;
     const requestMethod = currentMethod;
-    // SSRF guard: every hop (the first request and every redirect) must go to a public address
-    await assertDestinationAllowed(requestUrl);
+    // SSRF guard: every hop (the first request and every redirect) must go to a public address.
+    // Literals are checked here, host names when connecting (the dispatcher).
+    assertDestinationAllowed(requestUrl);
     const result = await hostLimiter.run(requestUrl, async (): Promise<HopResult<T>> => {
       // Counted per actual request (every redirect hop and retry)
       incrementMetric("httpRequests");
@@ -178,6 +180,12 @@ export const fetchWithHostLimit = async <T>(
         headers,
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
+        dispatcher: getDispatcher(),
+      }).catch((error: unknown) => {
+        // `fetch failed` wraps the error of the connection, like a blocked address
+        throw error instanceof Error && error.cause instanceof DestinationNotAllowedError
+          ? error.cause
+          : error;
       });
       try {
         const location = response.headers.get("Location");

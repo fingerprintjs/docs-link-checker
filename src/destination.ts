@@ -1,6 +1,7 @@
-import { lookup } from "node:dns/promises";
-import { BlockList, isIP } from "node:net";
-import { isPrivateHostsAllowed, runCached } from "./run";
+import { lookup } from "node:dns";
+import { BlockList, isIP, type LookupFunction } from "node:net";
+import { Agent } from "undici";
+import { isPrivateHostsAllowed } from "./run";
 
 /**
  * Destination policy (SSRF protection): links come from documents that can be untrusted (for example markdown in a
@@ -9,14 +10,14 @@ import { isPrivateHostsAllowed, runCached } from "./run";
  * reserved ranges, their IPv4-mapped (and similar embedded IPv4) IPv6 forms, and `localhost` / `*.localhost`.
  *
  * - `fetchWithHostLimit` (the only `fetch` caller) checks every hop, the first request and every redirect:
- *   IP literals directly, host names by resolving them (`dns.lookup`, all addresses) and blocking if ANY
- *   address is non-public.
+ *   - IP literals and `localhost` names before sending (`assertDestinationAllowed`), `lookup` is not called for them.
+ *   - Other host names when connecting (`publicOnlyDispatcher`): the connection's own DNS lookup fails if ANY
+ *     resolved address is non-public. The checked address is the one connected to, so DNS rebinding (a name
+ *     answering with a public address first and a private one right after) does not work.
+ *   https://undici.nodejs.org/#/docs/api/Connector (`connect.lookup` is passed to `net.connect`)
  * - Playwright only re-checks links that already passed the fetch pass (blocked links are never re-checked). Its
  *   route handler additionally aborts requests to blocked IP literals and localhost names (redirects, page
  *   resources), without resolving host names.
- * - Limitation: `fetch` resolves the name again when connecting, so a DNS rebinding attack (a name answering
- *   with a public address to the check and a private one right after) is not prevented. That would need
- *   connecting to the checked address, which Node's built-in `fetch` doesn't allow without extra dependencies.
  * - IPv4-compatible (`::a.b.c.d`), IPv4-translated (`::ffff:0:a.b.c.d`), NAT64 (`64:ff9b::a.b.c.d`) and 6to4
  *   (`2002:a.b.c.d::`) forms are blocked wholesale, including ones embedding a public IPv4 address: docs never
  *   link to them, and `net.BlockList` has no way to unwrap them to apply the IPv4 rules (unlike the IPv4-mapped
@@ -100,18 +101,11 @@ export const isBlockedUrlLiteral = (url: string, allowPrivateHosts = isPrivateHo
   }
 };
 
-type LookupAll = (hostname: string) => Promise<Array<{ address: string }>>;
-const lookupAll: LookupAll = (hostname) => lookup(hostname, { all: true, order: "verbatim" });
-
-/**
- * Throws `DestinationNotAllowedError` if the URL's host is blocked: a blocked literal, or a name with ANY
- * non-public address. Name resolution failures are not blocked (the request then fails like any unknown host).
- * Resolutions are cached for the run.
- */
-export const assertDestinationAllowed = async (
+/** Throws `DestinationNotAllowedError` if the URL's host is a blocked literal (names are checked when connecting) */
+export const assertDestinationAllowed = (
   url: string,
   allowPrivateHosts = isPrivateHostsAllowed(),
-): Promise<void> => {
+): void => {
   if (allowPrivateHosts) return;
   let hostname: string;
   try {
@@ -119,15 +113,32 @@ export const assertDestinationAllowed = async (
   } catch {
     return; // Invalid URLs fail in fetch
   }
-  if (hostname === "") return;
   if (isBlockedHostLiteral(hostname)) {
     throw new DestinationNotAllowedError(hostname);
   }
-  if (isIP(hostname) !== 0) return; // A public IP literal
-  const addresses = await runCached(`dns ${hostname}`, () => lookupAll(hostname)).catch(
-    () => undefined,
-  );
-  if (addresses?.some(({ address }) => isNonPublicAddress(address))) {
-    throw new DestinationNotAllowedError(hostname);
-  }
 };
+
+/** `dns.lookup` that fails with `DestinationNotAllowedError` if ANY resolved address is non-public */
+const lookupPublic: LookupFunction = (hostname, options, callback) => {
+  // Resolve all addresses to check each one, then answer in the shape the caller asked for
+  lookup(hostname, { ...options, all: true, order: "verbatim" }, (error, addresses) => {
+    // `addresses` is undefined on an error (ENOTFOUND...)
+    const first = error ? undefined : addresses[0];
+    if (error || first === undefined) {
+      callback(error ?? new Error(`No address found for ${hostname}`), "", 0);
+    } else if (addresses.some(({ address }) => isNonPublicAddress(address))) {
+      callback(new DestinationNotAllowedError(hostname), "", 0);
+    } else if (options.all) {
+      callback(null, addresses);
+    } else {
+      callback(null, first.address, first.family);
+    }
+  });
+};
+
+const publicOnlyAgent = new Agent({ connect: { lookup: lookupPublic } });
+const unrestrictedAgent = new Agent();
+
+/** Dispatcher for `fetch` (undici's): connects to public addresses only, unless private hosts are allowed */
+export const getDispatcher = (allowPrivateHosts = isPrivateHostsAllowed()) =>
+  allowPrivateHosts ? unrestrictedAgent : publicOnlyAgent;
