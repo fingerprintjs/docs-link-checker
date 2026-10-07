@@ -17,7 +17,7 @@ const { octokit } = vi.hoisted(() => {
       },
       issues: { get: vi.fn() },
       pulls: { get: vi.fn() },
-      git: { getRef: vi.fn(), getCommit: vi.fn(), listMatchingRefs: vi.fn() },
+      git: { listMatchingRefs: vi.fn() },
       // All pages of a list endpoint: the mocks return a single page
       paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
         (await fn(params)).data,
@@ -53,8 +53,6 @@ beforeEach(() => {
     octokit.repos.getCommit,
     octokit.issues.get,
     octokit.pulls.get,
-    octokit.git.getRef,
-    octokit.git.getCommit,
   ]) {
     fn.mockReset();
     fn.mockResolvedValue({ data: {} });
@@ -373,8 +371,7 @@ describe("GitHub API server errors", () => {
   });
 
   it("reports a tree check failing with a 5xx as unexpected error, not broken", async () => {
-    octokit.git.getRef.mockRejectedValue(octokit.notFound());
-    octokit.git.getCommit.mockRejectedValue(serverError(502));
+    octokit.repos.getContent.mockRejectedValue(serverError(502));
 
     const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/some-branch");
 
@@ -382,14 +379,16 @@ describe("GitHub API server errors", () => {
   });
 
   it("still reports a missing branch or commit as broken", async () => {
-    octokit.git.getRef.mockRejectedValue(octokit.notFound());
-    octokit.git.getCommit.mockRejectedValue(
-      Object.assign(new Error("Unprocessable"), { status: 422 }),
-    );
+    octokit.repos.getContent.mockRejectedValue(octokit.notFound());
 
     const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/missing");
 
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      errorDetail: "Neither branch nor commit missing found in repository o/r",
+    });
   });
 });
 
@@ -406,8 +405,6 @@ describe("GitHub API 401 and 403 (bad token, rate limits after Octokit's retry, 
       octokit.repos.getCommit.mockRejectedValue(apiError(status));
       octokit.issues.get.mockRejectedValue(apiError(status));
       octokit.pulls.get.mockRejectedValue(apiError(status));
-      octokit.git.getRef.mockRejectedValue(apiError(status));
-      octokit.git.getCommit.mockRejectedValue(apiError(status));
 
       for (const url of [
         "https://github.com/someone",
@@ -431,9 +428,8 @@ describe("GitHub API 401 and 403 (bad token, rate limits after Octokit's retry, 
     },
   );
 
-  it("reports a 403 of the commit lookup of a tree link as unexpected error", async () => {
-    octokit.git.getRef.mockRejectedValue(octokit.notFound());
-    octokit.git.getCommit.mockRejectedValue(apiError(403));
+  it("reports a 403 of a tree link as unexpected error", async () => {
+    octokit.repos.getContent.mockRejectedValue(apiError(403));
 
     const result = await checkLinkWithGithubApi("https://github.com/o/r/tree/some-branch");
 
