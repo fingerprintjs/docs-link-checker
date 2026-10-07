@@ -1,7 +1,6 @@
 import pLimit from "p-limit";
 import { type Browser, chromium, type Page, type Route } from "playwright";
-import { isBlockedUrlLiteral } from "./destination";
-import { getBrowserSlot, incrementMetric, isPrivateHostsAllowed } from "./run";
+import { getBrowserSlot, incrementMetric } from "./run";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
@@ -69,18 +68,13 @@ const getHostname = (url: string | undefined): string | undefined => {
 export type RequestInfo = {
   resourceType: string;
   url: string;
-  /**
-   * The top-level document navigation (the link being checked) is not blocked by resource type or vendor,
-   * only by the destination policy
-   */
+  /** The top-level document navigation (the link being checked) is never blocked */
   isMainFrameNavigation: boolean;
   /**
    * URL of the checked page (main frame). If the page itself is hosted by a blocked vendor (e.g. segment.com docs),
    * requests to that vendor's hosts are its own resources and are not blocked.
    */
   pageUrl?: string;
-  /** Allow private and local destinations (`LINK_CHECK_ALLOW_PRIVATE_HOSTS`), default from the current run */
-  allowPrivateHosts?: boolean;
 };
 
 /**
@@ -91,13 +85,7 @@ export const shouldBlockRequest = ({
   url,
   isMainFrameNavigation,
   pageUrl,
-  allowPrivateHosts = isPrivateHostsAllowed(),
 }: RequestInfo): boolean => {
-  // SSRF guard for every request, including the main navigation and its redirects: IP literals and localhost
-  // names only, no DNS resolution. Links only get here after the fetch pass, which also resolves host names.
-  if (isBlockedUrlLiteral(url, allowPrivateHosts)) {
-    return true;
-  }
   if (isMainFrameNavigation) {
     return false;
   }

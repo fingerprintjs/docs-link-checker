@@ -170,10 +170,9 @@ export const checkReadmesInGithubOrg = (
     baseline = EMPTY_BASELINE,
     outputDir = DEFAULT_OUTPUT_DIR,
     hostConcurrency,
-    allowPrivateHosts,
   }: CheckReadmesOptions = {},
 ) =>
-  withRun({ hostConcurrency, allowPrivateHosts }, async () => {
+  withRun({ hostConcurrency }, async () => {
     const startTime = performance.now();
 
     const fingerprintPublicReadmes = await timePhase("List README files", () =>

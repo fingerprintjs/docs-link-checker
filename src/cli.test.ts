@@ -103,7 +103,6 @@ describe("runCli()", () => {
         baseline: { entries: [] },
         outputDir: "results",
         hostConcurrency: 8,
-        allowPrivateHosts: false,
       });
     });
 
@@ -117,17 +116,16 @@ describe("runCli()", () => {
       const env = {
         LINK_CHECK_SAMPLE_RATE: "0.1",
         LINK_CHECK_HOST_CONCURRENCY: "2",
-        LINK_CHECK_ALLOW_PRIVATE_HOSTS: "true",
       };
       expect(await checkOptions([], env)).toMatchObject({
         sampleRate: 0.1,
         hostConcurrency: 2,
-        allowPrivateHosts: true,
       });
       mocks.checkWebsite.mockClear();
-      expect(
-        await checkOptions(["--sample-rate=1", "--no-allow-private-hosts"], env),
-      ).toMatchObject({ sampleRate: 1, allowPrivateHosts: false });
+      expect(await checkOptions(["--sample-rate=1"], env)).toMatchObject({
+        sampleRate: 1,
+        hostConcurrency: 2,
+      });
     });
 
     it("FAIL_ON_BROKEN_LINKS=false and --no-fail-on-broken only report links to fix", async () => {
@@ -211,7 +209,6 @@ describe("runCli()", () => {
     const badEnv = [
       ["LINK_CHECK_SAMPLE_RATE", "abc"],
       ["LINK_CHECK_HOST_CONCURRENCY", "-1"],
-      ["LINK_CHECK_ALLOW_PRIVATE_HOSTS", "yes"],
     ] as const;
 
     it("rejects invalid environment variables when they are used (exit code 2)", async () => {
@@ -227,11 +224,8 @@ describe("runCli()", () => {
       expect(await runCli(["--help"], io(env))).toBe(0);
       expect(await runCli(["site", "--help"], io(env))).toBe(0);
       expect(
-        await checkOptions(
-          ["--sample-rate", "0.5", "--host-concurrency", "3", "--allow-private-hosts"],
-          env,
-        ),
-      ).toMatchObject({ sampleRate: 0.5, hostConcurrency: 3, allowPrivateHosts: true });
+        await checkOptions(["--sample-rate", "0.5", "--host-concurrency", "3"], env),
+      ).toMatchObject({ sampleRate: 0.5, hostConcurrency: 3 });
     });
 
     it("prints help for help, --help and <command> --help to stdout", async () => {
@@ -399,21 +393,6 @@ describe("runCli()", () => {
     });
   });
 
-  it("--allow-private-hosts is passed to the check as an explicit option", async () => {
-    mocks.checkWebsite.mockResolvedValue({
-      siteName: "localhost",
-      summary: { totalLinksToFix: 0 },
-      brokenLinks: [],
-      hashNotFound: [],
-      networkErrors: [],
-      couldNotCheck: [],
-      ignored: [],
-    });
-    expect(await runCli(["site", "http://localhost:3000", "--allow-private-hosts"], io())).toBe(0);
-    expect(mocks.checkWebsite).toHaveBeenCalledTimes(1);
-    expect(mocks.checkWebsite.mock.calls[0]![0]).toMatchObject({ allowPrivateHosts: true });
-  });
-
   it("baseline: returns 2 with a clear message for an invalid file", async () => {
     const baselinePath = join(tempDir(), "baseline.json");
     writeFileSync(baselinePath, JSON.stringify({ ignore: [{ url: "x" }] }));
@@ -457,7 +436,6 @@ describe("runCli()", () => {
       baseline: expect.anything(),
       outputDir: "out",
       hostConcurrency: 8,
-      allowPrivateHosts: false,
     });
   });
 
