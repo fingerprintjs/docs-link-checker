@@ -19,6 +19,10 @@
 - DO NOT write tests that are trivial, , structure-sensitive or tightly coupled to the implementation (never just reassert an internal implementation detail)
 - Not tautological tests: they must be able to fail by messing up the implementation
 
+## Dependencies
+
+- If code complexity or volume can be meaningfully reduced by using a high-quality, industry-leading or industry-standard well-maintained library, do it.
+
 ## Comments & Docs
 
 - Keep short, use simplified technical english
