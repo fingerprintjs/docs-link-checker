@@ -28,7 +28,7 @@ The package scripts used by the workflow (`pnpm run checkLinks:docs`, `checkLink
 
 ## Code map
 
-`src/cli.ts` (CLI), `src/website.ts` (`site`), `src/github/gh_get_links.ts` (`github-org`), `src/local_files.ts` (`files`), `src/link.ts` (`checkLinks`, the shared checking pipeline), `src/fetch_check.ts` and `src/playwright_check.ts` (single link checks), `src/baseline.ts`, `src/report/report.tsx` (JSON and HTML reports), `src/github_actions.ts` (job summary, annotations, step outputs), `action.yml` (reusable action).
+`src/cli.ts` (CLI, shared run/report/summary steps), `src/website.ts` (`site` link collection), `src/github/gh_get_links.ts` (`github-org`), `src/local_files.ts` (`files`), `src/link.ts` (`checkLinks`, the shared checking pipeline), `src/fetch_check.ts` and `src/playwright_check.ts` (single link checks), `src/baseline.ts`, `src/report/report.tsx` (JSON and HTML reports), `src/github_actions.ts` (job summary, annotations, step outputs), `action.yml` (reusable action).
 
 ## How checks run
 

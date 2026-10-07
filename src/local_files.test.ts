@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBaseline } from "./baseline";
 import { checkLinks } from "./link";
 import {
   checkLocalFiles,
@@ -12,6 +11,7 @@ import {
   findReadme,
   getLinkKind,
 } from "./local_files";
+import type { LinkWithResult } from "./types";
 
 vi.mock("./link", () => ({
   checkLinks: vi.fn(async ({ links }: { links: Array<{ href: string }> }) =>
@@ -288,40 +288,32 @@ describe("checkLocalFiles()", () => {
     vi.mocked(checkLinks).mockClear();
   });
 
+  const failing = (results: LinkWithResult[]) =>
+    results
+      .filter((link) => !link.result.ok)
+      .map((link) => `${link.page}:${link.line} ${link.href}`)
+      .toSorted();
+
   it("checks local links on disk and external links with checkLinks", async () => {
-    const report = await checkLocalFiles({ patterns: ["**/*.md"], cwd: FIXTURE, outputDir: false });
+    const results = await checkLocalFiles({ patterns: ["**/*.md"], cwd: FIXTURE });
     expect(vi.mocked(checkLinks)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(checkLinks).mock.calls[0]![0].links.map((link) => link.href)).toEqual([
       "https://example.com/page",
     ]);
-    expect(report.siteName).toBe("local files");
-    expect(report.summary).toMatchObject({
-      linksChecked: 17,
-      totalLinksToFix: 5,
-      brokenLinks: 2,
-      hashNotFound: 3,
-      ignored: 0,
-    });
-    expect(report.brokenLinks.map((link) => `${link.page}:${link.line} ${link.href}`)).toEqual([
-      "README.md:7 docs/missing.md",
-      "docs/guide.md:8 ../nope.md",
-    ]);
-    expect(report.hashNotFound.map((link) => `${link.page}:${link.line} ${link.href}`)).toEqual([
-      "README.md:8 docs/guide.md#nope",
+    expect(results).toHaveLength(17);
+    expect(failing(results)).toEqual([
       "README.md:10 #nowhere",
       "README.md:16 src/code.ts#L99",
+      "README.md:7 docs/missing.md",
+      "README.md:8 docs/guide.md#nope",
+      "docs/guide.md:8 ../nope.md",
     ]);
   });
 
-  it("applies the baseline and skips checkLinks without external links", async () => {
-    const report = await checkLocalFiles({
-      patterns: ["docs/*.md"],
-      cwd: FIXTURE,
-      outputDir: false,
-      baseline: createBaseline([{ href: "../nope.md", page: "docs/guide.md", reason: "known" }]),
-    });
+  it("skips checkLinks without external links", async () => {
+    const results = await checkLocalFiles({ patterns: ["docs/*.md"], cwd: FIXTURE });
     expect(vi.mocked(checkLinks)).not.toHaveBeenCalled();
-    expect(report.summary).toMatchObject({ linksChecked: 2, totalLinksToFix: 0, ignored: 1 });
-    expect(report.ignored[0]).toMatchObject({ href: "../nope.md", ignoreReason: "known" });
+    expect(results).toHaveLength(2);
+    expect(failing(results)).toEqual(["docs/guide.md:8 ../nope.md"]);
   });
 });
