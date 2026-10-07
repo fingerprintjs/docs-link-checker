@@ -432,7 +432,9 @@ describe("runCli()", () => {
     const baselinePath = join(tempDir(), "baseline.json");
     writeFileSync(baselinePath, JSON.stringify({ ignore: [{ url: "x" }] }));
     expect(await runCli(["files", "docs/*.md", "--baseline", baselinePath], io())).toBe(2);
-    expect(stderr).toContain(`Invalid baseline file ${baselinePath}: ignore[0]: unknown key "url"`);
+    expect(stderr).toContain(
+      `Invalid baseline file ${baselinePath}: ignore[0]: Unrecognized key: "url"`,
+    );
   });
 
   it("site and github-org: pass the options to the checks", async () => {
