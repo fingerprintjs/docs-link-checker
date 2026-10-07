@@ -9,18 +9,18 @@
     "promise",
     "node",
     "vitest",
-    "react"
+    "react",
   ],
   "jsPlugins": ["eslint-plugin-sonarjs"],
   "categories": {
     "correctness": "error",
     "suspicious": "error",
-    "perf": "error"
+    "perf": "error",
   },
   "options": {
     "typeAware": true,
     "denyWarnings": true,
-    "reportUnusedDisableDirectives": "error"
+    "reportUnusedDisableDirectives": "error",
   },
   "ignorePatterns": [".claude/**", "results/**", "src/__fixtures__/**"],
   "rules": {
@@ -98,7 +98,7 @@
     "unicorn/consistent-function-scoping": "off",
     // The new JSX transform (`"jsx": "react-jsx"`) does not need React in scope
     "react/react-in-jsx-scope": "off",
-    "vitest/require-mock-type-parameters": "off"
+    "vitest/require-mock-type-parameters": "off",
   },
   "overrides": [
     {
@@ -116,8 +116,8 @@
         "typescript/no-unsafe-call": "off",
         "typescript/no-unsafe-argument": "off",
         "typescript/no-unsafe-return": "off",
-        "sonarjs/cognitive-complexity": "off"
-      }
-    }
-  ]
+        "sonarjs/cognitive-complexity": "off",
+      },
+    },
+  ],
 }
