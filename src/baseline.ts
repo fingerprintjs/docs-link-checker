@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { z } from "zod";
 import { createGlobMatcher, MAX_GLOB_LENGTH } from "./glob";
 import type { LinkWithResult } from "./types";
 import { getErrorMessage } from "./utils/errors";
@@ -52,85 +53,51 @@ export class BaselineError extends Error {
   override name = "BaselineError";
 }
 
-const ENTRY_KEYS = ["href", "pattern", "page", "reason"] as const;
-const ALLOWED_KEYS = new Set<string>(ENTRY_KEYS);
+const nonEmpty = z.string().min(1);
+const glob = nonEmpty.max(MAX_GLOB_LENGTH);
 
-const validateObjectEntry = (item: object, where: string): BaselineEntry => {
-  const values: Record<string, unknown> = Object.fromEntries(Object.entries(item));
-  for (const key of Object.keys(values)) {
-    if (key === "regex") {
-      throw new BaselineError(
-        `${where}: "regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`,
-      );
-    }
-    if (!ALLOWED_KEYS.has(key)) {
-      throw new BaselineError(`${where}: unknown key "${key}" (allowed: ${ENTRY_KEYS.join(", ")})`);
-    }
-  }
-  const entry: BaselineEntry = {};
-  for (const key of ENTRY_KEYS) {
-    const value = values[key];
-    if (value === undefined) {
-      continue;
-    }
-    if (typeof value !== "string" || value === "") {
-      throw new BaselineError(`${where}: "${key}" must be a non-empty string`);
-    }
-    entry[key] = value;
-  }
-  if ((entry.href === undefined) === (entry.pattern === undefined)) {
-    throw new BaselineError(`${where}: expected exactly one of "href" or "pattern"`);
-  }
-  for (const key of ["pattern", "page"] as const) {
-    if ((entry[key]?.length ?? 0) > MAX_GLOB_LENGTH) {
-      throw new BaselineError(`${where}: "${key}" is longer than ${MAX_GLOB_LENGTH} characters`);
-    }
-  }
-  return entry;
-};
+const entrySchema = z.preprocess(
+  // A plain string is a shorthand for `{ "pattern": ... }`
+  (item) => (typeof item === "string" ? { pattern: item } : item),
+  z
+    .strictObject(
+      {
+        href: nonEmpty.optional(),
+        pattern: glob.optional(),
+        page: glob.optional(),
+        reason: nonEmpty.optional(),
+      },
+      {
+        error: (issue) =>
+          issue.code === "unrecognized_keys" && issue.keys.includes("regex")
+            ? `"regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`
+            : undefined,
+      },
+    )
+    .refine((entry) => (entry.href === undefined) !== (entry.pattern === undefined), {
+      error: `expected exactly one of "href" or "pattern"`,
+    }),
+);
+
+const baselineSchema = z.preprocess(
+  (data) => (Array.isArray(data) ? { ignore: data } : data),
+  z.strictObject({ $schema: z.string().optional(), ignore: z.array(entrySchema) }),
+);
 
 /**
  * Validates the parsed JSON of a baseline file. Accepts `{ "ignore": [...] }` or a bare array of entries.
  * @throws {BaselineError} with a message pointing to the invalid entry
  */
 export const validateBaseline = (data: unknown): BaselineFile => {
-  let list: readonly unknown[];
-  if (Array.isArray(data)) {
-    list = data;
-  } else if (data && typeof data === "object") {
-    const unknownKeys = Object.keys(data).filter((key) => key !== "ignore" && key !== "$schema");
-    if (unknownKeys.length > 0) {
-      throw new BaselineError(`unknown top-level key(s): ${unknownKeys.join(", ")}`);
-    }
-    if (!("ignore" in data)) {
-      throw new BaselineError(`expected an "ignore" array`);
-    }
-    if (!Array.isArray(data.ignore)) {
-      throw new BaselineError(`"ignore" must be an array`);
-    }
-    list = data.ignore;
-  } else {
-    throw new BaselineError(`expected an object with an "ignore" array, or an array`);
+  const result = baselineSchema.safeParse(data);
+  if (!result.success) {
+    // Only the first issue, like a fail-fast check: later ones are often side effects of it
+    const [issue] = result.error.issues;
+    throw new BaselineError(
+      `${z.core.toDotPath(issue?.path ?? []) || "baseline"}: ${issue?.message}`,
+    );
   }
-
-  const entries = list.map((item, index): BaselineEntry => {
-    const where = `ignore[${index}]`;
-    // A plain string is a shorthand for `{ "pattern": ... }`
-    if (typeof item === "string") {
-      if (item === "") {
-        throw new BaselineError(`${where}: pattern must not be empty`);
-      }
-      if (item.length > MAX_GLOB_LENGTH) {
-        throw new BaselineError(`${where}: pattern is longer than ${MAX_GLOB_LENGTH} characters`);
-      }
-      return { pattern: item };
-    }
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new BaselineError(`${where}: expected a string pattern or an object`);
-    }
-    return validateObjectEntry(item, where);
-  });
-  return { ignore: entries };
+  return { ignore: result.data.ignore };
 };
 
 /** Builds a matcher for validated baseline entries */

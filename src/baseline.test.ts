@@ -34,24 +34,24 @@ describe("validateBaseline()", () => {
   });
 
   it.each([
-    [null, /expected an object/],
-    [42, /expected an object/],
-    [{}, /expected an "ignore" array/],
-    [{ ignore: "x" }, /"ignore" must be an array/],
-    [{ ignore: [], extra: 1 }, /unknown top-level key\(s\): extra/],
-    [[42], /ignore\[0\]: expected a string pattern or an object/],
-    [[""], /ignore\[0\]: pattern must not be empty/],
-    [[{ href: "a" }, { herf: "b" }], /ignore\[1\]: unknown key "herf"/],
+    [null, /expected object, received null/],
+    [42, /expected object, received number/],
+    [{}, /ignore: .*expected array/],
+    [{ ignore: "x" }, /ignore: .*expected array/],
+    [{ ignore: [], extra: 1 }, /Unrecognized key: "extra"/],
+    [[42], /ignore\[0\]: .*expected object, received number/],
+    [[""], /ignore\[0\].pattern: .*>=1 characters/],
+    [[{ href: "a" }, { herf: "b" }], /ignore\[1\]: Unrecognized key: "herf"/],
     [[{ page: "a" }], /ignore\[0\]: expected exactly one of "href" or "pattern"/],
     [[{ href: "a", pattern: "b" }], /exactly one of/],
-    [[{ href: 1 }], /ignore\[0\]: "href" must be a non-empty string/],
-    [[{ href: "a", reason: "" }], /"reason" must be a non-empty string/],
+    [[{ href: 1 }], /ignore\[0\].href: .*expected string/],
+    [[{ href: "a", reason: "" }], /ignore\[0\].reason: .*>=1 characters/],
     // Regular expressions are not supported (ReDoS), with a message pointing to globs
     [[{ regex: "(a+)+$" }], /ignore\[0\]: "regex" is not supported .* use a "pattern" glob/],
     [[{ regex: "^https://x" }], /"regex" is not supported/],
-    [["x".repeat(2049)], /ignore\[0\]: pattern is longer than 2048 characters/],
-    [[{ pattern: "x".repeat(2049) }], /"pattern" is longer than 2048 characters/],
-    [[{ href: "a", page: "x".repeat(2049) }], /"page" is longer than 2048 characters/],
+    [["x".repeat(2049)], /ignore\[0\].pattern: .*<=2048 characters/],
+    [[{ pattern: "x".repeat(2049) }], /ignore\[0\].pattern: .*<=2048 characters/],
+    [[{ href: "a", page: "x".repeat(2049) }], /ignore\[0\].page: .*<=2048 characters/],
   ])("rejects %j", (data, message) => {
     expect(() => validateBaseline(data)).toThrow(BaselineError);
     expect(() => validateBaseline(data)).toThrow(message);
