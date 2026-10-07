@@ -75,11 +75,11 @@ async function isGithubCodeLinePresent(page: Page, lineSelector: string) {
 }
 
 /**
- * Checks the hash of `url` in the page DOM: waits `HASH_WAIT_TIMEOUT` for its anchor, then (with `deadline`, for the
- * navigated URL only) longer for an anchor rendered late. A quiet page is no proof the anchor is absent (a timer
- * can add it any time), so a missing anchor always takes the whole budget until `deadline`.
+ * Checks the hash of `url` in the page DOM: waits `HASH_WAIT_TIMEOUT` for its anchor, then longer until `deadline`
+ * (anchors rendered late). A quiet page is no proof the anchor is absent (a timer can add it any time), so a
+ * missing anchor always takes the whole budget until `deadline`.
  */
-async function isHashPresentPlaywright(page: Page, hash: string, url: string, deadline?: number) {
+async function isHashPresentPlaywright(page: Page, hash: string, url: string, deadline: number) {
   // All values are escaped, so any hash produces a valid selector
   const selector = getHashSelectors(hash, url).join(", ");
   if (isGithubCodeLineLink(url)) {
@@ -88,11 +88,7 @@ async function isHashPresentPlaywright(page: Page, hash: string, url: string, de
   if (await waitForSelectorAttached(page, selector, HASH_WAIT_TIMEOUT)) {
     return true;
   }
-  if (deadline === undefined) {
-    return false;
-  }
-  // The page was opened with this URL's hash: the anchor might be rendered late (client-side rendered docs,
-  // sections expanded on hash navigation)
+  // Client-side rendered docs, sections expanded on hash navigation
   incrementMetric("playwrightLongHashWaits");
   const remaining = deadline - Date.now();
   // A timeout of 0 would mean "no timeout" to Playwright
@@ -102,7 +98,7 @@ async function isHashPresentPlaywright(page: Page, hash: string, url: string, de
 const getPlaywrightHashResult = async (
   page: Page,
   url: string,
-  { status, deadline }: { status: number; deadline?: number },
+  { status, deadline }: { status: number; deadline: number },
 ): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash.replace("#", "");
   if (!hash) {
@@ -126,37 +122,24 @@ const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
 
 /** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
 export const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkCheckResult =>
-  results.get(url) ?? { ok: false, error: "unexpected error", errorDetail: `No result for ${url}` };
+  results.get(url) ?? {
+    ok: false,
+    error: "unexpected error",
+    errorDetail: `No result for ${url}`,
+  };
 
 /**
  * Checks URLs pointing to the same page (same URL without hash) with a single Playwright navigation:
- * navigates to the first URL, then checks the hash of every URL in the same DOM (in parallel).
- * Some pages render different content per hash (e.g. SPA tabs), so a hash not found in the shared DOM gets
- * a dedicated navigation to its exact URL before it is reported as "hash not found".
- * The anchor of the navigated URL is waited for `HASH_WAIT_TIMEOUT` first, and if it is missing, longer,
- * `HASH_FALLBACK_WAIT_TIMEOUT` in total (anchors rendered late).
+ * navigates to the first URL, then waits for the hash of every URL in the same DOM (in parallel), all until one
+ * deadline, `HASH_FALLBACK_WAIT_TIMEOUT` after the first check (anchors rendered late).
+ * Some pages render different content per hash (e.g. SPA tabs): a hash still missing then is set in the same page
+ * (one hash at a time) and waited for `HASH_WAIT_TIMEOUT` more, before it is reported as "hash not found".
  * GitHub code line links are checked against the rendered code view instead (see `isGithubCodeLinePresent`).
  * @returns results by URL
  */
 export async function checkUrlsOnPageWithPlaywright(
   urls: string[],
 ): Promise<Map<string, LinkCheckResult>> {
-  const results = await checkUrlsInOneNavigation(urls);
-  const [firstUrl] = urls;
-  // The first URL already had the long wait in the shared navigation
-  const notFound = urls.filter((url) => url !== firstUrl && isHashNotFound(results.get(url)));
-  // After the shared navigation (its page slot is released), so the fallbacks can't deadlock waiting for slots
-  await Promise.all(
-    notFound.map(async (url) => {
-      incrementMetric("playwrightHashFallbacks");
-      const fallback = await checkUrlsInOneNavigation([url]);
-      results.set(url, resultFor(fallback, url));
-    }),
-  );
-  return results;
-}
-
-async function checkUrlsInOneNavigation(urls: string[]): Promise<Map<string, LinkCheckResult>> {
   const [firstUrl] = urls;
   if (firstUrl === undefined) {
     return new Map();
@@ -192,7 +175,7 @@ async function checkUrlsInOneNavigation(urls: string[]): Promise<Map<string, Lin
 type NavigationRetry = { pausedUrl: string };
 
 /**
- * One navigation of `checkUrlsInOneNavigation`. Returns a retry after a 502, 503 or 504 that should be retried
+ * One navigation of `checkUrlsOnPageWithPlaywright`. Returns a retry after a 502, 503 or 504 that should be retried
  * (the host of the response is paused for the backoff, see `getServerErrorRetryDelay`).
  */
 async function navigateAndCheck(
@@ -252,21 +235,34 @@ async function navigateAndCheck(
         const status = response.status();
         // The overall budget of the long wait starts with the first check, it includes the regular wait
         const deadline = Date.now() + HASH_FALLBACK_WAIT_TIMEOUT;
-        return new Map(
+        const results = new Map(
           await Promise.all(
             urls.map(
               async (url) =>
                 [
                   url,
-                  // Only the navigated URL gets the long wait: the page was opened with its hash
                   await getPlaywrightHashResult(page, url, {
                     status,
-                    deadline: url === firstUrl ? deadline : undefined,
+                    deadline,
                   }),
                 ] as const,
             ),
           ),
         );
+        // The page was opened with the first URL's hash, the others might be rendered only after their hash is set
+        for (const url of urls.slice(1)) {
+          if (isHashNotFound(results.get(url)) && !isGithubCodeLineLink(url)) {
+            incrementMetric("playwrightHashFallbacks");
+            await page.evaluate((hash) => {
+              location.hash = hash;
+            }, new URL(url).hash);
+            const selector = getHashSelectors(new URL(url).hash.slice(1), url).join(", ");
+            if (await waitForSelectorAttached(page, selector, HASH_WAIT_TIMEOUT)) {
+              results.set(url, { ok: true, status });
+            }
+          }
+        }
+        return results;
       } catch (error) {
         // The browser crashed: let `withPage` relaunch it and retry
         if (page.isClosed()) {
@@ -279,7 +275,9 @@ async function navigateAndCheck(
         });
       }
     },
-    { userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined },
+    {
+      userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined,
+    },
   );
 }
 

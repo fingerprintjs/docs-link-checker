@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LinkCheckResult, LinkWithResult } from "./types";
+import type { LinkCheckResult } from "./types";
 
 /**
  * Offline tests for `link.ts`: `fetch`, the GitHub API check and Playwright are all mocked.
@@ -36,6 +36,8 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     // HTML per navigated URL rendered `afterMs` after the navigation (anchors rendered late, e.g. by a timer on an
     // already loaded and quiet page), falls back to the above before that. For tests with fake timers.
     lateHtmlByUrl: {} as Record<string, { html: string; afterMs: number }>,
+    // Hashes set in the open page (`location.hash = hash`), the fake page then renders the HTML of its new URL
+    hashesSet: [] as string[],
     // Timeouts of hash waits
     hashTimeouts: [] as Array<number | undefined>,
     // The navigation response body never ends (Playwright has no timeout for it)
@@ -87,6 +89,11 @@ vi.mock("playwright", () => ({
                     ? new Promise<string>(() => {})
                     : Promise.resolve("Forbidden page"),
               };
+            },
+            // Only used to set the hash of the page, like `location.hash = hash`
+            evaluate: async (_fn: unknown, hash: string) => {
+              playwrightState.hashesSet.push(hash);
+              currentUrl = currentUrl.replace(/#.*/, "") + hash;
             },
             locator: (selector: string) => ({
               first: () => ({
@@ -155,6 +162,7 @@ beforeEach(() => {
   playwrightState.lateHtmlByUrl = {};
   playwrightState.responseBodyHangs = false;
   playwrightState.hashTimeouts = [];
+  playwrightState.hashesSet = [];
   playwrightState.waitForTakesTimeout = false;
   playwrightState.status = 200;
   playwrightState.statuses = [];
@@ -782,11 +790,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // One shared navigation, plus a dedicated one for the hash missing in the shared DOM
-    expect(playwrightState.visited).toEqual([
-      "https://example.com/spa#one",
-      "https://example.com/spa#three",
-    ]);
+    expect(playwrightState.visited).toEqual(["https://example.com/spa#one"]);
     const resultByHref = new Map(results.map((r) => [r.href, r.result]));
     expect(resultByHref.get("https://example.com/spa#one")).toEqual({ ok: true, status: 200 });
     expect(resultByHref.get("https://example.com/spa#two")).toEqual({ ok: true, status: 200 });
@@ -807,8 +811,7 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // Found line numbers share one navigation, the missing one gets a dedicated navigation
-    expect(playwrightState.visited).toEqual([`${file}#L5`, `${file}#L99`]);
+    expect(playwrightState.visited).toEqual([`${file}#L5`]);
     expect(results.filter((r) => r.result.ok).map((r) => r.href)).toEqual([
       `${file}#L5`,
       `${file}#L6`,
@@ -829,124 +832,80 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
 
     const results = await checkLinks({ links });
 
-    // One navigation per page, plus a dedicated one for `#x` (not in the shared DOM of page `a`)
     expect(playwrightState.visited).toEqual([
       "https://blocked.example.com/a",
       "https://blocked.example.com/b",
-      "https://blocked.example.com/a#x",
     ]);
     expect(results).toHaveLength(3);
   });
 });
 
-describe("checkLinks() Playwright hash fallback", () => {
-  it("re-checks a hash missing in the shared DOM with a dedicated navigation (SPA tabs)", async () => {
+describe("checkLinks() Playwright hashes of one page", () => {
+  const page = "https://docs.example.com/app";
+
+  /** Checks the hashes of `page` with fake timers, returns results by hash, the metrics and the simulated time taken */
+  const checkHashes = async (hashes: string[]) => {
     stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-    // The SPA renders a different tab per hash
-    playwrightState.htmlByUrl = {
-      "https://example.com/app#tab-a": '<div id="tab-a"></div>',
-      "https://example.com/app#tab-b": '<div id="tab-b"></div>',
-    };
-    const links = ["#tab-a", "#tab-b", "#missing"].map((hash) =>
-      link(`https://example.com/app${hash}`),
-    );
-
-    const results = await withRun({}, async () => {
-      const checked = await checkLinks({ links });
-      expect(getRunContext()!.metrics.counters).toMatchObject({
-        playwrightNavigations: 3,
-        playwrightHashFallbacks: 2,
-      });
-      return checked;
-    });
-
-    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
-    expect(resultByHref.get("https://example.com/app#tab-a")).toEqual({ ok: true, status: 200 });
-    expect(resultByHref.get("https://example.com/app#tab-b")).toEqual({ ok: true, status: 200 });
-    expect(resultByHref.get("https://example.com/app#missing")).toEqual({
-      ok: false,
-      status: 200,
-      error: "hash not found",
-    });
-    expect(playwrightState.visited).toEqual([
-      "https://example.com/app#tab-a",
-      "https://example.com/app#tab-b",
-      "https://example.com/app#missing",
-    ]);
-  });
-
-  it("does not time out a page group whose fallback navigations together take longer than the task timeout", async () => {
+    playwrightState.waitForTakesTimeout = true;
     vi.useFakeTimers();
     try {
-      stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-      // Every tab is only rendered on its own URL: 1 shared navigation + 11 fallbacks, 5 page slots,
-      // 25s per navigation (each within its own 30s timeout) -> about 100s in total, more than TASK_TIMEOUT (80s)
-      playwrightState.gotoDelayMs = 25_000;
-      const hrefs = Array.from({ length: 12 }, (_, i) => `https://example.com/app#tab-${i}`);
-      playwrightState.htmlByUrl = Object.fromEntries(
-        hrefs.map((href, i) => [href, `<div id="tab-${i}"></div>`]),
-      );
-
-      const promise = checkLinks({ links: hrefs.map((href) => link(href)) });
-      await vi.advanceTimersByTimeAsync(300_000);
-      const results = await promise;
-
-      expect(results).toHaveLength(12);
-      expect(results.every((r) => r.result.ok)).toBe(true);
-      expect(playwrightState.visited).toHaveLength(12);
-      // Every navigation is bounded on its own
-      expect(playwrightState.gotoTimeouts).toEqual(Array(12).fill(30000));
-      expect(new Set(playwrightState.pageTimeouts)).toEqual(new Set([30000]));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("waits for late anchors of every hash of a page (shared navigation and dedicated fallbacks)", async () => {
-    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-    const page = "https://docs.example.com/reference/get-event";
-    const hashes = ["#response-a", "#response-b", "#response-c", "#missing"];
-    // Every field is only expanded (and gets its id) when the page is opened with its hash, a few seconds later
-    playwrightState.lateHtmlByUrl = Object.fromEntries(
-      hashes
-        .slice(0, 3)
-        .map((hash) => [
-          `${page}${hash}`,
-          { html: `<div id="${hash.slice(1)}"></div>`, afterMs: 4000 },
-        ]),
-    );
-
-    vi.useFakeTimers();
-    let results: LinkWithResult[];
-    try {
+      const start = Date.now();
+      let finishedAt = Number.NaN;
       const promise = withRun({}, async () => {
         const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
-        expect(getRunContext()!.metrics.counters).toMatchObject({
-          playwrightNavigations: 4,
-          playwrightHashFallbacks: 3,
-          playwrightLongHashWaits: 4,
-        });
-        return checked;
+        finishedAt = Date.now();
+        return { checked, counters: { ...getRunContext()!.metrics.counters } };
       });
       await vi.advanceTimersByTimeAsync(120_000);
-      results = await promise;
+      const { checked, counters } = await promise;
+      const byHash = new Map(checked.map((r) => [r.href.slice(page.length), r.result]));
+      return { byHash, counters, took: finishedAt - start };
     } finally {
       vi.useRealTimers();
     }
+  };
 
-    const resultByHref = new Map(results.map((r) => [r.href, r.result]));
-    for (const hash of hashes.slice(0, 3)) {
-      expect(resultByHref.get(`${page}${hash}`)).toEqual({ ok: true, status: 200 });
+  it("finds late anchors of every hash with one navigation and one shared wait", async () => {
+    // Both anchors are added by a timer 4s after the navigation (e.g. expanded nested fields)
+    playwrightState.lateHtmlByUrl = {
+      [`${page}#a`]: { html: '<div id="a"></div><div id="b"></div>', afterMs: 4000 },
+    };
+
+    const { byHash, counters, took } = await checkHashes(["#a", "#b"]);
+
+    expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#b")).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toEqual([`${page}#a`]);
+    expect(playwrightState.hashesSet).toEqual([]);
+    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightLongHashWaits: 2 });
+    expect(took).toBe(4000);
+  });
+
+  it("finds a hash that is rendered only after the hash is set in the open page (SPA tabs)", async () => {
+    playwrightState.htmlByUrl = {
+      [`${page}#tab-a`]: '<div id="tab-a"></div>',
+      [`${page}#tab-b`]: '<div id="tab-b"></div>',
+    };
+
+    const { byHash, counters } = await checkHashes(["#tab-a", "#tab-b", "#missing"]);
+
+    expect(byHash.get("#tab-a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#tab-b")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    // No navigation per hash
+    expect(playwrightState.visited).toEqual([`${page}#tab-a`]);
+    expect(playwrightState.hashesSet).toEqual(["#tab-b", "#missing"]);
+    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightHashFallbacks: 2 });
+  });
+
+  it("spends the 15s budget once per page, not once per missing hash", async () => {
+    const { byHash, took } = await checkHashes(["#a", "#b", "#c", "#d"]);
+
+    for (const hash of ["#a", "#b", "#c", "#d"]) {
+      expect(byHash.get(hash)).toEqual({ ok: false, status: 200, error: "hash not found" });
     }
-    expect(resultByHref.get(`${page}#missing`)).toEqual({
-      ok: false,
-      status: 200,
-      error: "hash not found",
-    });
-    // One navigation per hash, no extra navigation for the long wait
-    expect(playwrightState.visited.toSorted()).toEqual(
-      hashes.map((hash) => `${page}${hash}`).toSorted(),
-    );
+    // 15s shared wait, then 3s for each of the 3 hashes set in the page
+    expect(took).toBe(15_000 + 3 * 3000);
   });
 
   it("does not add navigations when every hash is in the shared DOM", async () => {
@@ -956,6 +915,7 @@ describe("checkLinks() Playwright hash fallback", () => {
     await checkLinks({ links: [link("https://example.com/p#a"), link("https://example.com/p#b")] });
 
     expect(playwrightState.visited).toEqual(["https://example.com/p#a"]);
+    expect(playwrightState.hashesSet).toEqual([]);
   });
 });
 

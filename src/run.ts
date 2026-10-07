@@ -115,9 +115,9 @@ const METRICS = {
   playwrightNavigations: "Playwright navigations",
   // Requests and navigations retried after a 502, 503 or 504 (included in the counts above)
   serverErrorRetries: "Retries after a server error (502, 503, 504)",
-  // A hash missing in the shared DOM of its page is re-checked with a dedicated navigation (included above)
-  playwrightHashFallbacks: "Playwright hash fallbacks",
-  // A hash missing on the page opened with it is waited for again after the full load (late-rendered anchors)
+  // A hash still missing after the shared wait is set in the same page and waited for again (SPA tabs)
+  playwrightHashFallbacks: "Playwright in-page hash retries",
+  // A hash not found within HASH_WAIT_TIMEOUT after the load is waited for longer (late-rendered anchors)
   playwrightLongHashWaits: "Playwright long hash waits",
   browserLaunches: "Browser launches",
   // Every request sent by the Octokit client (all operations, pagination, retries), counted by a request hook
