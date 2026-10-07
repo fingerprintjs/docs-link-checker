@@ -1,6 +1,4 @@
 import { Console } from "node:console";
-import { realpathSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 import {
   type Baseline,
@@ -538,18 +536,3 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
   }
   return exitCode;
 };
-
-const isMainModule = () => {
-  if (!process.argv[1]) {
-    return false;
-  }
-  try {
-    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
-  } catch {
-    return false;
-  }
-};
-
-if (isMainModule()) {
-  process.exitCode = await runCli(process.argv.slice(2));
-}
