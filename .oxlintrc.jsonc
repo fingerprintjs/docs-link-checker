@@ -96,7 +96,7 @@
     // False positives in this codebase
     "unicorn/no-array-callback-reference": "off",
     "unicorn/consistent-function-scoping": "off",
-    // The new JSX transform (`"jsx": "react-jsx"`) does not need React in scope
+    // The automatic JSX runtime (Preact, see tsconfig.json) needs no import in scope
     "react/react-in-jsx-scope": "off",
     "vitest/require-mock-type-parameters": "off",
   },

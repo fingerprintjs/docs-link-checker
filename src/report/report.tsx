@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
 
@@ -326,7 +326,7 @@ document.addEventListener("click", function (event) {
 `;
 
 /**
- * Renders the report as a full HTML page. All dynamic values are escaped by React.
+ * Renders the report as a full HTML page. All dynamic values are escaped by Preact.
  */
 export function renderReportToHTML(
   jsonReport: LinkCheckReport,
