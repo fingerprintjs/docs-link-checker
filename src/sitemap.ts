@@ -1,13 +1,13 @@
 import * as cheerio from "cheerio";
+import pLimit from "p-limit";
 import { fetchWithHostLimit, getRandomUserAgent } from "./http";
-import { Semaphore } from "./limiter";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;
 // How many sitemaps are fetched at the same time (sitemap indexes can list thousands of sitemaps)
 export const SITEMAP_FETCH_CONCURRENCY = 5;
 
-const sitemapFetchSlots = new Semaphore(SITEMAP_FETCH_CONCURRENCY);
+const sitemapFetchSlots = pLimit(SITEMAP_FETCH_CONCURRENCY);
 
 // Sitemaps can be large, give them more time than a regular page
 const SITEMAP_FETCH_TIMEOUT = 60000;
@@ -20,7 +20,7 @@ const isSuccess = (status: number) => status >= 200 && status < 300;
  * @returns the status and the body (empty if `readBody` is false or the response is not successful)
  */
 const fetchSitemap = (sitemapUrl: string, readBody = true) =>
-  sitemapFetchSlots.run(() =>
+  sitemapFetchSlots(() =>
     fetchWithHostLimit(
       sitemapUrl,
       { headers: { "User-Agent": getRandomUserAgent() }, timeoutMs: SITEMAP_FETCH_TIMEOUT },

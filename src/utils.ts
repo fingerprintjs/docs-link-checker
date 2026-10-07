@@ -1,5 +1,6 @@
 import * as cliProgress from "cli-progress";
-import { type ConcurrentError, mapConcurrent } from "./limiter";
+import pLimit from "p-limit";
+import type { ConcurrentError } from "./limiter";
 import { getErrorMessage } from "./utils/errors";
 
 /**
@@ -55,7 +56,11 @@ type ParallelProcessArgs<T, R> = {
   concurrencyLimit?: number;
 };
 
-/** `mapConcurrent` with a progress bar (interactive terminals only) and error logging */
+/**
+ * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent calls, a progress bar (interactive
+ * terminals only) and error logging. A throwing `processFn` does not stop the other items.
+ * @returns successful results and errors, both in item order
+ */
 export const parallelProcess = async <T, R>({
   items,
   processFn,
@@ -65,13 +70,28 @@ export const parallelProcess = async <T, R>({
   const progressBar = createProgressBar();
   progressBar?.start(items.length, 0);
   try {
-    const { results, errors } = await mapConcurrent(items, concurrencyLimit, async (item) => {
-      try {
-        return await processFn(item);
-      } finally {
-        progressBar?.increment();
+    const limit = pLimit(concurrencyLimit);
+    const settled = await Promise.allSettled(
+      items.map((item) =>
+        limit(async () => {
+          try {
+            return await processFn(item);
+          } finally {
+            progressBar?.increment();
+          }
+        }),
+      ),
+    );
+    const results: R[] = [];
+    const errors: ConcurrentError<T>[] = [];
+    for (const [i, item] of items.entries()) {
+      const outcome = settled[i];
+      if (outcome?.status === "fulfilled") {
+        results.push(outcome.value);
+      } else {
+        errors.push({ item, error: outcome?.reason });
       }
-    });
+    }
 
     if (errors.length > 0) {
       console.error(`Errors processing items: ${errors.length}\n${formatConcurrentErrors(errors)}`);
