@@ -1,4 +1,3 @@
-import type { Response as UndiciResponse } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkLinkWithFetch } from "./fetch_check";
 import { getReadmeLinks } from "./github/gh_get_links";
@@ -24,7 +23,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const text = (response: UndiciResponse) => response.text();
+const text = (response: Response) => response.text();
 
 type Handler = (url: string, init: RequestInit) => Response | Promise<Response>;
 

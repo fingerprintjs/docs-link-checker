@@ -6,8 +6,6 @@ export default defineConfig({
   test: {
     testTimeout: 15000,
     exclude: [...configDefaults.exclude, "**/*.integration.test.ts", ".claude/**"],
-    // Mocks DNS resolution (no network)
-    setupFiles: ["src/test_setup.ts"],
     // Make sure unit tests never use a real token by accident, and never write to the job summary or the step
     // outputs of the CI run (GitHub Actions sets these for every step)
     env: { GH_TOKEN: "", GITHUB_STEP_SUMMARY: "", GITHUB_OUTPUT: "", GITHUB_ACTIONS: "" },
@@ -21,7 +19,6 @@ export default defineConfig({
         ...coverageConfigDefaults.exclude,
         "**/*.integration.test.ts",
         "src/__fixtures__/**",
-        "src/test_setup.ts",
       ],
       reporter: ["text-summary", "html"],
       thresholds: { statements: 93, branches: 88, functions: 93, lines: 93 },

@@ -1,5 +1,3 @@
-import { fetch, type Headers, type HeadersInit, type Response } from "undici";
-import { assertDestinationAllowed, DestinationNotAllowedError, getDispatcher } from "./destination";
 import { parseRetryAfter } from "./limiter";
 import { getHostLimiter, incrementMetric } from "./run";
 
@@ -142,8 +140,6 @@ type HopResult<T> =
  *   back off as well.
  * - The final response (possibly still a 429 or 5xx) is returned. `read` consumes what it needs of the body inside the slot,
  *   any unread body (also of redirect and 429 responses) is cancelled before the slot is released.
- * - Every hop must go to a public address (see `src/destination.ts`), a blocked hop is never sent.
- * @throws {DestinationNotAllowedError} for a non-public destination (also after a redirect)
  * @throws {Error} on network errors, timeouts and too many redirects (like `fetch`)
  */
 export const fetchWithHostLimit = async <T>(
@@ -161,9 +157,6 @@ export const fetchWithHostLimit = async <T>(
   for (;;) {
     const requestUrl = currentUrl;
     const requestMethod = currentMethod;
-    // SSRF guard: every hop (the first request and every redirect) must go to a public address.
-    // Literals are checked here, host names when connecting (the dispatcher).
-    assertDestinationAllowed(requestUrl);
     const result = await hostLimiter.run(requestUrl, async (): Promise<HopResult<T>> => {
       // Counted per actual request (every redirect hop and retry)
       incrementMetric("httpRequests");
@@ -172,12 +165,6 @@ export const fetchWithHostLimit = async <T>(
         headers,
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
-        dispatcher: getDispatcher(),
-      }).catch((error: unknown) => {
-        // `fetch failed` wraps the error of the connection, like a blocked address
-        throw error instanceof Error && error.cause instanceof DestinationNotAllowedError
-          ? error.cause
-          : error;
       });
       try {
         const location = response.headers.get("Location");

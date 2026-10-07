@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getRunContext, withRun } from "../run";
-import {
-  checkGitHubRateLimit,
-  getMyOctokit,
-  resetMyOctokit,
-  throttleOptions,
-} from "./github_client";
+import { getMyOctokit, resetMyOctokit, throttleOptions } from "./github_client";
 
 beforeEach(() => {
   resetMyOctokit();
@@ -61,11 +56,9 @@ describe("GitHub API request metrics", () => {
   it("counts every request sent by the shared client, whatever the operation", async () => {
     vi.stubEnv("GH_TOKEN", "test-token");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "table").mockImplementation(() => {});
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("/graphql")) return jsonResponse({ data: { viewer: { login: "me" } } });
-      if (url.includes("/rate_limit")) return jsonResponse({ rate: { remaining: 5000, reset: 0 } });
       return jsonResponse({ id: 1 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -77,12 +70,11 @@ describe("GitHub API request metrics", () => {
       await octokit.rest.pulls.get({ owner: "o", repo: "r", pull_number: 1 });
       await octokit.rest.repos.getReleaseByTag({ owner: "o", repo: "r", tag: "v1" });
       await octokit.graphql("query { viewer { login } }");
-      await checkGitHubRateLimit(octokit);
       return getRunContext()!.metrics.counters;
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(6);
-    expect(counters.githubApiRequests).toBe(6);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(counters.githubApiRequests).toBe(5);
   });
 
   it("does not count (or fail) outside of a run", async () => {

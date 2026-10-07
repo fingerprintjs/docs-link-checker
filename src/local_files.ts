@@ -296,9 +296,8 @@ export const checkLocalFiles = ({
   outputDir = "results",
   sourceBaseUrl,
   hostConcurrency,
-  allowPrivateHosts,
 }: CheckLocalFilesArgs) =>
-  withRun({ hostConcurrency, allowPrivateHosts }, async () => {
+  withRun({ hostConcurrency }, async () => {
     const root = isAbsolute(cwd) ? cwd : resolve(cwd);
     const collected = await timePhase("Extract links", () =>
       collectLinksFromFiles({ patterns, cwd: root, sampleRate }),

@@ -1,5 +1,3 @@
-import { Headers } from "undici";
-import { DestinationNotAllowedError } from "./destination";
 import { type AnchorIndex, buildAnchorIndex, isHashInAnchorIndex } from "./hash";
 import {
   fetchWithHostLimit,
@@ -8,7 +6,6 @@ import {
   TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./http";
 import {
-  getBlockedDestinationResult,
   getServerErrorResult,
   getSpecialFragmentNote,
   hasHash,
@@ -99,9 +96,6 @@ const fetchPage = async (
       getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
     };
   } catch (error) {
-    if (error instanceof DestinationNotAllowedError) {
-      return { ok: false, result: getBlockedDestinationResult(error) };
-    }
     return {
       ok: false,
       result: {

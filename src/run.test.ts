@@ -4,7 +4,6 @@ import {
   getHostLimiter,
   getRunContext,
   incrementMetric,
-  isPrivateHostsAllowed,
   runCached,
   timePhase,
   withRun,
@@ -52,14 +51,13 @@ describe("run context", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("applies the run's config to the host limiter and the SSRF guard setting", async () => {
-    expect(isPrivateHostsAllowed()).toBe(false);
-    await withRun({ hostConcurrency: 3, allowPrivateHosts: true }, async () => {
+  it("applies the run's config to the host limiter", async () => {
+    const outside = getHostLimiter();
+    await withRun({ hostConcurrency: 3 }, async () => {
       expect(getHostLimiter().limitPerHost).toBe(3);
-      expect(isPrivateHostsAllowed()).toBe(true);
     });
     // Outside of the run, the default context is unaffected
-    expect(isPrivateHostsAllowed()).toBe(false);
+    expect(getHostLimiter()).toBe(outside);
   });
 
   it("formats metrics", () => {

@@ -21,10 +21,8 @@ export type LinkCheckResult =
         | "hash not found" // Link works but the anchor hash is not found on the page
         | "unexpected error" // Fetch failed, server completely dead, wrong protocol, etc.
         // Recaptcha or other anti-scraping measures returning 403, 401 or the link requires a login,
-        // a server error (502, 503, 504) persisting after retries, or a blocked destination
+        // or a server error (502, 503, 504) persisting after retries
         | "could not check";
       status?: number;
       errorDetail?: string;
-      /** The destination is a private or local address (see `src/destination.ts`), it was never requested */
-      destinationBlocked?: boolean;
     };

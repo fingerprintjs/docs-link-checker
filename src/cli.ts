@@ -42,8 +42,6 @@ export type CommonOptions = {
   outputDir: string;
   json: boolean;
   hostConcurrency: number;
-  /** Allow requests to private and local addresses (SSRF guard off, see `src/destination.ts`) */
-  allowPrivateHosts: boolean;
 };
 
 type CheckCommand =
@@ -72,7 +70,6 @@ Environment variables:
   LINK_CHECK_SAMPLE_RATE          Default for --sample-rate
   LINK_CHECK_HOST_CONCURRENCY     Default for --host-concurrency
   LINK_CHECK_BASELINE             Default for --baseline
-  LINK_CHECK_ALLOW_PRIVATE_HOSTS  "true" for --allow-private-hosts
 
 Exit codes: 0 no links to fix (or not failing), 1 links to fix or the check crashed, 2 invalid arguments or baseline.`;
 
@@ -172,11 +169,6 @@ const buildProgram = (
         "Max concurrent requests per host",
         validated(parseHostConcurrency, ["LINK_CHECK_HOST_CONCURRENCY", "--host-concurrency"]),
       )
-      .option(
-        "--allow-private-hosts",
-        "Allow links to private and local addresses (localhost, 10.x, 169.254.x...), blocked by default. Only for trusted documents, e.g. a local dev server",
-      )
-      .option("--no-allow-private-hosts", "Block links to private and local addresses")
       .addHelpText("after", ENV_HELP);
 
   /**
@@ -185,8 +177,8 @@ const buildProgram = (
    */
   const getCommonOptions = (command: Command): CommonOptions => {
     const options = command.opts<
-      Omit<CommonOptions, "sampleRate" | "hostConcurrency" | "allowPrivateHosts"> &
-        Partial<Pick<CommonOptions, "sampleRate" | "hostConcurrency" | "allowPrivateHosts">>
+      Omit<CommonOptions, "sampleRate" | "hostConcurrency"> &
+        Partial<Pick<CommonOptions, "sampleRate" | "hostConcurrency">>
     >();
     const fromEnv = <T>(value: T | undefined, parse: () => T): T => {
       try {
@@ -199,15 +191,6 @@ const buildProgram = (
     const hostConcurrency = fromEnv(options.hostConcurrency, () =>
       parseHostConcurrency(env.LINK_CHECK_HOST_CONCURRENCY),
     );
-    const allowPrivateHosts = fromEnv(options.allowPrivateHosts, () => {
-      const value = env.LINK_CHECK_ALLOW_PRIVATE_HOSTS;
-      if (value && value !== "true" && value !== "false") {
-        throw new Error(
-          `Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "${value}", expected "true" or "false".`,
-        );
-      }
-      return value === "true";
-    });
     if (options.pruneBaseline && !options.updateBaseline) {
       command.error("--prune-baseline can only be used with --update-baseline.");
     }
@@ -220,7 +203,6 @@ const buildProgram = (
       ...options,
       sampleRate,
       hostConcurrency,
-      allowPrivateHosts,
       baseline: options.baseline ?? (options.updateBaseline ? DEFAULT_BASELINE_FILE : undefined),
     };
   };
@@ -327,7 +309,7 @@ const runCommand = (
   cwd: string,
   env: Env,
 ): Promise<LinkCheckReport> => {
-  const { sampleRate, outputDir, hostConcurrency, allowPrivateHosts } = command.options;
+  const { sampleRate, outputDir, hostConcurrency } = command.options;
   switch (command.command) {
     case "site":
       return checkWebsite({
@@ -337,7 +319,6 @@ const runCommand = (
         baseline,
         outputDir,
         hostConcurrency,
-        allowPrivateHosts,
       });
     case "github-org":
       return checkReadmesInGithubOrg(command.org, {
@@ -345,7 +326,6 @@ const runCommand = (
         baseline,
         outputDir,
         hostConcurrency,
-        allowPrivateHosts,
       });
     case "files":
       return checkLocalFiles({
@@ -356,7 +336,6 @@ const runCommand = (
         outputDir,
         sourceBaseUrl: getGithubBlobBaseUrl(env, cwd),
         hostConcurrency,
-        allowPrivateHosts,
       });
   }
 };
@@ -496,9 +475,6 @@ const withCliEnvironment = async <T>(options: CommonOptions, fn: () => Promise<T
   if (options.json) {
     // stdout only gets the JSON report: send all logs (console.log, console.table...) to stderr
     globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
-  }
-  if (options.allowPrivateHosts) {
-    console.warn("Links to private and local addresses are allowed (--allow-private-hosts).");
   }
   try {
     return await fn();

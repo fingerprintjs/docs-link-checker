@@ -5,7 +5,6 @@ import {
   PAGE_OPERATION_TIMEOUT,
   withPage,
 } from "./browser";
-import { assertDestinationAllowed, DestinationNotAllowedError } from "./destination";
 import { isGithubCodeLineLink } from "./github/gh_url";
 import { getHashSelectors } from "./hash";
 import {
@@ -17,12 +16,7 @@ import {
   TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./http";
 import { withTimeout } from "./limiter";
-import {
-  getBlockedDestinationResult,
-  getServerErrorResult,
-  getSpecialFragmentNote,
-  shouldSpoofUserAgent,
-} from "./link_common";
+import { getServerErrorResult, getSpecialFragmentNote, shouldSpoofUserAgent } from "./link_common";
 import { getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 
@@ -184,17 +178,6 @@ export async function checkUrlsOnPageWithPlaywright(
   const [firstUrl] = urls;
   if (firstUrl === undefined) {
     return new Map();
-  }
-
-  // Links reach Playwright after the fetch pass (which blocks private destinations), check literals again for direct callers.
-  // Redirects and page resources to blocked IP literals and localhost names are aborted by the route handler.
-  try {
-    assertDestinationAllowed(firstUrl);
-  } catch (error) {
-    if (error instanceof DestinationNotAllowedError) {
-      return new Map(urls.map((url) => [url, getBlockedDestinationResult(error)]));
-    }
-    throw error;
   }
 
   const hostLimiter = getHostLimiter();

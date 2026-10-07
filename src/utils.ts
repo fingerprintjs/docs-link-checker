@@ -1,24 +1,9 @@
-import * as cliProgress from "cli-progress";
 import pLimit from "p-limit";
 import type { ConcurrentError } from "./limiter";
 import { getErrorMessage } from "./utils/errors";
 
-/**
- * The progress bar redraws the terminal line, which only makes sense in an interactive terminal.
- * In CI (or when output is piped) it just spams the log, so it's disabled there.
- */
-const isProgressBarEnabled = (): boolean => process.stderr.isTTY && !process.env.CI;
-
-/**
- * Creates a new progress bar (one per `parallelProcess` call, so nested pools don't restart a shared bar).
- * Returns `undefined` when the progress bar is disabled.
- */
-const createProgressBar = (): cliProgress.SingleBar | undefined => {
-  if (!isProgressBarEnabled()) {
-    return undefined;
-  }
-  return new cliProgress.SingleBar({ stopOnComplete: true });
-};
+// Long runs print progress, also in CI where an interactive progress bar would spam the log
+const PROGRESS_LOG_INTERVAL = 30000;
 
 /**
  * Human-readable description of an item that failed processing (used in error logs).
@@ -57,8 +42,8 @@ type ParallelProcessArgs<T, R> = {
 };
 
 /**
- * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent calls, a progress bar (interactive
- * terminals only) and error logging. A throwing `processFn` does not stop the other items.
+ * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent calls, progress logs and error
+ * logging. A throwing `processFn` does not stop the other items.
  * @returns successful results and errors, both in item order
  */
 export const parallelProcess = async <T, R>({
@@ -67,8 +52,11 @@ export const parallelProcess = async <T, R>({
   concurrencyLimit = CONCURRENCY_LIMIT,
 }: ParallelProcessArgs<T, R>) => {
   const startTime = Date.now();
-  const progressBar = createProgressBar();
-  progressBar?.start(items.length, 0);
+  let done = 0;
+  const progressTimer = setInterval(
+    () => console.log(`Progress: ${done}/${items.length}`),
+    PROGRESS_LOG_INTERVAL,
+  );
   try {
     const limit = pLimit(concurrencyLimit);
     const settled = await Promise.allSettled(
@@ -77,7 +65,7 @@ export const parallelProcess = async <T, R>({
           try {
             return await processFn(item);
           } finally {
-            progressBar?.increment();
+            done++;
           }
         }),
       ),
@@ -98,7 +86,7 @@ export const parallelProcess = async <T, R>({
     }
     return { results, errors };
   } finally {
-    progressBar?.stop();
+    clearInterval(progressTimer);
     console.log(`Time taken: ${Date.now() - startTime}ms`);
   }
 };

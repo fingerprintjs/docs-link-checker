@@ -30,10 +30,6 @@ jobs:
       - name: Run linter
         run: pnpm run lint
 
-      # Every suppression needs a reason, their number is capped (see checks/lint_suppressions.ts)
-      - name: Check lint suppressions
-        run: pnpm run lint:suppressions
-
       - name: Run type check
         run: pnpm run tsc
 

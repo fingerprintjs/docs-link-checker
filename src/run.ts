@@ -4,21 +4,18 @@ import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./limiter";
 
 export type RunConfig = {
   hostConcurrency?: number;
-  /** Allow requests to private and local addresses (SSRF guard off, see `src/destination.ts`) */
-  allowPrivateHosts?: boolean;
 };
 
 type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
 
 /**
  * State of a single link-check run (`checkWebsite`, `checkReadmesInGithubOrg` or a standalone `checkLinks`):
- * in-memory caches, metrics, the per-host limiter, the SSRF guard setting and the shared browser.
+ * in-memory caches, metrics, the per-host limiter and the shared browser.
  */
 export type RunContext = {
   cache: Map<string, Promise<unknown>>;
   metrics: RunMetrics;
   hostLimiter: HostLimiter;
-  allowPrivateHosts: boolean;
   browser: BrowserSlot;
 };
 
@@ -31,7 +28,6 @@ const createRunContext = (config: RunConfig = {}): RunContext => ({
   cache: new Map(),
   metrics: { counters: {}, phases: [] },
   hostLimiter: new HostLimiter(config.hostConcurrency ?? DEFAULT_HOST_CONCURRENCY),
-  allowPrivateHosts: config.allowPrivateHosts ?? false,
   browser: {},
 });
 
@@ -41,7 +37,7 @@ const storage = new AsyncLocalStorage<RunContext>();
 export const getRunContext = (): RunContext | undefined => storage.getStore();
 
 // Used outside of any run (e.g. unit tests calling fetchWithHostLimit or checkUrlsOnPageWithPlaywright directly):
-// a single lazily created context with defaults, so there is still one host limiter, SSRF setting and browser.
+// a single lazily created context with defaults, so there is still one host limiter and browser.
 let defaultContext: RunContext | undefined;
 const getContext = (): RunContext => getRunContext() ?? (defaultContext ??= createRunContext());
 
@@ -52,9 +48,6 @@ export const getHostLimiter = (): HostLimiter => getContext().hostLimiter;
 export const setHostLimiter = (limiter: HostLimiter | undefined) => {
   getContext().hostLimiter = limiter ?? new HostLimiter(DEFAULT_HOST_CONCURRENCY);
 };
-
-/** Allow requests to private and local addresses, see `RunConfig.allowPrivateHosts` */
-export const isPrivateHostsAllowed = (): boolean => getContext().allowPrivateHosts;
 
 /** Slot holding the shared browser of the current run (or the default context), see `src/browser.ts` */
 export const getBrowserSlot = (): BrowserSlot => getContext().browser;
@@ -82,9 +75,8 @@ export const closeRunBrowser = (): Promise<void> => closeContextBrowser(getConte
 
 /**
  * Runs `fn` as a link-check run: in-memory caches (GitHub API responses...) and metrics live for the duration of the
- * run, requests use a dedicated per-host limiter (`config.hostConcurrency`, default 8) and SSRF guard setting
- * (`config.allowPrivateHosts`, default false). At the end (also on errors), the run metrics are logged and the
- * shared browser (if one was launched) is closed.
+ * run, requests use a dedicated per-host limiter (`config.hostConcurrency`, default 8). At the end (also on
+ * errors), the run metrics are logged and the shared browser (if one was launched) is closed.
  * Nested calls (e.g. `checkLinks` inside `checkWebsite`) join the outer run, its config applies to all of it.
  */
 export const withRun = async <T>(config: RunConfig, fn: () => Promise<T>): Promise<T> => {

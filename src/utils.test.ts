@@ -1,91 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { bars } = vi.hoisted(() => ({
-  bars: [] as Array<{
-    start: ReturnType<typeof vi.fn>;
-    increment: ReturnType<typeof vi.fn>;
-    stop: ReturnType<typeof vi.fn>;
-  }>,
-}));
-
-vi.mock("cli-progress", () => ({
-  SingleBar: class {
-    start = vi.fn();
-    increment = vi.fn();
-    stop = vi.fn();
-    constructor() {
-      bars.push(this);
-    }
-  },
-}));
-
 import { describeItem, getSampleRate, parallelProcess, sampleItems } from "./utils";
 
-let isTTY: boolean | undefined;
-
 beforeEach(() => {
-  bars.length = 0;
-  isTTY = process.stderr.isTTY;
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
-  process.stderr.isTTY = isTTY as true;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-describe("parallelProcess() progress bar", () => {
-  it("uses a separate bar for each (nested) call and stops each of them", async () => {
-    vi.stubEnv("CI", "");
-    process.stderr.isTTY = true;
+describe("parallelProcess() progress", () => {
+  it("logs progress while running and stops when done", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    let resolve = () => {};
+    const slow = new Promise<void>((done) => {
+      resolve = done;
+    });
 
-    await parallelProcess({
+    const run = parallelProcess({
       items: [1, 2],
-      processFn: async (item) =>
-        parallelProcess({ items: [item, item], processFn: async (x) => x }),
+      processFn: async (item) => (item === 2 ? slow : undefined),
     });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(logSpy).toHaveBeenCalledWith("Progress: 1/2");
 
-    // One outer bar + one bar per nested call
-    expect(bars).toHaveLength(3);
-    for (const bar of bars) {
-      expect(bar.start).toHaveBeenCalledTimes(1);
-      expect(bar.stop).toHaveBeenCalledTimes(1);
-      expect(bar.increment).toHaveBeenCalledTimes(2);
-    }
-  });
-
-  it("stops the bar when processing throws", async () => {
-    vi.stubEnv("CI", "");
-    process.stderr.isTTY = true;
-
-    await parallelProcess({
-      items: [1],
-      processFn: async () => {
-        throw new Error("boom");
-      },
-    });
-
-    expect(bars).toHaveLength(1);
-    expect(bars[0]!.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not create a bar in CI", async () => {
-    vi.stubEnv("CI", "true");
-    process.stderr.isTTY = true;
-
-    await parallelProcess({ items: [1], processFn: async (x) => x });
-
-    expect(bars).toHaveLength(0);
-  });
-
-  it("does not create a bar when not in a TTY", async () => {
-    vi.stubEnv("CI", "");
-    process.stderr.isTTY = false as true;
-
-    await parallelProcess({ items: [1], processFn: async (x) => x });
-
-    expect(bars).toHaveLength(0);
+    resolve();
+    await run;
+    logSpy.mockClear();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(logSpy).not.toHaveBeenCalled();
   });
 });
 

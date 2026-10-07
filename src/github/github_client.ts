@@ -67,35 +67,3 @@ const countRequests = (octokit: Pick<MyOctokitInstance, "hook">) => {
 export const resetMyOctokit = () => {
   client = undefined;
 };
-
-const durationFormat = new Intl.DurationFormat("en", {
-  style: "narrow",
-  secondsDisplay: "always",
-});
-
-function readableMilliseconds(milliseconds: number) {
-  const totalSeconds = Math.floor(milliseconds / 1000);
-  return durationFormat.format({
-    days: Math.floor(totalSeconds / 86400),
-    hours: Math.floor(totalSeconds / 3600) % 24,
-    minutes: Math.floor(totalSeconds / 60) % 60,
-    seconds: totalSeconds % 60,
-  });
-}
-
-export async function checkGitHubRateLimit(
-  octokit: ReturnType<typeof getMyOctokit> = getMyOctokit(),
-) {
-  const response = await octokit.rest.rateLimit.get();
-  const resetTime = new Date(response.data.rate.reset * 1000);
-  const millisecondsUntilReset = resetTime.getTime() - Date.now();
-
-  const result = {
-    remaining: response.data.rate.remaining,
-    resetsIn: readableMilliseconds(millisecondsUntilReset),
-    resetsOn: resetTime.toLocaleString("fr-FR"),
-  };
-
-  console.table(result);
-  return result;
-}

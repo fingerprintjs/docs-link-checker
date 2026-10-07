@@ -18,6 +18,7 @@
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "jsx": "react-jsx",
+    "jsxImportSource": "preact",
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,

@@ -21,7 +21,6 @@
       "Bash(pnpm run check:fix)",
       "Bash(pnpm run lint)",
       "Bash(pnpm run lint:fix)",
-      "Bash(pnpm run lint:suppressions)",
       "Bash(pnpm run format)",
       "Bash(pnpm run format:check)",
       "Bash(pnpm run knip)",

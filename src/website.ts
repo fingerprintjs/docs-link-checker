@@ -35,9 +35,8 @@ export const checkWebsite = ({
   baseline = EMPTY_BASELINE,
   outputDir = DEFAULT_OUTPUT_DIR,
   hostConcurrency,
-  allowPrivateHosts,
 }: CheckWebsiteArgs) =>
-  withRun({ hostConcurrency, allowPrivateHosts }, async () => {
+  withRun({ hostConcurrency }, async () => {
     const startTime = performance.now();
 
     const allPages = await timePhase("Read sitemap", () => getWebsitePages(websiteUrl));

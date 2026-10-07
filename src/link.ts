@@ -62,10 +62,6 @@ export const shouldRecheckWithPlaywright = (
   if (result.ok) {
     return false;
   }
-  // Blocked by the destination policy (SSRF guard), the browser must not request it either
-  if (result.destinationBlocked) {
-    return false;
-  }
   switch (method) {
     case "invalid":
       // A URL that cannot be parsed is definitively broken

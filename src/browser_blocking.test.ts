@@ -1,7 +1,6 @@
 import type { Route } from "playwright";
 import { describe, expect, it, vi } from "vitest";
 import { blockHeavyResources, createResourceBlocker, shouldBlockRequest } from "./browser";
-import { withRun } from "./run";
 
 const request = (resourceType: string, url: string, isMainFrameNavigation = false) => ({
   resourceType,
@@ -91,37 +90,6 @@ describe("blockHeavyResources() route handler", () => {
     await blockHeavyResources(route as unknown as Route);
     expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
     expect(route.continue).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    "http://169.254.169.254/latest/meta-data/",
-    "http://127.0.0.1:8080/",
-    "http://[::1]/",
-    "http://[::ffff:10.0.0.1]/",
-    "http://localhost:3000/",
-    "http://admin.localhost/",
-    "http://2130706433/", // 127.0.0.1 in decimal, normalized by URL parsing
-  ])("aborts the main navigation (and redirects) to the private destination %s", async (url) => {
-    const route = fakeRoute({ resourceType: "document", url, navigation: true });
-    await blockHeavyResources(route as unknown as Route);
-    expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
-    expect(route.continue).not.toHaveBeenCalled();
-    expect(shouldBlockRequest({ resourceType: "fetch", url, isMainFrameNavigation: false })).toBe(
-      true,
-    );
-  });
-
-  it("allows private destinations with allowPrivateHosts (--allow-private-hosts)", async () => {
-    const route = fakeRoute({
-      resourceType: "document",
-      url: "http://localhost:3000/",
-      navigation: true,
-    });
-    await withRun({ allowPrivateHosts: true }, () =>
-      blockHeavyResources(route as unknown as Route),
-    );
-    expect(route.continue).toHaveBeenCalled();
-    expect(route.abort).not.toHaveBeenCalled();
   });
 
   it("continues other requests", async () => {

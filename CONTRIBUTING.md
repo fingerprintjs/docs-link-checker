@@ -11,9 +11,9 @@
 
 Format with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`.oxfmtrc.json`, also sorts imports) and lint with [oxlint](https://oxc.rs/docs/guide/usage/linter) (`.oxlintrc.jsonc`). The linter runs type-aware rules (floating promises, `any` leaks, unsafe type assertions, deprecated APIs), limits function complexity (`sonarjs/cognitive-complexity`, max 20), and bans skipped and focused tests. Warnings fail too.
 
-- `pnpm run check` runs everything CI runs except tests: formatter check, linter, suppression check, `tsc` and [knip](https://knip.dev/) (unused files, exports and dependencies).
+- `pnpm run check` runs everything CI runs except tests: formatter check, linter, `tsc` and [knip](https://knip.dev/) (unused files, exports and dependencies).
 - `pnpm run check:fix` formats and applies safe lint fixes, `pnpm run lint` only lints, `pnpm run format` only formats.
-- Fix findings instead of suppressing them. A suppression (`// oxlint-disable-next-line rule -- reason`) needs a reason, and their number is capped (`pnpm run lint:suppressions`, `checks/lint_suppressions.ts`).
+- Fix findings instead of suppressing them. A suppression (`// oxlint-disable-next-line rule -- reason`) needs a reason.
 
 ## Tests
 
