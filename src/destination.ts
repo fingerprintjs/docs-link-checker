@@ -122,7 +122,8 @@ export const assertDestinationAllowed = (
 const lookupPublic: LookupFunction = (hostname, options, callback) => {
   // Resolve all addresses to check each one, then answer in the shape the caller asked for
   lookup(hostname, { ...options, all: true, order: "verbatim" }, (error, addresses) => {
-    const first = addresses[0];
+    // `addresses` is undefined on an error (ENOTFOUND...)
+    const first = error ? undefined : addresses[0];
     if (error || first === undefined) {
       callback(error ?? new Error(`No address found for ${hostname}`), "", 0);
     } else if (addresses.some(({ address }) => isNonPublicAddress(address))) {

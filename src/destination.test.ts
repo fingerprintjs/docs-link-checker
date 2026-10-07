@@ -232,6 +232,24 @@ describe("fetchWithHostLimit() connect-time check (DNS rebinding)", () => {
     expect(server.requests).not.toHaveBeenCalled();
   });
 
+  it("reports a name that does not resolve as a broken link, not a crash", async () => {
+    await useRealFetch();
+    // Like Node: answers later, and `addresses` is undefined on an error
+    mockedLookup.mockImplementation(((
+      _host: string,
+      _options: object,
+      callback: (error: Error) => void,
+    ) =>
+      setImmediate(() =>
+        callback(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" })),
+      )) as never);
+    expect(await checkLinkWithFetch("http://nxdomain.example/")).toMatchObject({
+      ok: false,
+      error: "broken link",
+      errorDetail: "TypeError: fetch failed",
+    });
+  });
+
   it("does not block with allowPrivateHosts", async () => {
     const server = await startServer();
     await useRealFetch();
