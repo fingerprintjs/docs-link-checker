@@ -1,5 +1,4 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["bench/round.ts"],
   "ignore": ["src/__fixtures__/**"]
 }

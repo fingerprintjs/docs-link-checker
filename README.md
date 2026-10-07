@@ -186,40 +186,10 @@ jobs:
 
 ## Benchmark
 
-A speed benchmark checks the time and request counts of `checkLinks` against a frozen, real-world corpus of links.
-
-- `bench/corpus.json` is a representative sample of real links: collected from the same sources and settings as our
-  production workflow (`checkLinks:docs`, `checkLinks:github`, `checkLinks:web`), checked once so each link's check
-  method (`fetch`, the GitHub API or Playwright) and outcome are known, then sampled by taking the same fraction of
-  pages (URL without hash, every link on it kept together since they share one fetch or navigation) from every
-  source, so the sample's mix of sources, check paths and duplicate-link ratios matches the full run instead of
-  being skewed towards any one of them (e.g. just the slow Playwright pages). The fraction is tuned so one run stays
-  in the 45-90s range. The corpus file records both the sample's and the full population's composition (links,
-  unique URLs, pages, broken down by source and check method), shown side by side in the benchmark report. Regenerate
-  it with `pnpm bench:corpus` (needs `GH_TOKEN` and network access) after the checked sources or `--include` prefixes
-  change, or every few months so it doesn't drift too far from the live sites. If a source can't be collected (e.g.
-  this environment's GitHub API access can't list an org's repositories), it's recorded in the corpus itself
-  (`missingSources`) and flagged in the benchmark report instead of silently producing an incomplete corpus.
-- `pnpm bench` runs one round against the current tree and prints a summary (total time, phase times, counters like
-  HTTP requests, Playwright navigations and hash fallbacks).
-- `pnpm bench --base <dir>` (e.g. a `git worktree add` checkout of `main`) runs an A/B comparison: rounds alternate
-  base and head, each round its own process (`bench/round.ts`, only ever importing from `../src`, copied into `<dir>`
-  for a base round so it runs against that checkout's own code and `node_modules`) so neither side's module-level
-  state (e.g. the shared page-slot limiter) leaks into the other, and both see similar network conditions. The report
-  shows median and min-max per side with a verdict per metric (counters: "worse"/"better" needs the base and head
-  min-max ranges to not overlap, since live sites make these counts wobble a bit between rounds even with identical
-  code; time: "worse"/"better" needs both a >15% and a >5s difference, to tell a real regression from noise). Corpus
-  size counters (total links, unique URLs, unique pages) get no better/worse verdict since any difference there means
-  the two sides checked different input, not a regression. A list of links whose
-  outcome differs between the two sides (or against the corpus' recorded outcome without `--base`) is reported
-  separately as possible flakiness (live network), not as a failure.
-- On every pull request, `.github/workflows/benchmark.yaml` runs `pnpm bench --base <base checkout>` and posts the
-  result as a job summary and a single PR comment that is updated on each push (found by a hidden marker). It never
-  fails the PR on a slowdown, only if the benchmark itself crashes.
-- Add the `refresh-bench-corpus` label to a PR to regenerate `bench/corpus.json` in CI (the `refresh-corpus` job in
-  the same workflow): it needs the GitHub App's org-scoped token for the README source, which this sandbox's own
-  `GH_TOKEN` can't provide. The job commits the refreshed corpus to the PR branch (as `github-actions[bot]`), logs
-  the population/sample composition and how long the refresh took, then removes the label.
+- `bench/corpus.json` is a static 8% sample (6,812 links) of real links from dev.fingerprint.com, fingerprint.com and the fingerprintjs org READMEs. Replace it by hand if needed, it is a JSON array of `{ page, href, text }`.
+- `pnpm bench` times one round on the current tree. `pnpm bench --base <dir>` compares against another checkout (e.g. `git worktree add base-checkout origin/main`, then `pnpm install` in it), `--rounds <n>` sets rounds per side (default 2 with `--base`, 1 without).
+- Each round is its own process, base and head rounds alternate. The report shows median and min-max of total time, phase times and run counters.
+- On every PR, CI posts the report as one PR comment (updated on each push). The headline is 🟢/🔴/⚪ on total time: worse or better only if the median differs by more than 15% and 5s. Counters are worse or better only if the base and head min-max ranges do not overlap. A slowdown never fails the PR.
 
 ## Limitations
 

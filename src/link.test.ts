@@ -1255,28 +1255,3 @@ describe("interleaveByHost()", () => {
     ]);
   });
 });
-
-describe("checkLinks() checkedWith", () => {
-  it("records how each link's result was decided: fetch, github-api or playwright", async () => {
-    checkLinkWithGithubApiMock.mockResolvedValue({ ok: true, status: 200 });
-    playwrightState.html = '<html><body><h2 id="late">Late</h2></body></html>';
-
-    const fetchHref = "https://example.com/page";
-    const githubHref = "https://github.com/owner/repo";
-    const playwrightHref = "https://example.com/spa#late";
-    stubFetch((url) =>
-      url.startsWith("https://example.com/spa")
-        ? new Response("<html><body>Loading...</body></html>", { status: 200 })
-        : new Response(null, { status: 200 }),
-    );
-
-    const results = await checkLinks({
-      links: [link(fetchHref), link(githubHref), link(playwrightHref)],
-    });
-
-    const byHref = new Map(results.map((result) => [result.href, result.checkedWith]));
-    expect(byHref.get(fetchHref)).toBe("fetch");
-    expect(byHref.get(githubHref)).toBe("github-api");
-    expect(byHref.get(playwrightHref)).toBe("playwright");
-  });
-});

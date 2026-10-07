@@ -1,152 +1,204 @@
 /**
- * Speed benchmark CLI: checks the links of `bench/corpus.json` with the current tree, optionally A/B against
- * another checkout (`--base <dir>`, e.g. a `git worktree` of `main`). See the "Benchmark" section of README.md.
+ * Speed benchmark: checks the links of `bench/corpus.json`, optionally A/B against another checkout.
+ * See the "Benchmark" section of README.md.
  *
- * Usage:
- *   pnpm bench                        Benchmark the current tree, print a summary
- *   pnpm bench --base <dir>           A/B against another checkout, interleaved rounds, with a verdict
- *   pnpm bench --rounds <n>           Rounds per side (default: 2 with --base, 1 without)
- *   pnpm bench --output-dir <dir>     Where to write the JSON result (default: results/bench)
+ *   pnpm bench                     benchmark the current tree
+ *   pnpm bench --base <dir>        A/B against another checkout (e.g. a `git worktree` of main)
+ *   pnpm bench --rounds <n>        rounds per side (default: 2 with --base, 1 without)
+ *
+ * Every round runs in its own process (`--round`, internal), so base and head never share module-level state.
+ * Only imports from `../src` and Node built-ins: for a base round this file and the corpus are copied to
+ * `<dir>/.bench/` and run there, so `../src` resolves to the base's code.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import {
+  appendFileSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { aggregateRounds } from "./aggregate";
-import { type CorrectnessEntry, renderReport } from "./report";
-import { linksOf, type RoundResult, runRound } from "./runner";
-import type { Corpus } from "./types";
+import { checkLinks } from "../src/link";
+import { getRunContext, type RunMetrics, withRun } from "../src/run";
+import corpus from "./corpus.json";
 
-const DEFAULT_OUTPUT_DIR = "results/bench";
-const CORPUS_FILE = join(import.meta.dirname, "corpus.json");
+type Round = { totalMs: number; metrics: RunMetrics };
+type Stat = { median: number; min: number; max: number };
+type Verdict = "better" | "worse" | "same";
 
-/** Narrow, structural check that `JSON.parse`d `value` has the shape of a `Corpus` (our own generated file) */
-const isCorpus = (value: unknown): value is Corpus =>
-  typeof value === "object" &&
-  value !== null &&
-  "links" in value &&
-  Array.isArray(value.links) &&
-  "generatedAt" in value &&
-  "gitSha" in value &&
-  "sampleRate" in value &&
-  "population" in value &&
-  "sample" in value;
+const ICON = { better: "🟢", worse: "🔴", same: "⚪" } as const;
+// Hidden marker, the workflow uses it to find and update its own PR comment
+const MARKER = "<!-- docs-link-checker-benchmark -->";
+const TOTAL = "**Total time**";
+const REPORT_FILE = "results/bench/benchmark.md";
 
-const loadCorpus = (): Corpus => {
-  const data: unknown = JSON.parse(readFileSync(CORPUS_FILE, "utf8"));
-  if (!isCorpus(data)) {
-    throw new Error(`${CORPUS_FILE} is not a valid corpus file, run "pnpm bench:corpus" first.`);
-  }
-  return data;
+// A time diff must be both noticeable (relative) and meaningful (absolute), live sites are noisy
+const TIME_RELATIVE = 0.15;
+const TIME_ABSOLUTE_MS = 5000;
+
+const isRound = (value: unknown): value is Round =>
+  typeof value === "object" && value !== null && "totalMs" in value && "metrics" in value;
+
+const runRound = async (outFile: string) => {
+  const start = performance.now();
+  const metrics = await withRun({}, async () => {
+    await checkLinks({ links: corpus });
+    const context = getRunContext();
+    if (!context) {
+      throw new Error("No run context inside withRun");
+    }
+    return context.metrics;
+  });
+  const round: Round = { totalMs: performance.now() - start, metrics };
+  writeFileSync(outFile, JSON.stringify(round));
 };
 
-/** Hrefs whose recorded outcome differs from `actualByHref` (see `ReportInput.correctness`) */
-const diffOutcomes = (
-  expectedByHref: Map<string, string>,
-  actualByHref: Map<string, string>,
-): CorrectnessEntry[] => {
-  const entries: CorrectnessEntry[] = [];
-  for (const [href, expected] of expectedByHref) {
-    const actual = actualByHref.get(href);
-    if (actual !== undefined && actual !== expected) {
-      entries.push({ href, expected, actual });
+/** Runs one round in a new process with the code (and `node_modules`) of `dir` */
+const spawnRound = (dir: string | undefined, tmpDir: string): Round => {
+  let script = import.meta.filename;
+  let cwd = resolve(import.meta.dirname, "..");
+  if (dir) {
+    // Absolute because `cwd` changes to the checkout
+    cwd = resolve(dir);
+    mkdirSync(join(cwd, ".bench"), { recursive: true });
+    script = join(cwd, ".bench", "bench.ts");
+    copyFileSync(import.meta.filename, script);
+    copyFileSync(join(import.meta.dirname, "corpus.json"), join(cwd, ".bench", "corpus.json"));
+  }
+  const outFile = join(tmpDir, "round.json");
+  execFileSync(join(cwd, "node_modules", ".bin", "tsx"), [script, "--round", outFile], {
+    cwd,
+    stdio: "inherit",
+  });
+  const round: unknown = JSON.parse(readFileSync(outFile, "utf8"));
+  if (!isRound(round)) {
+    throw new Error(`${outFile} is not a valid round result`);
+  }
+  return round;
+};
+
+const stat = (values: number[]): Stat => {
+  const sorted = values.toSorted((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 ? (sorted[mid] ?? 0) : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
+  return { median, min: sorted[0] ?? 0, max: sorted.at(-1) ?? 0 };
+};
+
+/** Stats per name across rounds, a name missing from a round counts as 0 */
+const statsByName = (rounds: Round[], pick: (round: Round) => Record<string, number>) => {
+  const perRound = rounds.map(pick);
+  const names = new Set(perRound.flatMap((values) => Object.keys(values)));
+  return new Map([...names].map((name) => [name, stat(perRound.map((v) => v[name] ?? 0))]));
+};
+
+const phasesOf = (round: Round): Record<string, number> =>
+  Object.fromEntries(round.metrics.phases.map(({ name, ms }) => [name, ms]));
+
+const timeVerdict = (base: Stat, head: Stat): Verdict => {
+  const diff = head.median - base.median;
+  const relative = base.median === 0 ? Math.sign(diff) * Infinity : diff / base.median;
+  if (diff > TIME_ABSOLUTE_MS && relative > TIME_RELATIVE) {
+    return "worse";
+  }
+  if (diff < -TIME_ABSOLUTE_MS && relative < -TIME_RELATIVE) {
+    return "better";
+  }
+  return "same";
+};
+
+// Counts wobble between rounds, so only non-overlapping ranges count as a change
+const counterVerdict = (base: Stat, head: Stat): Verdict => {
+  if (head.min > base.max) {
+    return "worse";
+  }
+  return head.max < base.min ? "better" : "same";
+};
+
+const formatMs = (ms: number) =>
+  ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+const format = (s: Stat, fmt: (n: number) => string) =>
+  s.min === s.max ? fmt(s.median) : `${fmt(s.median)} (${fmt(s.min)}-${fmt(s.max)})`;
+
+const reportOf = (head: Round[], base: Round[] | undefined): string => {
+  const kinds = [
+    { pick: (r: Round) => ({ [TOTAL]: r.totalMs }), isTime: true },
+    { pick: phasesOf, isTime: true },
+    { pick: (r: Round) => r.metrics.counters, isTime: false },
+  ];
+  const rows: string[] = [];
+  let headline = `## Benchmark: current tree (${head.length} rounds)`;
+  for (const { pick, isTime } of kinds) {
+    const headStats = statsByName(head, pick);
+    const baseStats = base && statsByName(base, pick);
+    const fmt = isTime ? formatMs : String;
+    for (const name of new Set([...headStats.keys(), ...(baseStats?.keys() ?? [])])) {
+      const h = headStats.get(name) ?? stat([0]);
+      if (!baseStats) {
+        rows.push(`| ${name} | ${format(h, fmt)} |`);
+        continue;
+      }
+      const b = baseStats.get(name) ?? stat([0]);
+      const v = isTime ? timeVerdict(b, h) : counterVerdict(b, h);
+      rows.push(`| ${name} | ${format(b, fmt)} | ${format(h, fmt)} | ${ICON[v]} ${v} |`);
+      if (name === TOTAL) {
+        const total = timeVerdict(b, h);
+        headline = `## ${ICON[total]} Benchmark: ${total} (${head.length} rounds, interleaved base/head)`;
+      }
     }
   }
-  return entries.toSorted((a, b) => a.href.localeCompare(b.href));
+  const columns = base
+    ? ["| Metric | Base | Head | Verdict |", "| --- | ---: | ---: | --- |"]
+    : ["| Metric | Head |", "| --- | ---: |"];
+  return [MARKER, headline, "", ...columns, ...rows, ""].join("\n");
 };
 
-type CliOptions = { base?: string; rounds: number; outputDir: string };
-
-const parseCliArgs = (argv: string[]): CliOptions => {
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      base: { type: "string" },
-      rounds: { type: "string" },
-      "output-dir": { type: "string" },
-    },
+const main = async () => {
+  const { values, positionals } = parseArgs({
+    options: { base: { type: "string" }, rounds: { type: "string" }, round: { type: "boolean" } },
+    allowPositionals: true,
   });
-  let rounds = values.base ? 2 : 1;
-  if (values.rounds) {
-    rounds = Number(values.rounds);
+  const [outFile] = positionals;
+  if (values.round) {
+    if (!outFile) {
+      throw new Error("Usage: bench.ts --round <outFile>");
+    }
+    await runRound(outFile);
+    return;
   }
+
+  const rounds = Number(values.rounds ?? (values.base ? 2 : 1));
   if (!Number.isInteger(rounds) || rounds < 1) {
     throw new Error(`Invalid --rounds "${values.rounds}", expected a positive integer.`);
   }
-  return { base: values.base, rounds, outputDir: values["output-dir"] ?? DEFAULT_OUTPUT_DIR };
-};
-
-const main = () => {
-  const options = parseCliArgs(process.argv.slice(2));
-  const corpus = loadCorpus();
-  const links = linksOf(corpus.links);
-  const corpusInfo = {
-    generatedAt: corpus.generatedAt,
-    gitSha: corpus.gitSha,
-    sampleRate: corpus.sampleRate,
-    population: corpus.population,
-    sample: corpus.sample,
-    missingSources: corpus.missingSources ?? [],
-  };
-
-  console.log(
-    options.base
-      ? `Running ${options.rounds} interleaved round(s) of base vs head on ${links.length} links...`
-      : `Running ${options.rounds} round(s) on ${links.length} links...`,
-  );
-
-  const headRounds: RoundResult[] = [];
-  const baseRounds: RoundResult[] = [];
-  // Interleaved (base, head, base, head...), each round its own process (see runRound), so both sides see
-  // similar network conditions and neither leaks module-level state into the other.
-  for (let i = 0; i < options.rounds; i++) {
-    if (options.base) {
-      console.log(`Round ${i + 1}/${options.rounds}: base...`);
-      baseRounds.push(runRound(options.base, links));
+  const tmpDir = mkdtempSync(join(tmpdir(), "docs-link-checker-bench-"));
+  try {
+    const head: Round[] = [];
+    const base: Round[] = [];
+    // Interleaved so both sides see similar network conditions
+    for (let i = 1; i <= rounds; i++) {
+      if (values.base) {
+        console.log(`Round ${i}/${rounds}: base`);
+        base.push(spawnRound(values.base, tmpDir));
+      }
+      console.log(`Round ${i}/${rounds}: head`);
+      head.push(spawnRound(undefined, tmpDir));
     }
-    console.log(`Round ${i + 1}/${options.rounds}: head...`);
-    headRounds.push(runRound(undefined, links));
+    const report = reportOf(head, values.base ? base : undefined);
+    console.log(report);
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+    }
+    mkdirSync(dirname(REPORT_FILE), { recursive: true });
+    writeFileSync(REPORT_FILE, report);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
   }
-
-  const headStats = aggregateRounds(headRounds);
-  const lastHeadRound = headRounds[headRounds.length - 1];
-  if (!lastHeadRound) {
-    throw new Error("No round ran, this should never happen (rounds >= 1 is validated above).");
-  }
-
-  const correctness = options.base
-    ? diffOutcomes(
-        baseRounds[baseRounds.length - 1]?.outcomeByHref ?? new Map<string, string>(),
-        lastHeadRound.outcomeByHref,
-      )
-    : diffOutcomes(
-        new Map(corpus.links.map((link) => [link.href, link.outcome])),
-        lastHeadRound.outcomeByHref,
-      );
-
-  const report = renderReport({
-    rounds: options.rounds,
-    corpus: corpusInfo,
-    head: headStats,
-    base: options.base ? aggregateRounds(baseRounds) : undefined,
-    correctness,
-  });
-
-  console.log(report);
-  const summaryFile = process.env.GITHUB_STEP_SUMMARY;
-  if (summaryFile) {
-    writeFileSync(summaryFile, report, { flag: "a" });
-  }
-
-  mkdirSync(options.outputDir, { recursive: true });
-  // The markdown file is what CI posts as the sticky PR comment (see .github/workflows/benchmark.yaml)
-  const markdownPath = join(options.outputDir, "benchmark.md");
-  writeFileSync(markdownPath, report);
-  const resultPath = join(options.outputDir, "benchmark.json");
-  writeFileSync(
-    resultPath,
-    `${JSON.stringify({ corpus: corpusInfo, headRounds, baseRounds, correctness }, null, 2)}\n`,
-  );
-  console.log(`Wrote ${markdownPath} and ${resultPath}`);
 };
 
-main();
+await main();

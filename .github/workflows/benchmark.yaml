@@ -1,35 +1,26 @@
 name: Benchmark
 
-# Speed benchmark: checks bench/corpus.json with the PR's head commit, A/B against its base branch, on the same
-# runner and interleaved rounds (see bench/bench.ts and the "Benchmark" section of README.md).
-# Reports the result (job summary + a sticky PR comment, updated on each push), never fails the PR on a slowdown:
-# only a crash of the benchmark itself (not the links it checks) fails this job.
-#
-# Adding the "refresh-bench-corpus" label to a PR regenerates bench/corpus.json (the GitHub README source needs an
-# org-scoped GH_TOKEN only this workflow has) and commits it to the PR branch, see the refresh-corpus job below.
+# Speed benchmark of the PR vs its base branch, see the "Benchmark" section of README.md.
+# Only reports (job summary + sticky PR comment), a slowdown never fails the PR.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
   pull-requests: write
 
+# A new push makes the previous benchmark obsolete
+concurrency:
+  group: benchmark-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   benchmark:
-    name: Speed benchmark (base vs head)
-    # Not on "labeled": that only adds/removes a label, running the benchmark again would be redundant
-    if: github.event.action != 'labeled'
-    # A new push makes the previous benchmark of the PR obsolete
-    concurrency:
-      group: benchmark-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
-      - name: Checkout head (this PR)
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-environment
         id: setup
@@ -37,107 +28,29 @@ jobs:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - name: Checkout base branch
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base-checkout
 
-      # The base checkout needs its own node_modules (its src/ imports playwright, cheerio, octokit...), the
-      # Playwright browser binary and GH_TOKEN from the head checkout's setup are reused (not repo-specific).
-      - name: Install base checkout dependencies
+      # The base needs its own node_modules, its src/ runs against them
+      - run: pnpm install --frozen-lockfile
         working-directory: base-checkout
-        run: pnpm install --frozen-lockfile
 
-      - name: Run benchmark (base vs head, interleaved rounds)
-        run: pnpm bench --base base-checkout
+      - run: pnpm bench --base base-checkout
         env:
-          # GitHub API link checks only, not for posting the PR comment below (see its own step)
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
-      - name: Upload benchmark result
-        uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: benchmark-result
-          path: results/bench/
-          retention-days: 30
-
-      - name: Post or update sticky PR comment
-        if: always()
+      - name: Post or update the PR comment
         env:
-          # The job's own token (pull-requests: write above) is enough to comment, no need for the App token
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          set -euo pipefail
-          MARKER='<!-- docs-link-checker-benchmark -->'
-          REPORT=results/bench/benchmark.md
-          if [ ! -f "$REPORT" ]; then
-            echo "No benchmark report found, skipping comment (the benchmark step must have crashed)."
-            exit 0
-          fi
-          REPO="${{ github.repository }}"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq "[.[] | select(.body | startswith(\"${MARKER}\"))][0].id // empty")
-          if [ -n "$COMMENT_ID" ]; then
-            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH -F body=@"$REPORT"
+          ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- docs-link-checker-benchmark -->"))][0].id // empty')
+          if [ -n "$ID" ]; then
+            gh api "repos/$REPO/issues/comments/$ID" -X PATCH -F body=@results/bench/benchmark.md
           else
-            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@"$REPORT"
+            gh api "repos/$REPO/issues/$PR/comments" -F body=@results/bench/benchmark.md
           fi
-
-  refresh-corpus:
-    name: Refresh benchmark corpus
-    if: github.event.action == 'labeled' && github.event.label.name == 'refresh-bench-corpus'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write
-      pull-requests: write
-
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.head_ref }}
-
-      - uses: ./.github/actions/setup-environment
-        id: setup
-        with:
-          app_id: ${{ vars.APP_ID }}
-          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - name: Regenerate corpus
-        run: |
-          START=$(date +%s)
-          pnpm bench:corpus
-          echo "Corpus refresh took $(( $(date +%s) - START ))s." | tee -a "$GITHUB_STEP_SUMMARY"
-        env:
-          # Needs org-wide GitHub API access (list the fingerprintjs org's repositories), only the App token has it
-          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
-
-      # Through the contents API, not git push: the repository requires signed commits, and GitHub signs the
-      # commits it creates for the API. `sha` is the corpus blob the job started from, so a concurrent change fails.
-      - name: Commit the refreshed corpus
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if git diff --quiet -- bench/corpus.json; then
-            echo "bench/corpus.json is unchanged, nothing to commit."
-            exit 0
-          fi
-          jq -n \
-            --arg message "chore: refresh benchmark corpus" \
-            --arg branch "${{ github.head_ref }}" \
-            --arg sha "$(git rev-parse HEAD:bench/corpus.json)" \
-            --rawfile content <(base64 -w0 bench/corpus.json) \
-            '{message: $message, branch: $branch, sha: $sha, content: $content}' > "$RUNNER_TEMP/corpus-commit.json"
-          gh api -X PUT "repos/${{ github.repository }}/contents/bench/corpus.json" \
-            --input "$RUNNER_TEMP/corpus-commit.json" --jq '"Committed " + .commit.sha'
-
-      - name: Remove the label
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh pr edit "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --remove-label refresh-bench-corpus
