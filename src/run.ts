@@ -9,7 +9,7 @@ export type RunConfig = {
 type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
 
 /**
- * State of a single link-check run (`checkWebsite`, `checkReadmesInGithubOrg` or a standalone `checkLinks`):
+ * State of a single link-check run (a CLI command or a standalone `checkLinks`):
  * in-memory caches, metrics, the per-host limiter and the shared browser.
  */
 export type RunContext = {

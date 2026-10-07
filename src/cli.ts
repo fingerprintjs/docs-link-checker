@@ -11,7 +11,7 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
-import { checkReadmesInGithubOrg } from "./github/gh_get_links";
+import { checkReadmesInGithubOrg, getGithubOrgSiteName } from "./github/gh_get_links";
 import {
   describeResult,
   getFileAnnotations,
@@ -20,13 +20,17 @@ import {
   writeJobSummary,
 } from "./github_actions";
 import { parseHostConcurrency } from "./limiter";
-import { checkLocalFiles, collectLinksFromFiles } from "./local_files";
+import { checkLocalFiles, collectLinksFromFiles, LOCAL_FILES_SITE_NAME } from "./local_files";
 import {
   DEFAULT_OUTPUT_DIR,
+  getJSONReport,
   getLinksToFix,
   getReportPaths,
   type LinkCheckReport,
+  saveReport,
 } from "./report/report";
+import { withRun } from "./run";
+import type { LinkWithResult } from "./types";
 import { getSampleRate } from "./utils";
 import { getErrorMessage } from "./utils/errors";
 import { checkWebsite, createPrefixFilter } from "./website";
@@ -303,41 +307,58 @@ type CliIO = {
   stderr?: Output;
 };
 
+/** Checks the links of the command, `siteName` names the report */
+const checkCommandLinks = async (
+  command: CheckCommand,
+  cwd: string,
+): Promise<{ results: LinkWithResult[]; siteName: string }> => {
+  const { sampleRate } = command.options;
+  switch (command.command) {
+    case "site":
+      return {
+        results: await checkWebsite({
+          websiteUrl: command.url,
+          linkFilter: command.include.length > 0 ? createPrefixFilter(command.include) : undefined,
+          sampleRate,
+        }),
+        siteName: new URL(command.url).hostname,
+      };
+    case "github-org":
+      return {
+        results: await checkReadmesInGithubOrg(command.org, { sampleRate }),
+        siteName: getGithubOrgSiteName(command.org),
+      };
+    case "files":
+      return {
+        results: await checkLocalFiles({ patterns: command.patterns, cwd, sampleRate }),
+        siteName: LOCAL_FILES_SITE_NAME,
+      };
+  }
+};
+
+/**
+ * Runs the check as a single run (see `withRun`) and does what all commands share:
+ * builds and saves the report, logs the summary and the duration.
+ */
 const runCommand = (
   command: CheckCommand,
   baseline: Baseline,
   cwd: string,
   env: Env,
 ): Promise<LinkCheckReport> => {
-  const { sampleRate, outputDir, hostConcurrency } = command.options;
-  switch (command.command) {
-    case "site":
-      return checkWebsite({
-        websiteUrl: command.url,
-        linkFilter: command.include.length > 0 ? createPrefixFilter(command.include) : undefined,
-        sampleRate,
-        baseline,
-        outputDir,
-        hostConcurrency,
-      });
-    case "github-org":
-      return checkReadmesInGithubOrg(command.org, {
-        sampleRate,
-        baseline,
-        outputDir,
-        hostConcurrency,
-      });
-    case "files":
-      return checkLocalFiles({
-        patterns: command.patterns,
-        cwd,
-        sampleRate,
-        baseline,
-        outputDir,
-        sourceBaseUrl: getGithubBlobBaseUrl(env, cwd),
-        hostConcurrency,
-      });
-  }
+  const { outputDir, hostConcurrency } = command.options;
+  return withRun({ hostConcurrency }, async () => {
+    const startTime = performance.now();
+    const { results, siteName } = await checkCommandLinks(command, cwd);
+
+    const report = getJSONReport({ links: results, siteName, baseline });
+    saveReport(report, outputDir, {
+      sourceBaseUrl: command.command === "files" ? getGithubBlobBaseUrl(env, cwd) : undefined,
+    });
+    console.log(report.summary);
+    console.log(`Finished in ${(performance.now() - startTime) / 1000} seconds.`);
+    return report;
+  });
 };
 
 /** Local, compiler-like list of links to fix: `docs/a.md:7: broken link: docs/missing.md (File not found...)` */

@@ -1,19 +1,18 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { glob } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { type Baseline, EMPTY_BASELINE } from "./baseline";
 import { safeDecode } from "./github/gh_url";
 import { decodeHash } from "./hash";
 import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
 import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "./markdown";
 import { filterOutIrrelevantLinks } from "./page";
-import { getJSONReport, saveReport } from "./report/report";
-import { type RunConfig, timePhase, withRun } from "./run";
+import { timePhase } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { compareStrings, sampleItems } from "./utils";
 
-const LOCAL_FILES_SITE_NAME = "local files";
+/** Report name of the `files` command */
+export const LOCAL_FILES_SITE_NAME = "local files";
 
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
 const IGNORED_DIRECTORIES = new Set(["node_modules", ".git"]);
@@ -267,63 +266,42 @@ export const collectLinksFromFiles = async ({
   return collected;
 };
 
-type CheckLocalFilesArgs = RunConfig & {
+type CheckLocalFilesArgs = {
   /** Glob patterns or file paths, relative to `cwd` */
   patterns: string[];
-  /** Directory the patterns and root-relative links (`/docs/a.md`) are resolved against, default `process.cwd()` */
-  cwd?: string;
+  /** Directory the patterns and root-relative links (`/docs/a.md`) are resolved against */
+  cwd: string;
   /** Defaults to `LINK_CHECK_SAMPLE_RATE` */
   sampleRate?: number;
-  baseline?: Baseline;
-  /** Where to save the JSON and HTML reports, `false` to not save them. Default `results` */
-  outputDir?: string | false;
-  /**
-   * Base URL of `cwd` (ending with `/`, e.g. `https://github.com/owner/repo/blob/<sha>/`): the HTML report links
-   * files and relative links to it. Without it, they are rendered as plain text.
-   */
-  sourceBaseUrl?: string;
 };
 
 /**
  * Checks links in local markdown files: relative links and anchors on the filesystem,
  * absolute links with the usual `checkLinks` pipeline (fetch, GitHub API, Playwright).
+ * Must run inside `runCommand` (`src/cli.ts`), which builds the report.
  */
-export const checkLocalFiles = ({
+export const checkLocalFiles = async ({
   patterns,
-  cwd = process.cwd(),
+  cwd,
   sampleRate,
-  baseline = EMPTY_BASELINE,
-  outputDir = "results",
-  sourceBaseUrl,
-  hostConcurrency,
-}: CheckLocalFilesArgs) =>
-  withRun({ hostConcurrency }, async () => {
-    const root = isAbsolute(cwd) ? cwd : resolve(cwd);
-    const collected = await timePhase("Extract links", () =>
-      collectLinksFromFiles({ patterns, cwd: root, sampleRate }),
-    );
-    console.log(
-      `Found ${collected.local.length + collected.external.length} links in ${collected.files.length} files ` +
-        `(${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped).`,
-    );
+}: CheckLocalFilesArgs): Promise<LinkWithResult[]> => {
+  const root = isAbsolute(cwd) ? cwd : resolve(cwd);
+  const collected = await timePhase("Extract links", () =>
+    collectLinksFromFiles({ patterns, cwd: root, sampleRate }),
+  );
+  console.log(
+    `Found ${collected.local.length + collected.external.length} links in ${collected.files.length} files ` +
+      `(${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped).`,
+  );
 
-    const anchorCache = new Map<string, Set<string>>();
-    const localResults: LinkWithResult[] = collected.local.map((link) => ({
-      ...link,
-      result: checkLocalLink(resolve(root, link.page), link.href, { root, anchorCache }),
-    }));
+  const anchorCache = new Map<string, Set<string>>();
+  const localResults: LinkWithResult[] = collected.local.map((link) => ({
+    ...link,
+    result: checkLocalLink(resolve(root, link.page), link.href, { root, anchorCache }),
+  }));
 
-    const externalLinks = filterOutIrrelevantLinks(collected.external);
-    const results = externalLinks.length > 0 ? await checkLinks({ links: externalLinks }) : [];
-
-    const report = getJSONReport({
-      links: [...localResults, ...results],
-      siteName: LOCAL_FILES_SITE_NAME,
-      baseline,
-    });
-    if (outputDir !== false) {
-      saveReport(report, outputDir, { sourceBaseUrl });
-    }
-    console.log(report.summary);
-    return report;
-  });
+  const externalLinks = filterOutIrrelevantLinks(collected.external);
+  const externalResults =
+    externalLinks.length > 0 ? await checkLinks({ links: externalLinks }) : [];
+  return [...localResults, ...externalResults];
+};
