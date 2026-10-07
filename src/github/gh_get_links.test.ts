@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { octokit, checkGitHubRateLimit } = vi.hoisted(() => ({
+const { octokit } = vi.hoisted(() => ({
   octokit: {
     paginate: vi.fn(),
     repos: { listForOrg: {}, get: vi.fn() },
     git: { getTree: vi.fn() },
   },
-  checkGitHubRateLimit: vi.fn(),
 }));
 
 vi.mock("./github_client", () => ({
   getMyOctokit: () => octokit,
-  checkGitHubRateLimit,
 }));
 
 import { HostLimiter } from "../limiter";
@@ -45,7 +43,6 @@ beforeEach(() => {
       ],
     },
   });
-  checkGitHubRateLimit.mockReset().mockResolvedValue({ remaining: 5000 });
 });
 
 afterEach(() => {
@@ -84,12 +81,6 @@ describe("getReadmesFromOrg()", () => {
 });
 
 describe("checkReadmesInGithubOrg()", () => {
-  it("waits for the rate limit check and fails when it fails", async () => {
-    checkGitHubRateLimit.mockRejectedValue(new Error("Bad credentials"));
-    await expect(checkReadmesInGithubOrg("org")).rejects.toThrow("Bad credentials");
-    expect(octokit.paginate).not.toHaveBeenCalled();
-  });
-
   it("fails with a clear error (instead of crashing on undefined) when listing READMEs fails", async () => {
     octokit.paginate.mockRejectedValue(new Error("Not Found"));
     await expect(checkReadmesInGithubOrg("org")).rejects.toThrow(

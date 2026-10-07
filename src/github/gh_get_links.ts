@@ -9,7 +9,7 @@ import type { Link } from "../types";
 import { formatConcurrentErrors, parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_cache";
-import { checkGitHubRateLimit, getMyOctokit } from "./github_client";
+import { getMyOctokit } from "./github_client";
 
 export interface MdFile {
   sourcePath: string;
@@ -175,7 +175,6 @@ export const checkReadmesInGithubOrg = (
 ) =>
   withRun({ hostConcurrency, allowPrivateHosts }, async () => {
     const startTime = performance.now();
-    await checkGitHubRateLimit(getMyOctokit());
 
     const fingerprintPublicReadmes = await timePhase("List README files", () =>
       getReadmesFromOrg(org, sampleRate),
