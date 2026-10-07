@@ -210,9 +210,7 @@ const buildProgram = (
   addCommonOptions(
     program
       .command("site")
-      .description(
-        "Links on all pages of a website, found in its sitemap (sitemap.xml or robots.txt)",
-      )
+      .description("Links on all pages of a website, found in its sitemap")
       .argument("<url>", "Website URL", parseUrl)
       .option(
         "--include <prefix>",
