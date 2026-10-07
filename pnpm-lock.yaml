@@ -26,6 +26,9 @@ importers:
       cli-progress:
         specifier: ^3.12.0
         version: 3.12.0
+      commander:
+        specifier: ^15.0.0
+        version: 15.0.0
       dotenv:
         specifier: ^18.0.4
         version: 18.0.4
@@ -1290,6 +1293,10 @@ packages:
   cli-progress@3.12.0:
     resolution: {integrity: sha512-tRkV3HJ1ASwm19THiiLIXLO7Im7wlTuKnvkYaTkyoAPefqjNg7W7DHKUlGRxy9vxDvbyCYQkQozvptuMkGCg8A==}
     engines: {node: '>=4'}
+
+  commander@15.0.0:
+    resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+    engines: {node: '>=22.12.0'}
 
   content-type@3.1.1:
     resolution: {integrity: sha512-GW4qUsfFo59d0HbUibDlWv5wPz+vAAcaTWbKIuKCf0JkC7wWkSyf8f13IpXn5JkeMlB2P8iTSSIjwXljorg2vA==}
@@ -2824,6 +2831,8 @@ snapshots:
   cli-progress@3.12.0:
     dependencies:
       string-width: 4.2.3
+
+  commander@15.0.0: {}
 
   content-type@3.1.1: {}
 
