@@ -10,7 +10,7 @@ import { getHashSelectors } from "./hash";
 import {
   FORBIDDEN_STATUS_CODES,
   formatServerErrorRetry,
-  getRandomUserAgent,
+  USER_AGENT,
   getServerErrorRetryDelay,
   OKAY_STATUS_CODES,
   TRANSIENT_SERVER_ERROR_STATUS_CODES,
@@ -293,7 +293,7 @@ async function navigateAndCheck(
       }
     },
     {
-      userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined,
+      userAgent: shouldSpoofUserAgent(firstUrl) ? USER_AGENT : undefined,
     },
   );
 }

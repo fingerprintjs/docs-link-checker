@@ -1,7 +1,7 @@
 import { type AnchorIndex, buildAnchorIndex, isHashInAnchorIndex } from "./hash";
 import {
   fetchWithHostLimit,
-  getRandomUserAgent,
+  USER_AGENT,
   OKAY_STATUS_CODES,
   TRANSIENT_SERVER_ERROR_STATUS_CODES,
 } from "./http";
@@ -46,7 +46,7 @@ const fetchPage = async (
 ): Promise<FetchedPage> => {
   const headers = new Headers();
   if (shouldSpoofUserAgent(url)) {
-    headers.set("User-Agent", getRandomUserAgent());
+    headers.set("User-Agent", USER_AGENT);
   }
 
   try {

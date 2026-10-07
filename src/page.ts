@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { fetchWithHostLimit, getRandomUserAgent } from "./http";
+import { fetchWithHostLimit, USER_AGENT } from "./http";
 import type { Link } from "./types";
 import { parallelProcess } from "./utils";
 
@@ -50,7 +50,7 @@ export async function parseLinksFromPage(pageUrl: string): Promise<Link[]> {
   // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
   const response = await fetchWithHostLimit(
     pageUrl,
-    { headers: { "User-Agent": getRandomUserAgent() } },
+    { headers: { "User-Agent": USER_AGENT } },
     async (res) => (res.ok ? res.text() : ""),
   );
   if (response.status < 200 || response.status >= 300) {

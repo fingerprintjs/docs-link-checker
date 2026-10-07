@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { fetchWithHostLimit, getRandomUserAgent } from "./http";
+import { fetchWithHostLimit, USER_AGENT } from "./http";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;
@@ -13,7 +13,7 @@ const isSuccess = (status: number) => status >= 200 && status < 300;
 const fetchSitemap = (sitemapUrl: string) =>
   fetchWithHostLimit(
     sitemapUrl,
-    { headers: { "User-Agent": getRandomUserAgent() }, timeoutMs: SITEMAP_FETCH_TIMEOUT },
+    { headers: { "User-Agent": USER_AGENT }, timeoutMs: SITEMAP_FETCH_TIMEOUT },
     // Failed responses are not read, fetchWithHostLimit cancels their body
     async (response) => (response.ok ? response.text() : ""),
   );
