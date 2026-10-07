@@ -156,26 +156,12 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
  * Check a link with fetch, assuming page is server-side rendered
  * @param url link URL
  * @param pageCache share page fetches between links (links to the same page with different hashes fetch it once)
- * @returns LinkCheckResult, a URL that cannot be parsed is reported as a broken link
+ * @returns LinkCheckResult. Expects a valid http(s) URL, `checkLinks` reports other URLs as invalid before getting here.
  */
 export const checkLinkWithFetch = async (
   url: string,
   pageCache?: PageFetchCache,
 ): Promise<LinkCheckResult> => {
-  // A URL that cannot be parsed (or is not http(s)) is a broken link, not an exception
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(url);
-  } catch (error) {
-    return { ok: false, error: "broken link", errorDetail: `Invalid URL: ${String(error)}` };
-  }
-  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-    return {
-      ok: false,
-      error: "broken link",
-      errorDetail: `Unsupported URL scheme: ${parsedUrl.protocol}`,
-    };
-  }
   const needBody = hasHash(url);
   const pageUrl = stripHash(url);
   const page = pageCache
