@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HASH_FALLBACK_WAIT_TIMEOUT } from "./browser";
 import type { LinkCheckResult } from "./types";
 
 /**
@@ -609,29 +610,29 @@ describe("checkLinkWithPlaywright() hash check", () => {
     expect(playwrightState.visited).toEqual([url]);
     // Found as soon as it appears, the rest of the budget is not waited
     expect(took).toBe(4000);
-    expect(playwrightState.hashTimeouts).toEqual([3000, 12_000]);
+    expect(playwrightState.hashTimeouts).toEqual([3000, HASH_FALLBACK_WAIT_TIMEOUT - 3000]);
   });
 
-  it("waits for a missing anchor until the 15s budget is used up (regular wait included)", async () => {
+  it("waits for a missing anchor until the fallback budget is used up (regular wait included)", async () => {
     const { result, took } = await checkWithFakeTimers("https://example.com/docs#never");
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
     expect(playwrightState.visited).toEqual(["https://example.com/docs#never"]);
-    // The regular wait is part of the overall budget (not 15s on top of it)
-    expect(playwrightState.hashTimeouts).toEqual([3000, 12_000]);
-    expect(took).toBe(15_000);
+    // The regular wait is part of the overall budget (not on top of it)
+    expect(playwrightState.hashTimeouts).toEqual([3000, HASH_FALLBACK_WAIT_TIMEOUT - 3000]);
+    expect(took).toBe(HASH_FALLBACK_WAIT_TIMEOUT);
   });
 
   it("reports an anchor rendered after the budget as missing", async () => {
     const url = "https://example.com/docs#too-late";
     playwrightState.lateHtmlByUrl = {
-      [url]: { html: '<div id="too-late"></div>', afterMs: 16_000 },
+      [url]: { html: '<div id="too-late"></div>', afterMs: HASH_FALLBACK_WAIT_TIMEOUT + 1000 },
     };
 
     const { result, took } = await checkWithFakeTimers(url);
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-    expect(took).toBe(15_000);
+    expect(took).toBe(HASH_FALLBACK_WAIT_TIMEOUT);
   });
 
   it("reports a forbidden page with its body", async () => {
@@ -686,7 +687,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
         expect(playwrightState.selectors.at(0)).toContain("[data-line-number]");
         expect(playwrightState.selectors.at(1)).toContain('[data-line-number="99"]');
         expect(playwrightState.selectors.at(1)).not.toContain("[data-line-number],");
-        expect(playwrightState.hashTimeouts).toEqual([15000, 3000]);
+        expect(playwrightState.hashTimeouts).toEqual([HASH_FALLBACK_WAIT_TIMEOUT, 3000]);
       },
     );
 
@@ -696,7 +697,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
       const result = await checkLinkWithPlaywright(`${file}#L2`);
 
       expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-      expect(playwrightState.hashTimeouts).toEqual([15000]);
+      expect(playwrightState.hashTimeouts).toEqual([HASH_FALLBACK_WAIT_TIMEOUT]);
     });
   });
 });
@@ -888,18 +889,18 @@ describe("checkLinks() Playwright hashes of one page", () => {
     expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
     expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
     expect(byHash.get("#missing2")).toEqual({ ok: false, status: 200, error: "hash not found" });
-    // 15s shared wait, then one 3s timeout (the next hash is not tried)
-    expect(took).toBe(15_000 + 3000);
+    // Shared fallback wait, then one 3s timeout (the next hash is not tried)
+    expect(took).toBe(HASH_FALLBACK_WAIT_TIMEOUT + 3000);
   });
 
-  it("spends the 15s budget once per page, not once per missing hash", async () => {
+  it("spends the fallback budget once per page, not once per missing hash", async () => {
     const { byHash, took } = await checkHashes(["#a", "#b", "#c", "#d"]);
 
     for (const hash of ["#a", "#b", "#c", "#d"]) {
       expect(byHash.get(hash)).toEqual({ ok: false, status: 200, error: "hash not found" });
     }
-    // 15s shared wait, then 3s for each of the 3 hashes set in the page
-    expect(took).toBe(15_000 + 3 * 3000);
+    // Shared fallback wait, then 3s for each of the 3 hashes set in the page
+    expect(took).toBe(HASH_FALLBACK_WAIT_TIMEOUT + 3 * 3000);
   });
 
   it("does not add navigations when every hash is in the shared DOM", async () => {
