@@ -1,6 +1,8 @@
-import { lookup } from "node:dns/promises";
+import { lookup } from "node:dns";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { chromium } from "playwright";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   assertDestinationAllowed,
   DestinationNotAllowedError,
@@ -13,19 +15,37 @@ import { checkLinks, shouldRecheckWithPlaywright } from "./link";
 import { checkLinkWithPlaywright } from "./playwright_check";
 import { setHostLimiter, withRun } from "./run";
 
-// `node:dns/promises` is mocked for all unit tests (src/test_setup.ts)
-const mockedLookup = vi.mocked(lookup) as unknown as ReturnType<
-  typeof vi.fn<
-    (host: string, options: object) => Promise<Array<{ address: string; family: number }>>
-  >
->;
+// `node:dns` is mocked for all unit tests (src/test_setup.ts), undici resolves names through it
+const mockedLookup = vi.mocked(lookup);
 const resolvesTo = (addresses: Record<string, string[]>) =>
-  mockedLookup.mockImplementation(async (host: string) =>
-    (addresses[host] ?? ["93.184.215.14"]).map((address) => ({
-      address,
-      family: address.includes(":") ? 6 : 4,
-    })),
-  );
+  mockedLookup.mockImplementation(((
+    host: string,
+    _options: object,
+    callback: (error: null, found: Array<{ address: string; family: number }>) => void,
+  ) =>
+    callback(
+      null,
+      (addresses[host] ?? ["93.184.215.14"]).map((address) => ({
+        address,
+        family: address.includes(":") ? 6 : 4,
+      })),
+    )) as unknown as typeof lookup);
+
+/** A server on 127.0.0.1 that counts the requests it gets, to prove a request was (not) sent */
+const startServer = async () => {
+  const requests = vi.fn();
+  const server = http.createServer((_request, response) => {
+    requests();
+    response.end("secret");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  onTestFinished(() => void server.close());
+  return { requests, port: (server.address() as AddressInfo).port };
+};
+
+/** `fetch` really connects (by default tests stub it) */
+const useRealFetch = async () =>
+  vi.stubGlobal("fetch", (await vi.importActual<typeof import("undici")>("undici")).fetch);
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -130,7 +150,7 @@ describe("isBlockedHostLiteral()", () => {
 });
 
 describe("assertDestinationAllowed()", () => {
-  it("blocks IP literals and localhost names without resolving them", async () => {
+  it("blocks IP literals and localhost names", () => {
     for (const url of [
       "http://127.0.0.1/",
       "http://[::ffff:127.0.0.1]/",
@@ -138,57 +158,27 @@ describe("assertDestinationAllowed()", () => {
       "http://localhost:8080/",
       "https://api.localhost/",
     ]) {
-      await expect(assertDestinationAllowed(url), url).rejects.toThrow(DestinationNotAllowedError);
+      expect(() => assertDestinationAllowed(url), url).toThrow(DestinationNotAllowedError);
     }
-    expect(mockedLookup).not.toHaveBeenCalled();
   });
 
-  it("blocks a name resolving to the cloud metadata address", async () => {
-    resolvesTo({ "metadata.attacker.example": ["169.254.169.254"] });
-    await expect(
-      assertDestinationAllowed("http://metadata.attacker.example/latest/"),
-    ).rejects.toThrow(
-      "Destination not allowed (private or local address): metadata.attacker.example",
-    );
-    expect(mockedLookup).toHaveBeenCalledWith(
-      "metadata.attacker.example",
-      expect.objectContaining({ all: true }),
-    );
-  });
-
-  it("blocks a name if ANY of its addresses is non-public", async () => {
-    resolvesTo({ "mixed.example": ["93.184.215.14", "10.0.0.5"], "v6.example": ["fd00::1"] });
-    await expect(assertDestinationAllowed("https://mixed.example/")).rejects.toThrow(
-      DestinationNotAllowedError,
-    );
-    await expect(assertDestinationAllowed("https://v6.example/")).rejects.toThrow(
-      DestinationNotAllowedError,
-    );
-  });
-
-  it("allows public names and IPs, and names that don't resolve (fetch then fails as usual)", async () => {
-    await expect(assertDestinationAllowed("https://example.com/")).resolves.toBeUndefined();
-    await expect(assertDestinationAllowed("https://8.8.8.8/")).resolves.toBeUndefined();
-    mockedLookup.mockRejectedValueOnce(
-      Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }),
-    );
-    await expect(assertDestinationAllowed("https://nxdomain.example/")).resolves.toBeUndefined();
+  it("allows other names and public IPs (names are checked when connecting)", () => {
+    expect(() => assertDestinationAllowed("https://example.com/")).not.toThrow();
+    expect(() => assertDestinationAllowed("https://8.8.8.8/")).not.toThrow();
   });
 
   it("allows everything with allowPrivateHosts (--allow-private-hosts / LINK_CHECK_ALLOW_PRIVATE_HOSTS, opt-out)", async () => {
-    resolvesTo({ "dev.internal": ["10.0.0.5"] });
     await withRun({ allowPrivateHosts: true }, async () => {
-      await expect(assertDestinationAllowed("http://localhost:3000/")).resolves.toBeUndefined();
-      await expect(assertDestinationAllowed("http://dev.internal/")).resolves.toBeUndefined();
+      expect(() => assertDestinationAllowed("http://localhost:3000/")).not.toThrow();
     });
-    await expect(assertDestinationAllowed("http://localhost:3000/")).rejects.toThrow(
+    expect(() => assertDestinationAllowed("http://localhost:3000/")).toThrow(
       DestinationNotAllowedError,
     );
   });
 });
 
 describe("fetchWithHostLimit() destination guard", () => {
-  it("never sends a request to a blocked destination", async () => {
+  it("never sends a request to a blocked literal", async () => {
     const fetchMock = vi.fn(async () => new Response("secret"));
     vi.stubGlobal("fetch", fetchMock);
     await expect(
@@ -197,22 +187,17 @@ describe("fetchWithHostLimit() destination guard", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("blocks a redirect to a private host at the hop, the private host is never requested", async () => {
-    resolvesTo({ "internal.corp.example": ["192.168.1.10"] });
+  it("blocks a redirect to a private literal at the hop, it is never requested", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) =>
       String(input).startsWith("https://public.example/")
-        ? new Response("", {
-            status: 302,
-            headers: { Location: "http://internal.corp.example/admin" },
-          })
+        ? new Response("", { status: 302, headers: { Location: "http://192.168.1.10/admin" } })
         : new Response("secret"),
     );
     vi.stubGlobal("fetch", fetchMock);
     await expect(
       fetchWithHostLimit("https://public.example/start", {}, (r) => r.text()),
-    ).rejects.toThrow("Destination not allowed (private or local address): internal.corp.example");
+    ).rejects.toThrow("Destination not allowed (private or local address): 192.168.1.10");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]![0])).toBe("https://public.example/start");
   });
 
   it("follows redirects to private hosts with the opt-out", async () => {
@@ -227,6 +212,34 @@ describe("fetchWithHostLimit() destination guard", () => {
     );
     expect(response.data).toBe("dev server");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("fetchWithHostLimit() connect-time check (DNS rebinding)", () => {
+  it.each([
+    ["a private address", ["127.0.0.1"]],
+    ["a public and a private address", ["93.184.215.14", "127.0.0.1"]],
+    ["a private IPv6 address", ["::1"]],
+  ])("blocks a name resolving to %s, the server gets no request", async (_name, addresses) => {
+    const server = await startServer();
+    await useRealFetch();
+    resolvesTo({ "rebind.attacker.example": addresses });
+    await expect(
+      fetchWithHostLimit(`http://rebind.attacker.example:${server.port}/`, {}, (r) => r.text()),
+    ).rejects.toThrow(
+      "Destination not allowed (private or local address): rebind.attacker.example",
+    );
+    expect(server.requests).not.toHaveBeenCalled();
+  });
+
+  it("does not block with allowPrivateHosts", async () => {
+    const server = await startServer();
+    await useRealFetch();
+    const response = await withRun({ allowPrivateHosts: true }, () =>
+      fetchWithHostLimit(`http://127.0.0.1:${server.port}/`, {}, (r) => r.text()),
+    );
+    expect(response.data).toBe("secret");
+    expect(server.requests).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -245,34 +258,29 @@ describe("link checks with blocked destinations", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("checkLinks: blocked links are 'could not check' results, other links are checked", async () => {
+  it("checkLinks: links blocked when connecting or before are 'could not check' results", async () => {
+    const server = await startServer();
+    await useRealFetch();
     resolvesTo({ "rebind.attacker.example": ["127.0.0.1"] });
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request) => new Response("<html></html>"),
-    );
-    vi.stubGlobal("fetch", fetchMock);
     const results = await checkLinks({
       links: [
-        { page: "README.md", href: "http://rebind.attacker.example/", text: "a" },
+        { page: "README.md", href: `http://rebind.attacker.example:${server.port}/`, text: "a" },
         { page: "README.md", href: "http://[fd00::1]/#x", text: "b" },
-        { page: "README.md", href: "https://example.com/", text: "c" },
       ],
     });
     const byHref = Object.fromEntries(results.map((link) => [link.href, link.result]));
-    expect(byHref["http://rebind.attacker.example/"]).toMatchObject({
+    expect(byHref[`http://rebind.attacker.example:${server.port}/`]).toMatchObject({
       ok: false,
       error: "could not check",
       destinationBlocked: true,
     });
     expect(byHref["http://[fd00::1]/#x"]).toMatchObject({ error: "could not check" });
-    expect(byHref["https://example.com/"]).toMatchObject({ ok: true });
-    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(["https://example.com/"]);
+    expect(server.requests).not.toHaveBeenCalled();
   });
 
-  it("Playwright checks refuse a name resolving to a private address without launching a browser", async () => {
-    resolvesTo({ "metadata.attacker.example": ["169.254.169.254"] });
+  it("Playwright checks refuse a private literal without launching a browser", async () => {
     const launch = vi.spyOn(chromium, "launch");
-    expect(await checkLinkWithPlaywright("http://metadata.attacker.example/#x")).toMatchObject({
+    expect(await checkLinkWithPlaywright("http://169.254.169.254/#x")).toMatchObject({
       ok: false,
       error: "could not check",
       destinationBlocked: true,

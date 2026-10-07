@@ -162,10 +162,10 @@ async function checkUrlsInOneNavigation(urls: string[]): Promise<Map<string, Lin
     return new Map();
   }
 
-  // Links reach Playwright after the fetch pass (which blocks private destinations), check again for direct callers.
+  // Links reach Playwright after the fetch pass (which blocks private destinations), check literals again for direct callers.
   // Redirects and page resources to blocked IP literals and localhost names are aborted by the route handler.
   try {
-    await assertDestinationAllowed(firstUrl);
+    assertDestinationAllowed(firstUrl);
   } catch (error) {
     if (error instanceof DestinationNotAllowedError) {
       return new Map(urls.map((url) => [url, getBlockedDestinationResult(error)]));

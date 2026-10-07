@@ -17,7 +17,7 @@ Format with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`.oxfmtrc.json`,
 
 ## Tests
 
-- `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch`, the GitHub API and Playwright, and need no network or `GH_TOKEN`.
+- `pnpm test` runs offline unit tests (`*.test.ts`). They mock `fetch` (and DNS), the GitHub API and Playwright, and need no network or `GH_TOKEN`.
 - `pnpm run test:coverage` runs them with coverage (CI). It fails when coverage drops below the thresholds in `vitest.config.js`.
 - `pnpm run test:integration` runs integration tests (`*.integration.test.ts`) against real websites and the GitHub API. They need network access, Playwright's Chromium and a `GH_TOKEN` environment variable.
 - `.github/workflows/action-selftest.yaml` tests the action (`uses: ./`) on the offline fixture in `test/action-fixture/`.
