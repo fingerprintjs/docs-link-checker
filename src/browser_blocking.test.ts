@@ -10,11 +10,11 @@ const request = (resourceType: string, url: string, isMainFrameNavigation = fals
 });
 
 describe("shouldBlockRequest()", () => {
-  it.each(["image", "media", "font", "stylesheet"])("blocks %s resources", (resourceType) => {
+  it.each(["image", "media", "font"])("blocks %s resources", (resourceType) => {
     expect(shouldBlockRequest(request(resourceType, "https://example.com/asset"))).toBe(true);
   });
 
-  it.each(["script", "xhr", "fetch", "document"])(
+  it.each(["script", "stylesheet", "xhr", "fetch", "document"])(
     "allows %s resources from regular hosts",
     (type) => {
       expect(shouldBlockRequest(request(type, "https://example.com/app"))).toBe(false);

@@ -22,8 +22,8 @@ const LAUNCH_OPTIONS = {
   args: ["--disable-blink-features=AutomationControlled"],
 };
 
-// Resources that are never needed to check if a page (or an anchor on it) exists: they only slow the load down
-const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font", "stylesheet"]);
+// Heavy resources that are never needed to check if a page (or an anchor on it) exists
+const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font"]);
 
 // Analytics, tag managers and ads: slow down the page and never add anchors
 const BLOCKED_HOSTS = [
@@ -102,7 +102,7 @@ export const shouldBlockRequest = ({
   if (isMainFrameNavigation) {
     return false;
   }
-  // Images, media, fonts and stylesheets never add anchors, whoever hosts them
+  // Images, media and fonts never add anchors, whoever hosts them
   if (BLOCKED_RESOURCE_TYPES.has(resourceType)) {
     return true;
   }
