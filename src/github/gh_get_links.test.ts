@@ -12,8 +12,7 @@ vi.mock("./github_client", () => ({
   getMyOctokit: () => octokit,
 }));
 
-import { HostLimiter } from "../limiter";
-import { setHostLimiter } from "../run";
+import { withRun } from "../run";
 import {
   checkReadmesInGithubOrg,
   getReadmeLinks,
@@ -105,40 +104,36 @@ describe("resolveReadmeHref()", () => {
 });
 
 describe("getReadmeLinks()", () => {
-  afterEach(() => {
-    setHostLimiter(undefined);
-  });
+  it("downloads README files within the per-host limit and retries after a 429", () =>
+    withRun({ hostConcurrency: 3 }, async () => {
+      let active = 0;
+      let maxActive = 0;
+      const rateLimited = new Set<string>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL) => {
+          const url = String(input);
+          active++;
+          maxActive = Math.max(maxActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          active--;
+          // The first download of file 0 is rate limited
+          if (url.endsWith("/0/README.md") && !rateLimited.has(url)) {
+            rateLimited.add(url);
+            return new Response(null, { status: 429, headers: { "Retry-After": "0" } });
+          }
+          return new Response("[link](https://example.com/)", { status: 200 });
+        }),
+      );
+      const files = Array.from({ length: 20 }, (_, i) => ({
+        sourcePath: `https://github.com/org/repo/blob/main/${i}/README.md`,
+        downloadUrl: `https://raw.githubusercontent.com/org/repo/main/${i}/README.md`,
+      }));
 
-  it("downloads README files within the per-host limit and retries after a 429", async () => {
-    setHostLimiter(new HostLimiter(3));
-    let active = 0;
-    let maxActive = 0;
-    const rateLimited = new Set<string>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL) => {
-        const url = String(input);
-        active++;
-        maxActive = Math.max(maxActive, active);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        active--;
-        // The first download of file 0 is rate limited
-        if (url.endsWith("/0/README.md") && !rateLimited.has(url)) {
-          rateLimited.add(url);
-          return new Response(null, { status: 429, headers: { "Retry-After": "0" } });
-        }
-        return new Response("[link](https://example.com/)", { status: 200 });
-      }),
-    );
-    const files = Array.from({ length: 20 }, (_, i) => ({
-      sourcePath: `https://github.com/org/repo/blob/main/${i}/README.md`,
-      downloadUrl: `https://raw.githubusercontent.com/org/repo/main/${i}/README.md`,
+      const links = await getReadmeLinks(files);
+
+      expect(maxActive).toBe(3);
+      expect(links).toHaveLength(20);
+      expect(rateLimited.size).toBe(1);
     }));
-
-    const links = await getReadmeLinks(files);
-
-    expect(maxActive).toBe(3);
-    expect(links).toHaveLength(20);
-    expect(rateLimited.size).toBe(1);
-  });
 });

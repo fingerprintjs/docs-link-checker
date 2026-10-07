@@ -81,23 +81,12 @@ export class HostLimiter {
     }
   }
 
-  /** `true` while the URL's host is paused */
-  isPaused(url: string): boolean {
-    const state = this.getHost(url);
-    return state !== undefined && state.pausedUntil > Date.now();
-  }
-
   /** Pauses new requests to the URL's host for `ms` milliseconds */
   pause(url: string, ms: number) {
     const state = this.getHost(url);
     if (state) {
       state.pausedUntil = Math.max(state.pausedUntil, Date.now() + ms);
     }
-  }
-
-  /** Number of requests currently running for the URL's host (for tests and debugging) */
-  activeCount(url: string): number {
-    return this.getHost(url)?.limit.activeCount ?? 0;
   }
 }
 

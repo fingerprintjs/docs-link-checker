@@ -5,27 +5,12 @@ import { getErrorMessage } from "./utils/errors";
 // Long runs print progress, also in CI where an interactive progress bar would spam the log
 const PROGRESS_LOG_INTERVAL = 30000;
 
-/**
- * Human-readable description of an item that failed processing (used in error logs).
- */
-export const describeItem = (item: unknown): string => {
-  if (typeof item === "string") {
-    return item;
-  }
-  if (item && typeof item === "object") {
-    if ("href" in item && typeof item.href === "string") {
-      return "page" in item && typeof item.page === "string"
-        ? `${item.href} (on ${item.page})`
-        : item.href;
-    }
-    try {
-      // JSON.stringify returns undefined when toJSON() returns undefined
-      const json = JSON.stringify(item);
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the types say `string`, but JSON.stringify returns undefined when toJSON() returns undefined
-      return json ?? Object.prototype.toString.call(item);
-    } catch {
-      return Object.prototype.toString.call(item);
-    }
+/** Human-readable description of an item that failed processing: a URL or a link (`href` and the page it is on) */
+const describeItem = (item: unknown): string => {
+  if (typeof item === "object" && item && "href" in item && typeof item.href === "string") {
+    return "page" in item && typeof item.page === "string"
+      ? `${item.href} (on ${item.page})`
+      : item.href;
   }
   return String(item);
 };

@@ -95,9 +95,8 @@ export const buildAnchorIndex = (html: string): AnchorIndex => {
  * GitHub renders lines client-side anyway), not against this index.
  * @param index - anchor index of the page, see `buildAnchorIndex`
  * @param hash - the hash, with or without the leading `#`
- * @param _url - kept for callers that still pass the full URL, no longer used (see above)
  */
-export const isHashInAnchorIndex = (index: AnchorIndex, hash: string, _url?: string): boolean => {
+export const isHashInAnchorIndex = (index: AnchorIndex, hash: string): boolean => {
   const variants = getHashVariants(hash);
   if (variants.some((variant) => index.ids.has(variant) || index.names.has(variant))) {
     return true;

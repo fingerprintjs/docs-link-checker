@@ -3,8 +3,11 @@ import { HASH_FALLBACK_WAIT_TIMEOUT, HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT }
 import { checkLinkWithFetch } from "./fetch_check";
 import { MAX_SERVER_ERROR_RETRIES, MAX_SERVER_ERROR_RETRY_DELAY } from "./http";
 import { checkLinks } from "./link";
-import { checkLinkWithPlaywright } from "./playwright_check";
+import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { closeRunBrowser, getRunContext, withRun } from "./run";
+
+const checkLinkWithPlaywright = async (url: string) =>
+  (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeRunBrowser);

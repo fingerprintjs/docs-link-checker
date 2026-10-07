@@ -1,18 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getRunContext, withRun } from "../run";
-import { getMyOctokit, resetMyOctokit, throttleOptions } from "./github_client";
+import { describe, expect, it, vi } from "vitest";
+import { throttleOptions } from "./github_client";
 
-beforeEach(() => {
-  resetMyOctokit();
-});
+/** Fresh modules: the client is cached per module instance, `../run` must be the instance the client imports */
+const loadModules = async () => {
+  vi.resetModules();
+  const [{ getMyOctokit }, { getRunContext, withRun }] = await Promise.all([
+    import("./github_client"),
+    import("../run"),
+  ]);
+  return { getMyOctokit, getRunContext, withRun };
+};
 
 describe("getMyOctokit()", () => {
-  it("can be imported without GH_TOKEN, throws a clear error on first use", () => {
+  it("can be imported without GH_TOKEN, throws a clear error on first use", async () => {
+    const { getMyOctokit } = await loadModules();
     vi.stubEnv("GH_TOKEN", "");
     expect(() => getMyOctokit()).toThrow("GH_TOKEN is not set");
   });
 
-  it("creates the client lazily and reuses it", () => {
+  it("creates the client lazily and reuses it", async () => {
+    const { getMyOctokit } = await loadModules();
     vi.stubEnv("GH_TOKEN", "test-token");
     const client = getMyOctokit();
     expect(client).toBeDefined();
@@ -54,6 +61,7 @@ const jsonResponse = (body: unknown) =>
 
 describe("GitHub API request metrics", () => {
   it("counts every request sent by the shared client, whatever the operation", async () => {
+    const { getMyOctokit, getRunContext, withRun } = await loadModules();
     vi.stubEnv("GH_TOKEN", "test-token");
     vi.spyOn(console, "log").mockImplementation(() => {});
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -78,6 +86,7 @@ describe("GitHub API request metrics", () => {
   });
 
   it("does not count (or fail) outside of a run", async () => {
+    const { getMyOctokit } = await loadModules();
     vi.stubEnv("GH_TOKEN", "test-token");
     vi.stubGlobal(
       "fetch",

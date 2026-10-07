@@ -62,8 +62,3 @@ const countRequests = (octokit: Pick<MyOctokitInstance, "hook">) => {
     incrementMetric("githubApiRequests");
   });
 };
-
-/** Only for tests: forget the cached client */
-export const resetMyOctokit = () => {
-  client = undefined;
-};

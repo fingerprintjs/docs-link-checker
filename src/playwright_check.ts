@@ -155,14 +155,6 @@ async function isHashPresentAfterSettingIt(page: Page, url: string) {
   }
 }
 
-/** Playwright checks return a result for every URL, the fallback only satisfies the type checker */
-export const resultFor = (results: Map<string, LinkCheckResult>, url: string): LinkCheckResult =>
-  results.get(url) ?? {
-    ok: false,
-    error: "unexpected error",
-    errorDetail: `No result for ${url}`,
-  };
-
 /**
  * Checks URLs pointing to the same page (same URL without hash) with a single Playwright navigation:
  * navigates to the first URL, then waits for the hash of every URL in the same DOM (in parallel), all until one
@@ -304,13 +296,4 @@ async function navigateAndCheck(
       userAgent: shouldSpoofUserAgent(firstUrl) ? getRandomUserAgent() : undefined,
     },
   );
-}
-
-/**
- * Checks a link with a real browser (the shared browser, see `withPage`).
- * Outside of a run (`checkLinks`, `checkWebsite`...), call `closeRunBrowser()` when done.
- */
-export async function checkLinkWithPlaywright(url: string): Promise<LinkCheckResult> {
-  const results = await checkUrlsOnPageWithPlaywright([url]);
-  return resultFor(results, url);
 }

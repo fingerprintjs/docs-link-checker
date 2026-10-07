@@ -146,7 +146,7 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
     return { ok: true, status: page.status, note };
   }
 
-  if (!page.getAnchors || !isHashInAnchorIndex(page.getAnchors(), hash, url)) {
+  if (!page.getAnchors || !isHashInAnchorIndex(page.getAnchors(), hash)) {
     return { ok: false, status: page.status, error: "hash not found" };
   }
   return { ok: true, status: page.status };

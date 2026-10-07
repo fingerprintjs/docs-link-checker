@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HostLimiter } from "./limiter";
-import { setHostLimiter } from "./run";
+import { withRun } from "./run";
 import { getWebsitePages, MAX_SITEMAP_DEPTH } from "./sitemap";
 
 const sitemapIndex = (locs: string[]) =>
@@ -136,8 +135,7 @@ describe("getWebsitePages() limits and retries", () => {
   });
 
   it("limits concurrent sitemap fetches per host (LINK_CHECK_HOST_CONCURRENCY)", async () => {
-    setHostLimiter(new HostLimiter(2));
-    try {
+    await withRun({ hostConcurrency: 2 }, async () => {
       const children = Array.from({ length: 20 }, (_, i) => `${SITE}/child-${i}.xml`);
       let active = 0;
       let maxActive = 0;
@@ -160,9 +158,7 @@ describe("getWebsitePages() limits and retries", () => {
 
       expect(pages).toHaveLength(children.length);
       expect(maxActive).toBe(2);
-    } finally {
-      setHostLimiter(undefined);
-    }
+    });
   });
 
   it("retries a sitemap after a 429 with Retry-After", async () => {

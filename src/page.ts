@@ -43,30 +43,20 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
 }
 
 /**
- * Parses links from a single page
- * @param pageUrl
- * @param pageHTML
- * @returns
+ * Parses links from a single page. Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL.
+ * @throws {Error} if the page can't be fetched, so it shows up in the extraction errors instead of silently having no links
  */
-export async function parseLinksFromPage(pageUrl: string, pageHTML?: string): Promise<Link[]> {
-  // Fetch page if HTML is not already provided
-  let pageContent: string;
-  if (pageHTML) {
-    pageContent = pageHTML;
-  } else {
-    // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
-    // Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL, as before
-    const response = await fetchWithHostLimit(
-      pageUrl,
-      { headers: { "User-Agent": getRandomUserAgent() } },
-      async (res) => (res.ok ? res.text() : ""),
-    );
-    if (response.status < 200 || response.status >= 300) {
-      // Thrown (not an empty list), so the page shows up in the extraction errors instead of silently having no links
-      throw new Error(`Could not fetch ${pageUrl}, status: ${response.status}`);
-    }
-    pageContent = response.data;
+export async function parseLinksFromPage(pageUrl: string): Promise<Link[]> {
+  // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
+  const response = await fetchWithHostLimit(
+    pageUrl,
+    { headers: { "User-Agent": getRandomUserAgent() } },
+    async (res) => (res.ok ? res.text() : ""),
+  );
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Could not fetch ${pageUrl}, status: ${response.status}`);
   }
+  const pageContent = response.data;
 
   // Parse links from page HTML
   const $ = cheerio.load(pageContent, { baseURI: pageUrl });

@@ -5,7 +5,7 @@ import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/g
 import { TASK_TIMEOUT } from "./http";
 import { withTimeout } from "./limiter";
 import { hasHash, stripHash } from "./link_common";
-import { checkUrlsOnPageWithPlaywright, resultFor } from "./playwright_check";
+import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { incrementMetric, timePhase, withRun } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { CONCURRENCY_LIMIT, parallelProcess } from "./utils";
@@ -239,8 +239,9 @@ const checkLinksInRun = async ({
       // HASH_FALLBACK_WAIT_TIMEOUT).
       processFn: async (hrefs) => {
         const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
-        for (const href of hrefs) {
-          results.set(href, resultFor(resultsByHref, href));
+        // A result for every URL of the page
+        for (const [href, result] of resultsByHref) {
+          results.set(href, result);
         }
       },
     }),
@@ -256,10 +257,7 @@ const checkLinksInRun = async ({
   return links.map((link) => ({
     ...link,
     // Every unique href was given a result above (or an unexpected-error one for a throwing check)
-    result: results.get(link.href) ?? {
-      ok: false,
-      error: "unexpected error",
-      errorDetail: `No result for ${link.href}`,
-    },
+    // oxlint-disable-next-line typescript/no-non-null-assertion -- see above
+    result: results.get(link.href)!,
   }));
 };

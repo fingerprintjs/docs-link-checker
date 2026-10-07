@@ -44,11 +44,6 @@ const getContext = (): RunContext => getRunContext() ?? (defaultContext ??= crea
 /** The per-host limiter of the current run (or the default context outside of any run) */
 export const getHostLimiter = (): HostLimiter => getContext().hostLimiter;
 
-/** Only for tests: replace (or reset to a fresh default) the host limiter of the current run or default context */
-export const setHostLimiter = (limiter: HostLimiter | undefined) => {
-  getContext().hostLimiter = limiter ?? new HostLimiter(DEFAULT_HOST_CONCURRENCY);
-};
-
 /** Slot holding the shared browser of the current run (or the default context), see `src/browser.ts` */
 export const getBrowserSlot = (): BrowserSlot => getContext().browser;
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeItem, getSampleRate, parallelProcess, sampleItems } from "./utils";
+import { getSampleRate, parallelProcess, sampleItems } from "./utils";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -59,14 +59,6 @@ describe("parallelProcess() error logging", () => {
       "https://example.com/fails (on https://example.com/source): Something exploded",
     );
     expect(output).not.toContain("[object Object]");
-  });
-
-  it("describeItem() handles strings, links and other objects", () => {
-    expect(describeItem("https://example.com")).toBe("https://example.com");
-    expect(describeItem({ href: "https://a.com" })).toBe("https://a.com");
-    expect(describeItem({ name: "repo" })).toBe('{"name":"repo"}');
-    expect(describeItem(42)).toBe("42");
-    expect(describeItem({ toJSON: () => undefined })).toBe("[object Object]");
   });
 });
 
