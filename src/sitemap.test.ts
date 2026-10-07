@@ -81,6 +81,8 @@ describe("getWebsitePages()", () => {
       ]),
       [`${SITE}/sitemap-nested-index.xml`]: sitemapIndex([
         `${SITE}/sitemap-blog.xml`,
+        // Listed twice in the same index
+        `${SITE}/sitemap-blog.xml`,
         // Already listed in the parent index
         `${SITE}/sitemap-docs.xml`,
         // Cycle
@@ -97,6 +99,7 @@ describe("getWebsitePages()", () => {
     // Every sitemap is fetched once
     expect(fetchedUrls.filter((url) => url === `${SITE}/sitemap-docs.xml`)).toHaveLength(1);
     expect(fetchedUrls.filter((url) => url === `${SITE}/sitemap.xml`)).toHaveLength(1);
+    expect(fetchedUrls.filter((url) => url === `${SITE}/sitemap-blog.xml`)).toHaveLength(1);
   });
 
   it("falls back to sitemap-index.xml", async () => {

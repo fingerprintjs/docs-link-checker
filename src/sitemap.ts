@@ -56,7 +56,10 @@ const parseSitemap = async (
       );
       return [];
     }
-    const nestedUrls = getLocations($, "sitemap").filter((nested) => !visited.has(nested));
+    // A Set also drops duplicate entries within this index
+    const nestedUrls = [...new Set(getLocations($, "sitemap"))].filter(
+      (nested) => !visited.has(nested),
+    );
     for (const nested of nestedUrls) visited.add(nested);
     console.log(`${sitemapUrl} is a sitemap index with ${nestedUrls.length} sitemaps`);
     const nestedPages = await Promise.all(
