@@ -7,10 +7,13 @@
  *   pnpm bench --rounds <n>        rounds per side (default: 2 with --base, 1 without)
  *
  * Every round runs in its own process (`--round`, internal), so base and head never share module-level state.
+ * With `--base`, the base and head round of a pair run concurrently: rounds mostly wait on the network and
+ * 15s anchor timeouts (little CPU contention), and both sides see the same network conditions at the same
+ * moment. Halves the CI time too.
  * Only imports from `../src` and Node built-ins: for a base round this file and the corpus are copied to
  * `<dir>/.bench/` and run there, so `../src` resolves to the base's code.
  */
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   appendFileSync,
   copyFileSync,
@@ -58,22 +61,29 @@ const runRound = async (outFile: string) => {
   writeFileSync(outFile, JSON.stringify(round));
 };
 
-/** Runs one round in a new process with the code (and `node_modules`) of `dir` */
-const spawnRound = (dir: string | undefined, tmpDir: string): Round => {
-  let script = import.meta.filename;
-  let cwd = resolve(import.meta.dirname, "..");
-  if (dir) {
-    // Absolute because `cwd` changes to the checkout
-    cwd = resolve(dir);
-    mkdirSync(join(cwd, ".bench"), { recursive: true });
-    script = join(cwd, ".bench", "bench.ts");
-    copyFileSync(import.meta.filename, script);
-    copyFileSync(join(import.meta.dirname, "corpus.json"), join(cwd, ".bench", "corpus.json"));
-  }
-  const outFile = join(tmpDir, "round.json");
-  execFileSync(join(cwd, "node_modules", ".bin", "tsx"), [script, "--round", outFile], {
+/** Copies this script and the corpus into the checkout, so `../src` resolves to its code */
+const installBench = (dir: string) => {
+  const benchDir = join(resolve(dir), ".bench");
+  mkdirSync(benchDir, { recursive: true });
+  copyFileSync(import.meta.filename, join(benchDir, "bench.ts"));
+  copyFileSync(join(import.meta.dirname, "corpus.json"), join(benchDir, "corpus.json"));
+};
+
+/** Runs one round in a new process with the code (and `node_modules`) of `dir`, `undefined` is this tree */
+const spawnRound = async (dir: string | undefined, outFile: string): Promise<Round> => {
+  // Absolute because `cwd` changes to the checkout
+  const cwd = dir ? resolve(dir) : resolve(import.meta.dirname, "..");
+  const script = dir ? join(cwd, ".bench", "bench.ts") : import.meta.filename;
+  // Stdout is noise when rounds run at the same time, stderr (errors) stays visible
+  const child = spawn(join(cwd, "node_modules", ".bin", "tsx"), [script, "--round", outFile], {
     cwd,
-    stdio: "inherit",
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  await new Promise<void>((done, fail) => {
+    child.once("error", fail);
+    child.once("close", (code) =>
+      code === 0 ? done() : fail(new Error(`Benchmark round failed (exit code ${code})`)),
+    );
   });
   const round: unknown = JSON.parse(readFileSync(outFile, "utf8"));
   if (!isRound(round)) {
@@ -160,7 +170,11 @@ const reportOf = (head: Round[], base: Round[] | undefined): string => {
 
 const main = async () => {
   const { values, positionals } = parseArgs({
-    options: { base: { type: "string" }, rounds: { type: "string" }, round: { type: "boolean" } },
+    options: {
+      base: { type: "string" },
+      rounds: { type: "string" },
+      round: { type: "boolean" },
+    },
     allowPositionals: true,
   });
   const [outFile] = positionals;
@@ -180,14 +194,20 @@ const main = async () => {
   try {
     const head: Round[] = [];
     const base: Round[] = [];
-    // Interleaved so both sides see similar network conditions
+    if (values.base) {
+      installBench(values.base);
+    }
+    // Pairs run one after another (interleaved), so slow network phases hit both sides alike
     for (let i = 1; i <= rounds; i++) {
-      if (values.base) {
-        console.log(`Round ${i}/${rounds}: base`);
-        base.push(spawnRound(values.base, tmpDir));
+      console.log(`Round ${i}/${rounds}: ${values.base ? "base + head" : "head"}`);
+      const [baseRound, headRound] = await Promise.all([
+        values.base ? spawnRound(values.base, join(tmpDir, `base-${i}.json`)) : undefined,
+        spawnRound(undefined, join(tmpDir, `head-${i}.json`)),
+      ]);
+      if (baseRound) {
+        base.push(baseRound);
       }
-      console.log(`Round ${i}/${rounds}: head`);
-      head.push(spawnRound(undefined, tmpDir));
+      head.push(headRound);
     }
     const report = reportOf(head, values.base ? base : undefined);
     console.log(report);
