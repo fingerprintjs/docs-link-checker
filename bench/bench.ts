@@ -144,6 +144,10 @@ const counterVerdict = (base: Stat, head: Stat): Verdict => {
   return head.max < base.min ? "better" : "same";
 };
 
+// More `ok` results is better, for the other counters fewer is better
+const counterVerdictOf = (name: string, base: Stat, head: Stat): Verdict =>
+  name === "ok" ? counterVerdict(head, base) : counterVerdict(base, head);
+
 const formatMs = (ms: number) =>
   ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 const format = (s: Stat, fmt: (n: number) => string) =>
@@ -174,7 +178,7 @@ const reportOf = (head: Round[], base: Round[] | undefined): string => {
         continue;
       }
       const b = baseStats.get(name) ?? stat([0]);
-      const v = isTime ? timeVerdict(b, h) : counterVerdict(b, h);
+      const v = isTime ? timeVerdict(b, h) : counterVerdictOf(name, b, h);
       rows.push(`| ${name} | ${format(b, fmt)} | ${format(h, fmt)} | ${ICON[v]} ${v} |`);
       if (name === TOTAL) {
         const total = timeVerdict(b, h);

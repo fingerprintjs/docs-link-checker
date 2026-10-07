@@ -120,26 +120,44 @@ const getPlaywrightHashResult = async (
 const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
   result?.ok === false && result.error === "hash not found";
 
+const HASH_SET_TIMEOUT_MESSAGE = "Setting the hash timed out";
+/** The in-page hash retry hung: the page main thread does not respond */
+const HASH_RETRY_HUNG = "hung";
+
 /**
- * Sets the hash of `url` in the open page and waits `HASH_WAIT_TIMEOUT` for its anchor (content rendered per hash).
- * A failure (e.g. the page navigated away) means not found, a closed page (browser crash) is rethrown.
+ * Sets the hash of `url` in the open page and waits for its anchor (content rendered per hash), all within one
+ * `HASH_WAIT_TIMEOUT`. A failure (e.g. the page navigated away) means not found, a closed page (browser crash) is
+ * rethrown. Returns `HASH_RETRY_HUNG` if setting the hash never returns: `page.evaluate` has no Playwright timeout, so
+ * a hung page would hold the page slot. The pending call is cancelled when `withPage` closes the context.
  */
 async function isHashPresentAfterSettingIt(page: Page, url: string) {
   const { hash } = new URL(url);
+  const startedAt = Date.now();
   try {
-    await page.evaluate((newHash) => {
-      location.hash = newHash;
-    }, hash);
-    return await waitForSelectorAttached(
-      page,
-      getHashSelectors(hash.slice(1), url).join(", "),
+    await withTimeout(
+      page.evaluate((newHash) => {
+        location.hash = newHash;
+      }, hash),
       HASH_WAIT_TIMEOUT,
+      HASH_SET_TIMEOUT_MESSAGE,
+    );
+    // A timeout of 0 would mean "no timeout" to Playwright
+    const remaining = HASH_WAIT_TIMEOUT - (Date.now() - startedAt);
+    return (
+      remaining > 0 &&
+      (await waitForSelectorAttached(
+        page,
+        getHashSelectors(hash.slice(1), url).join(", "),
+        remaining,
+      ))
     );
   } catch (error) {
     if (page.isClosed()) {
       throw error;
     }
-    return false;
+    return error instanceof Error && error.message === HASH_SET_TIMEOUT_MESSAGE
+      ? HASH_RETRY_HUNG
+      : false;
   }
 }
 
@@ -276,7 +294,12 @@ async function navigateAndCheck(
         for (const url of urls.slice(1)) {
           if (isHashNotFound(results.get(url)) && !isGithubCodeLineLink(url)) {
             incrementMetric("playwrightHashFallbacks");
-            if (await isHashPresentAfterSettingIt(page, url)) {
+            const found = await isHashPresentAfterSettingIt(page, url);
+            if (found === HASH_RETRY_HUNG) {
+              // The page would hang again for the next hashes
+              break;
+            }
+            if (found) {
               results.set(url, { ok: true, status });
             }
           }

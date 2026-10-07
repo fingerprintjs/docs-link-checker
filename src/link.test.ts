@@ -40,6 +40,8 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     hashesSet: [] as string[],
     // Setting the hash throws (e.g. the page navigated away)
     evaluateFails: false,
+    // Setting the hash never returns (the page main thread is hung)
+    evaluateHangs: false,
     // Timeouts of hash waits
     hashTimeouts: [] as Array<number | undefined>,
     // The navigation response body never ends (Playwright has no timeout for it)
@@ -92,13 +94,25 @@ vi.mock("playwright", () => ({
                     : Promise.resolve("Forbidden page"),
               };
             },
-            // Only used to set the hash of the page, like `location.hash = hash`
-            evaluate: async (_fn: unknown, hash: string) => {
+            // Only used to set the hash of the page: runs the callback against a fake `location`
+            evaluate: async (fn: (hash: string) => void, hash: string) => {
               if (playwrightState.evaluateFails) {
                 throw new Error("Execution context was destroyed");
               }
-              playwrightState.hashesSet.push(hash);
-              currentUrl = currentUrl.replace(/#.*/, "") + hash;
+              if (playwrightState.evaluateHangs) {
+                return new Promise<void>(() => {});
+              }
+              vi.stubGlobal("location", {
+                set hash(value: string) {
+                  playwrightState.hashesSet.push(value);
+                  currentUrl = currentUrl.replace(/#.*/, "") + value;
+                },
+              });
+              try {
+                fn(hash);
+              } finally {
+                vi.unstubAllGlobals();
+              }
             },
             locator: (selector: string) => ({
               first: () => ({
@@ -169,6 +183,7 @@ beforeEach(() => {
   playwrightState.hashTimeouts = [];
   playwrightState.hashesSet = [];
   playwrightState.evaluateFails = false;
+  playwrightState.evaluateHangs = false;
   playwrightState.waitForTakesTimeout = false;
   playwrightState.status = 200;
   playwrightState.statuses = [];
@@ -862,6 +877,19 @@ describe("checkLinks() Playwright hashes of one page", () => {
 
     expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
     expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
+  });
+
+  it("stops the in-page retries of a page that hangs, other results stay", async () => {
+    playwrightState.evaluateHangs = true;
+    playwrightState.htmlByUrl = { [`${page}#a`]: '<div id="a"></div>' };
+
+    const { byHash, took } = await checkHashes(["#a", "#missing", "#missing2"]);
+
+    expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
+    expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(byHash.get("#missing2")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    // 15s shared wait, then one 3s timeout (the next hash is not tried)
+    expect(took).toBe(15_000 + 3000);
   });
 
   it("spends the 15s budget once per page, not once per missing hash", async () => {
