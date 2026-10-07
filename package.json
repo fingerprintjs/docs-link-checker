@@ -46,6 +46,7 @@
     "dotenv": "^18.0.4",
     "github-slugger": "^2.0.0",
     "marked": "^18.0.14",
+    "p-limit": "^7.3.3",
     "playwright": "^1.63.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

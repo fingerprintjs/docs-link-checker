@@ -1,6 +1,6 @@
+import pLimit from "p-limit";
 import { type Browser, chromium, type Page, type Route } from "playwright";
 import { isBlockedUrlLiteral } from "./destination";
-import { Semaphore } from "./limiter";
 import { getBrowserSlot, incrementMetric, isPrivateHostsAllowed } from "./run";
 
 // How many Playwright pages (browser contexts) are open at the same time
@@ -159,7 +159,7 @@ export const createResourceBlocker = () => {
   };
 };
 
-const pageSlots = new Semaphore(PLAYWRIGHT_CONCURRENCY_LIMIT);
+const pageSlots = pLimit(PLAYWRIGHT_CONCURRENCY_LIMIT);
 
 const launchBrowser = async (): Promise<Browser> => {
   incrementMetric("browserLaunches");
@@ -235,7 +235,7 @@ const runWithNewPage = async <T>(
 export const withPage = async <T>(
   fn: (page: Page) => Promise<T>,
   { userAgent }: WithPageOptions = {},
-): Promise<T> => pageSlots.run(() => withSharedBrowserPage(fn, userAgent));
+): Promise<T> => pageSlots(() => withSharedBrowserPage(fn, userAgent));
 
 const withSharedBrowserPage = async <T>(
   fn: (page: Page) => Promise<T>,

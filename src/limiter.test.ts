@@ -1,55 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  HostLimiter,
-  parseHostConcurrency,
-  parseRetryAfter,
-  Semaphore,
-  withTimeout,
-} from "./limiter";
+import { HostLimiter, parseHostConcurrency, parseRetryAfter, withTimeout } from "./limiter";
 import { setHostLimiter } from "./run";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** Runs `count` tasks through `run` and returns the maximum number of tasks running at the same time */
-const measureConcurrency = async (
-  count: number,
-  run: (task: () => Promise<void>, i: number) => Promise<void>,
-) => {
-  let active = 0;
-  let max = 0;
-  await Promise.all(
-    Array.from({ length: count }, (_, i) =>
-      run(async () => {
-        active++;
-        max = Math.max(max, active);
-        await sleep(5);
-        active--;
-      }, i),
-    ),
-  );
-  return max;
-};
-
-describe("Semaphore", () => {
-  it("runs at most `limit` tasks at the same time", async () => {
-    const semaphore = new Semaphore(3);
-    expect(await measureConcurrency(20, (task) => semaphore.run(task))).toBe(3);
-    expect(semaphore.activeCount).toBe(0);
-    expect(semaphore.waitingCount).toBe(0);
-  });
-
-  it("releases the slot when a task throws", async () => {
-    const semaphore = new Semaphore(1);
-    await expect(semaphore.run(async () => Promise.reject(new Error("boom")))).rejects.toThrow(
-      "boom",
-    );
-    await expect(semaphore.run(async () => "next")).resolves.toBe("next");
-  });
-
-  it("rejects invalid limits", () => {
-    expect(() => new Semaphore(0)).toThrow("Semaphore limit must be a positive integer");
-  });
-});
 
 describe("HostLimiter", () => {
   it("limits concurrency per host, hosts are independent", async () => {
