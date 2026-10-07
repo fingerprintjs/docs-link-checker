@@ -1,11 +1,13 @@
+import { existsSync } from "node:fs";
 import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { Octokit } from "@octokit/rest";
-import dotenv from "dotenv";
 import { incrementMetric } from "../run";
 
-// dotenv 17+ logs a message on every load, keep the output clean
-dotenv.config({ quiet: true });
+// Optional local .env, existing env vars win (https://nodejs.org/api/process.html#processloadenvfilepath)
+if (existsSync(".env")) {
+  process.loadEnvFile();
+}
 
 const MyOctokit = Octokit.plugin(retry, throttling);
 
@@ -66,13 +68,19 @@ export const resetMyOctokit = () => {
   client = undefined;
 };
 
+const durationFormat = new Intl.DurationFormat("en", {
+  style: "narrow",
+  secondsDisplay: "always",
+});
+
 function readableMilliseconds(milliseconds: number) {
-  const timeInSeconds = Math.floor(milliseconds / 1000);
-  const seconds = timeInSeconds % 60;
-  const minutes = Math.floor(timeInSeconds / 60) % 60;
-  const hours = Math.floor(timeInSeconds / 3600) % 24;
-  const days = Math.floor(timeInSeconds / 86400);
-  return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  return durationFormat.format({
+    days: Math.floor(totalSeconds / 86400),
+    hours: Math.floor(totalSeconds / 3600) % 24,
+    minutes: Math.floor(totalSeconds / 60) % 60,
+    seconds: totalSeconds % 60,
+  });
 }
 
 export async function checkGitHubRateLimit(
