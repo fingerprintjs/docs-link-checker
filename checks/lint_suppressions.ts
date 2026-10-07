@@ -6,7 +6,13 @@ import { glob } from "node:fs/promises";
 /** Maximum number of suppressions in the codebase */
 const MAX_SUPPRESSIONS = 4;
 
-const SOURCE_FILES = ["src/**/*.{ts,tsx}", "checks/**/*.ts", "bin/**/*.js", "*.config.js"];
+const SOURCE_FILES = [
+  "src/**/*.{ts,tsx}",
+  "checks/**/*.ts",
+  "bin/**/*.js",
+  "*.config.js",
+  "bench/**/*.ts",
+];
 const IGNORED_DIRECTORIES = new Set(["node_modules", "__fixtures__"]);
 
 // `@ts-ignore` and `@ts-nocheck` are banned by oxlint (`typescript/ban-ts-comment`), listed here to count them anyway

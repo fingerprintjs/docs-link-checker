@@ -3,5 +3,11 @@
   "printWidth": 100,
   "sortImports": { "newlinesBetween": false },
   "sortPackageJson": false,
-  "ignorePatterns": [".claude", "results", "src/__fixtures__", "pnpm-lock.yaml"]
+  "ignorePatterns": [
+    ".claude",
+    "results",
+    "src/__fixtures__",
+    "pnpm-lock.yaml",
+    "bench/corpus.json"
+  ]
 }

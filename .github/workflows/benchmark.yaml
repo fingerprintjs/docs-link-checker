@@ -1,0 +1,56 @@
+name: Benchmark
+
+# Speed benchmark of the PR vs its base branch, see the "Benchmark" section of README.md.
+# Only reports (job summary + sticky PR comment), a slowdown never fails the PR.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# A new push makes the previous benchmark obsolete
+concurrency:
+  group: benchmark-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-environment
+        id: setup
+        with:
+          app_id: ${{ vars.APP_ID }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-checkout
+
+      # The base needs its own node_modules, its src/ runs against them
+      - run: pnpm install --frozen-lockfile
+        working-directory: base-checkout
+
+      - run: pnpm bench --base base-checkout
+        env:
+          GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+
+      - name: Post or update the PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- docs-link-checker-benchmark -->"))][0].id // empty')
+          if [ -n "$ID" ]; then
+            gh api "repos/$REPO/issues/comments/$ID" -X PATCH -F body=@results/bench/benchmark.md
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -F body=@results/bench/benchmark.md
+          fi

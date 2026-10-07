@@ -13,6 +13,7 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.js",
     "cli": "tsx src/cli.ts",
+    "bench": "tsx bench/bench.ts",
     "checkLinks:docs": "tsx src/cli.ts site https://dev.fingerprint.com --baseline linkcheck.baseline.json",
     "checkLinks:github": "tsx src/cli.ts github-org fingerprintjs --baseline linkcheck.baseline.json",
     "checkLinks:web": "tsx src/cli.ts site https://fingerprint.com --include https://dev.fingerprint.com --include https://fingerprint.com --include https://github.com --baseline linkcheck.baseline.json",
