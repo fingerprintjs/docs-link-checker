@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostLimiter } from "./limiter";
 import { setHostLimiter } from "./run";
-import {
-  getPagesFromSitemap,
-  getWebsitePages,
-  MAX_SITEMAP_DEPTH,
-  SITEMAP_FETCH_CONCURRENCY,
-} from "./sitemap";
+import { getWebsitePages, MAX_SITEMAP_DEPTH } from "./sitemap";
 
 const sitemapIndex = (locs: string[]) =>
   `<?xml version="1.0" encoding="UTF-8"?>
@@ -100,9 +95,9 @@ describe("getWebsitePages()", () => {
 
     expect(pages.toSorted()).toEqual([`${SITE}/blog/1`, `${SITE}/docs/1`, `${SITE}/docs/2`]);
     const fetchedUrls = fetchMock.mock.calls.map(([url]) => String(url));
-    // sitemap.xml is fetched twice: existence check + parsing. Every other sitemap only once.
+    // Every sitemap is fetched once
     expect(fetchedUrls.filter((url) => url === `${SITE}/sitemap-docs.xml`)).toHaveLength(1);
-    expect(fetchedUrls.filter((url) => url === `${SITE}/sitemap.xml`)).toHaveLength(2);
+    expect(fetchedUrls.filter((url) => url === `${SITE}/sitemap.xml`)).toHaveLength(1);
   });
 
   it("falls back to sitemap-index.xml", async () => {
@@ -114,48 +109,33 @@ describe("getWebsitePages()", () => {
   });
 });
 
-describe("getPagesFromSitemap()", () => {
+describe("getWebsitePages() without sitemap", () => {
+  it("returns no pages and logs an error", async () => {
+    stubSitemaps({});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await getWebsitePages(SITE)).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith("No sitemap.xml or sitemap-index.xml found");
+  });
+});
+
+describe("getWebsitePages() limits and retries", () => {
   it(`stops following sitemap indexes nested deeper than ${MAX_SITEMAP_DEPTH}`, async () => {
-    // index-0 -> index-1 -> ... -> index-9 -> pages
+    // sitemap.xml -> index-1 -> ... -> index-9 -> pages
     const files: Record<string, string> = {};
-    for (let i = 0; i < 10; i++) {
+    files[`${SITE}/sitemap.xml`] = sitemapIndex([`${SITE}/index-1.xml`]);
+    for (let i = 1; i < 10; i++) {
       files[`${SITE}/index-${i}.xml`] = sitemapIndex([`${SITE}/index-${i + 1}.xml`]);
     }
     files[`${SITE}/index-10.xml`] = urlSet([`${SITE}/deep`]);
     const fetchMock = stubSitemaps(files);
 
-    const pages = await getPagesFromSitemap(`${SITE}/index-0.xml`);
+    const pages = await getWebsitePages(SITE);
 
     expect(pages).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(MAX_SITEMAP_DEPTH + 1);
   });
 
-  it(`fetches at most ${SITEMAP_FETCH_CONCURRENCY} sitemaps at the same time`, async () => {
-    const children = Array.from({ length: 30 }, (_, i) => `${SITE}/child-${i}.xml`);
-    let active = 0;
-    let maxActive = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const url = String(input);
-        active++;
-        maxActive = Math.max(maxActive, active);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        active--;
-        const body = url.endsWith("index.xml")
-          ? sitemapIndex(children)
-          : urlSet([url.replace(".xml", "")]);
-        return new Response(body, { status: 200 });
-      }),
-    );
-
-    const pages = await getPagesFromSitemap(`${SITE}/index.xml`);
-
-    expect(pages).toHaveLength(children.length);
-    expect(maxActive).toBe(SITEMAP_FETCH_CONCURRENCY);
-  });
-
-  it("also respects a per-host limit (LINK_CHECK_HOST_CONCURRENCY) lower than SITEMAP_FETCH_CONCURRENCY", async () => {
+  it("limits concurrent sitemap fetches per host (LINK_CHECK_HOST_CONCURRENCY)", async () => {
     setHostLimiter(new HostLimiter(2));
     try {
       const children = Array.from({ length: 20 }, (_, i) => `${SITE}/child-${i}.xml`);
@@ -169,14 +149,14 @@ describe("getPagesFromSitemap()", () => {
           maxActive = Math.max(maxActive, active);
           await new Promise((resolve) => setTimeout(resolve, 5));
           active--;
-          const body = url.endsWith("index.xml")
+          const body = url.endsWith("/sitemap.xml")
             ? sitemapIndex(children)
             : urlSet([url.replace(".xml", "")]);
           return new Response(body, { status: 200 });
         }),
       );
 
-      const pages = await getPagesFromSitemap(`${SITE}/index.xml`);
+      const pages = await getWebsitePages(SITE);
 
       expect(pages).toHaveLength(children.length);
       expect(maxActive).toBe(2);
@@ -196,7 +176,7 @@ describe("getPagesFromSitemap()", () => {
       ),
     );
 
-    expect(await getPagesFromSitemap(`${SITE}/pages.xml`)).toEqual([`${SITE}/page`]);
+    expect(await getWebsitePages(SITE)).toEqual([`${SITE}/page`]);
     expect(calls).toBe(2);
   });
 });
