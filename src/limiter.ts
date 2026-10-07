@@ -1,94 +1,9 @@
+import pLimit, { type LimitFunction } from "p-limit";
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Minimal counting semaphore: at most `limit` tasks run at the same time, the rest wait in FIFO order.
- */
-export class Semaphore {
-  private active = 0;
-  private readonly waiting: Array<() => void> = [];
-
-  constructor(readonly limit: number) {
-    if (!Number.isInteger(limit) || limit < 1) {
-      throw new Error(`Semaphore limit must be a positive integer, got ${limit}`);
-    }
-  }
-
-  /** Number of tasks currently running */
-  get activeCount() {
-    return this.active;
-  }
-
-  /** Number of tasks waiting for a slot */
-  get waitingCount() {
-    return this.waiting.length;
-  }
-
-  private async acquire(): Promise<void> {
-    if (this.active < this.limit) {
-      this.active++;
-      return;
-    }
-    // The slot is handed over directly by `release`, so `active` stays the same
-    await new Promise<void>((resolve) => this.waiting.push(resolve));
-  }
-
-  private release() {
-    const next = this.waiting.shift();
-    if (next) {
-      next();
-    } else {
-      this.active--;
-    }
-  }
-
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    await this.acquire();
-    try {
-      return await fn();
-    } finally {
-      this.release();
-    }
-  }
-}
 
 /** An item whose processing threw, with what was thrown */
 export type ConcurrentError<T> = { item: T; error: unknown };
-
-type Outcome<T, R> = { ok: true; value: R } | { ok: false; item: T; error: unknown };
-
-/**
- * Runs `fn` over `items` with at most `limit` concurrent calls. A throwing `fn` does not stop the other items:
- * its error is collected instead.
- * @returns successful results and errors, both in item order
- */
-export const mapConcurrent = async <T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<{ results: R[]; errors: ConcurrentError<T>[] }> => {
-  const slots = new Semaphore(limit);
-  const outcomes = await Promise.all(
-    items.map((item): Promise<Outcome<T, R>> =>
-      slots.run(async () => {
-        try {
-          return { ok: true, value: await fn(item) };
-        } catch (error) {
-          return { ok: false, item, error };
-        }
-      }),
-    ),
-  );
-  const results: R[] = [];
-  const errors: ConcurrentError<T>[] = [];
-  for (const outcome of outcomes) {
-    if (outcome.ok) {
-      results.push(outcome.value);
-    } else {
-      errors.push({ item: outcome.item, error: outcome.error });
-    }
-  }
-  return { results, errors };
-};
 
 /** Default per-host concurrency (`--host-concurrency` / `LINK_CHECK_HOST_CONCURRENCY`) */
 export const DEFAULT_HOST_CONCURRENCY = 8;
@@ -109,7 +24,7 @@ export const parseHostConcurrency = (value: string | undefined): number => {
   return limit;
 };
 
-type HostState = { semaphore: Semaphore; pausedUntil: number };
+type HostState = { limit: LimitFunction; pausedUntil: number };
 
 /** Waits until the pause of the host ends (a pause can be extended while waiting) */
 const waitForPause = async (state: HostState) => {
@@ -119,7 +34,7 @@ const waitForPause = async (state: HostState) => {
 };
 
 /**
- * Limits concurrent requests per hostname (one semaphore per host).
+ * Limits concurrent requests per hostname (one p-limit queue per host).
  * A host can also be paused (e.g. after a 429 with `Retry-After`), new requests to it wait until the pause ends.
  */
 export class HostLimiter {
@@ -137,7 +52,7 @@ export class HostLimiter {
     }
     let state = this.hosts.get(hostname);
     if (!state) {
-      state = { semaphore: new Semaphore(this.limitPerHost), pausedUntil: 0 };
+      state = { limit: pLimit(this.limitPerHost), pausedUntil: 0 };
       this.hosts.set(hostname, state);
     }
     return state;
@@ -149,7 +64,7 @@ export class HostLimiter {
     if (!state) {
       return fn();
     }
-    return state.semaphore.run(async () => {
+    return state.limit(async () => {
       await waitForPause(state);
       return fn();
     });
@@ -182,7 +97,7 @@ export class HostLimiter {
 
   /** Number of requests currently running for the URL's host (for tests and debugging) */
   activeCount(url: string): number {
-    return this.getHost(url)?.semaphore.activeCount ?? 0;
+    return this.getHost(url)?.limit.activeCount ?? 0;
   }
 }
 

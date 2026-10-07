@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatFileProblems, getHelp, parseCliArgs, runCli, UsageError } from "./cli";
+import { formatFileProblems, runCli } from "./cli";
 import { getJSONReport } from "./report/report";
 
 const mocks = vi.hoisted(() => ({
@@ -25,177 +25,6 @@ vi.mock("./link", () => ({
 
 const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");
 const tempDir = () => mkdtempSync(join(tmpdir(), "cli-test-"));
-
-describe("parseCliArgs()", () => {
-  const parse = (args: string[], env: Record<string, string> = {}) => parseCliArgs(args, env);
-  const optionsOf = (args: string[], env: Record<string, string> = {}) => {
-    const command = parse(args, env);
-    if (command.command === "help") {
-      throw new Error("Expected a command, got help");
-    }
-    return command.options;
-  };
-  const defaults = {
-    sampleRate: 1,
-    failOnBroken: true,
-    baseline: undefined,
-    updateBaseline: false,
-    pruneBaseline: false,
-    outputDir: "results",
-    json: false,
-    allowPrivateHosts: false,
-  };
-
-  it("parses --allow-private-hosts and LINK_CHECK_ALLOW_PRIVATE_HOSTS, blocked by default", () => {
-    expect(optionsOf(["files", "a.md"]).allowPrivateHosts).toBe(false);
-    expect(optionsOf(["files", "a.md", "--allow-private-hosts"]).allowPrivateHosts).toBe(true);
-    expect(
-      optionsOf(["files", "a.md"], { LINK_CHECK_ALLOW_PRIVATE_HOSTS: "true" }).allowPrivateHosts,
-    ).toBe(true);
-    expect(
-      optionsOf(["files", "a.md", "--no-allow-private-hosts"], {
-        LINK_CHECK_ALLOW_PRIVATE_HOSTS: "true",
-      }).allowPrivateHosts,
-    ).toBe(false);
-    expect(() => parse(["files", "a.md"], { LINK_CHECK_ALLOW_PRIVATE_HOSTS: "yes" })).toThrow(
-      'Invalid LINK_CHECK_ALLOW_PRIVATE_HOSTS "yes"',
-    );
-  });
-
-  it("parses --prune-baseline, only with --update-baseline and without sampling", () => {
-    expect(optionsOf(["files", "a.md", "--update-baseline", "--prune-baseline"])).toMatchObject({
-      updateBaseline: true,
-      pruneBaseline: true,
-    });
-    expect(() => parse(["files", "a.md", "--prune-baseline"])).toThrow(
-      "--prune-baseline can only be used with --update-baseline.",
-    );
-    expect(() =>
-      parse(["files", "a.md", "--update-baseline", "--prune-baseline", "--sample-rate", "0.5"]),
-    ).toThrow("--prune-baseline needs a full run");
-  });
-
-  it("parses site with --include prefixes", () => {
-    expect(
-      parse(["site", "https://example.com", "--include", "https://a.com", "--include=https://b"]),
-    ).toEqual({
-      command: "site",
-      url: "https://example.com",
-      include: ["https://a.com", "https://b"],
-      options: defaults,
-    });
-  });
-
-  it("parses github-org and files", () => {
-    expect(parse(["github-org", "fingerprintjs"])).toEqual({
-      command: "github-org",
-      org: "fingerprintjs",
-      options: defaults,
-    });
-    expect(parse(["files", "docs/**/*.md", "README.md", "--dry-run"])).toEqual({
-      command: "files",
-      patterns: ["docs/**/*.md", "README.md"],
-      dryRun: true,
-      annotations: true,
-      options: defaults,
-    });
-    expect(parse(["files", "a.md", "--no-annotations"])).toMatchObject({ annotations: false });
-  });
-
-  it("parses common options", () => {
-    expect(
-      parse([
-        "files",
-        "a.md",
-        "--sample-rate",
-        "0.5",
-        "--no-fail-on-broken",
-        "--baseline",
-        "b.json",
-        "--output-dir",
-        "out",
-        "--json",
-        "--host-concurrency",
-        "3",
-      ]),
-    ).toMatchObject({
-      options: {
-        sampleRate: 0.5,
-        failOnBroken: false,
-        baseline: "b.json",
-        updateBaseline: false,
-        outputDir: "out",
-        json: true,
-        hostConcurrency: 3,
-      },
-    });
-  });
-
-  it("uses environment variables as defaults, flags win", () => {
-    const env = {
-      FAIL_ON_BROKEN_LINKS: "false",
-      LINK_CHECK_SAMPLE_RATE: "0.1",
-      LINK_CHECK_BASELINE: "env.json",
-    };
-    expect(optionsOf(["files", "a.md"], env)).toMatchObject({
-      failOnBroken: false,
-      sampleRate: 0.1,
-      baseline: "env.json",
-    });
-    expect(
-      optionsOf(["files", "a.md", "--fail-on-broken", "--sample-rate=1", "--baseline=x.json"], env),
-    ).toMatchObject({ failOnBroken: true, sampleRate: 1, baseline: "x.json" });
-    expect(optionsOf(["files", "a.md"], { FAIL_ON_BROKEN_LINKS: "true" }).failOnBroken).toBe(true);
-  });
-
-  it("--update-baseline defaults the baseline file", () => {
-    expect(optionsOf(["files", "a.md", "--update-baseline"])).toMatchObject({
-      updateBaseline: true,
-      baseline: "linkcheck.baseline.json",
-    });
-  });
-
-  it("returns help for --help, -h and help <command>", () => {
-    expect(parse(["--help"])).toEqual({ command: "help", topic: undefined });
-    expect(parse(["files", "-h"])).toEqual({ command: "help", topic: "files" });
-    expect(parse(["help", "site"])).toEqual({ command: "help", topic: "site" });
-    expect(getHelp("files")).toContain("files <glob...>");
-    expect(getHelp()).toContain("github-org <org>");
-  });
-
-  it.each([
-    [[], "Missing command."],
-    [["nope"], 'Unknown command "nope"'],
-    [["files"], "files expects at least one glob pattern"],
-    [["site"], "site expects exactly one URL, got 0."],
-    [["site", "a", "b"], "site expects exactly one URL, got 2."],
-    [["site", "not a url"], 'Invalid URL "not a url".'],
-    [["site", "file:///etc/passwd"], "expected an http(s) URL"],
-    [["site", "https://a.com", "--include="], "--include must not be empty."],
-    [["github-org"], "github-org expects exactly one organization"],
-    [["github-org", "../x"], 'Invalid GitHub organization "../x".'],
-    [["files", "a.md", "--include", "x"], "--include can only be used with the site command."],
-    [["site", "https://a.com", "--dry-run"], "--dry-run can only be used with the files command."],
-    [["github-org", "x", "--no-annotations"], "--annotations can only be used with the files"],
-    [["files", "a.md", "--sample-rate", "2"], 'Invalid --sample-rate "2"'],
-    [["files", "a.md", "--sample-rate="], "--sample-rate must not be empty."],
-    [["files", "a.md", "--host-concurrency", "0"], 'Invalid --host-concurrency "0"'],
-    [["files", "a.md", "--unknown"], "Unknown option '--unknown'"],
-    [["files", "a.md", "--baseline"], "--baseline"],
-  ])("rejects %j", (args, message) => {
-    expect(() => parse(args)).toThrow(UsageError);
-    expect(() => parse(args)).toThrow(message);
-  });
-
-  it("rejects invalid environment variables", () => {
-    expect(() => parse(["files", "a.md"], { LINK_CHECK_SAMPLE_RATE: "abc" })).toThrow(
-      'Invalid LINK_CHECK_SAMPLE_RATE "abc"',
-    );
-    expect(() => parse(["files", "a.md"], { LINK_CHECK_HOST_CONCURRENCY: "-1" })).toThrow(
-      'Invalid LINK_CHECK_HOST_CONCURRENCY "-1"',
-    );
-  });
-});
 
 describe("formatFileProblems()", () => {
   it("prints one line per link to fix, collapsing and shortening error details", () => {
@@ -249,15 +78,172 @@ describe("runCli()", () => {
     vi.restoreAllMocks();
   });
 
-  it("prints help and returns 0", async () => {
-    expect(await runCli(["--help"], io())).toBe(0);
-    expect(stdout).toContain("Usage:");
-  });
+  describe("arguments and options", () => {
+    const emptyReport = {
+      siteName: "example.com",
+      summary: { totalLinksToFix: 0 },
+      brokenLinks: [],
+      hashNotFound: [],
+      networkErrors: [],
+      couldNotCheck: [],
+      ignored: [],
+    };
+    /** Options the check was started with, `site` is the command with the most arguments */
+    const checkOptions = async (args: string[], env: Record<string, string> = {}) => {
+      mocks.checkWebsite.mockResolvedValue(emptyReport);
+      const code = await runCli(["site", "https://example.com", ...args], io(env));
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      return mocks.checkWebsite.mock.calls[0]![0];
+    };
 
-  it("returns 2 for usage errors", async () => {
-    expect(await runCli(["nope"], io())).toBe(2);
-    expect(stderr).toContain('Error: Unknown command "nope"');
-    expect(stderr).toContain("--help");
+    it("uses defaults without flags and environment variables", async () => {
+      expect(await checkOptions([])).toMatchObject({
+        sampleRate: 1,
+        baseline: { entries: [] },
+        outputDir: "results",
+        hostConcurrency: 8,
+        allowPrivateHosts: false,
+      });
+    });
+
+    it("passes common options", async () => {
+      expect(
+        await checkOptions(["--sample-rate", "0.5", "--output-dir", "out", "--host-concurrency=3"]),
+      ).toMatchObject({ sampleRate: 0.5, outputDir: "out", hostConcurrency: 3 });
+    });
+
+    it("uses environment variables as defaults, flags win", async () => {
+      const env = {
+        LINK_CHECK_SAMPLE_RATE: "0.1",
+        LINK_CHECK_HOST_CONCURRENCY: "2",
+        LINK_CHECK_ALLOW_PRIVATE_HOSTS: "true",
+      };
+      expect(await checkOptions([], env)).toMatchObject({
+        sampleRate: 0.1,
+        hostConcurrency: 2,
+        allowPrivateHosts: true,
+      });
+      mocks.checkWebsite.mockClear();
+      expect(
+        await checkOptions(["--sample-rate=1", "--no-allow-private-hosts"], env),
+      ).toMatchObject({ sampleRate: 1, allowPrivateHosts: false });
+    });
+
+    it("FAIL_ON_BROKEN_LINKS=false and --no-fail-on-broken only report links to fix", async () => {
+      mocks.checkWebsite.mockResolvedValue({
+        ...emptyReport,
+        summary: { totalLinksToFix: 1 },
+      });
+      const exitCode = (args: string[], env: Record<string, string> = {}) =>
+        runCli(["site", "https://example.com", ...args], io(env));
+      expect(await exitCode([])).toBe(1);
+      expect(await exitCode([], { FAIL_ON_BROKEN_LINKS: "true" })).toBe(1);
+      expect(await exitCode([], { FAIL_ON_BROKEN_LINKS: "false" })).toBe(0);
+      expect(await exitCode(["--no-fail-on-broken"])).toBe(0);
+      expect(await exitCode(["--fail-on-broken"], { FAIL_ON_BROKEN_LINKS: "false" })).toBe(1);
+    });
+
+    it("LINK_CHECK_BASELINE is the default baseline file, --update-baseline defaults to linkcheck.baseline.json", async () => {
+      const dir = tempDir();
+      writeFileSync(join(dir, "env.json"), JSON.stringify({ ignore: ["https://a.com/**"] }));
+      expect(
+        (await checkOptions([], { LINK_CHECK_BASELINE: join(dir, "env.json") })).baseline.entries,
+      ).toHaveLength(1);
+
+      // The default file is relative to the current directory
+      const cwd = tempDir();
+      mocks.checkWebsite.mockResolvedValue(emptyReport);
+      const previous = process.cwd();
+      process.chdir(cwd);
+      try {
+        expect(await runCli(["site", "https://example.com", "--update-baseline"], io())).toBe(0);
+      } finally {
+        process.chdir(previous);
+      }
+      expect(JSON.parse(readFileSync(join(cwd, "linkcheck.baseline.json"), "utf8"))).toEqual({
+        ignore: [],
+      });
+    });
+
+    it("site: --include is repeatable and filters links by prefix", async () => {
+      const { linkFilter } = await checkOptions([
+        "--include",
+        "https://a.com",
+        "--include=https://b",
+      ]);
+      expect(linkFilter({ href: "https://a.com/x" })).toBe(true);
+      expect(linkFilter({ href: "https://b/x" })).toBe(true);
+      expect(linkFilter({ href: "https://c.com" })).toBe(false);
+    });
+
+    it.each([
+      [[], "Usage: docs-link-checker"],
+      [["nope"], "unknown command 'nope'"],
+      [["files"], "missing required argument"],
+      [["site"], "missing required argument"],
+      [["site", "a", "b"], "too many arguments"],
+      [["site", "not a url"], 'Invalid URL "not a url"'],
+      [["site", "file:///etc/passwd"], "expected an http(s) URL"],
+      [["site", "https://a.com", "--include="], "must not be empty"],
+      [["github-org"], "missing required argument"],
+      [["github-org", "../x"], 'Invalid GitHub organization "../x".'],
+      [["files", "a.md", "--include", "x"], "unknown option '--include'"],
+      [["site", "https://a.com", "--dry-run"], "unknown option '--dry-run'"],
+      [["github-org", "x", "--no-annotations"], "unknown option '--no-annotations'"],
+      [["files", "a.md", "--sample-rate", "2"], 'Invalid --sample-rate "2"'],
+      [["files", "a.md", "--sample-rate="], "must not be empty"],
+      [["files", "a.md", "--host-concurrency", "0"], 'Invalid --host-concurrency "0"'],
+      [["files", "a.md", "--baseline"], "argument missing"],
+      [
+        ["files", "a.md", "--prune-baseline"],
+        "--prune-baseline can only be used with --update-baseline.",
+      ],
+      [
+        ["files", "a.md", "--update-baseline", "--prune-baseline", "--sample-rate", "0.5"],
+        "--prune-baseline needs a full run",
+      ],
+    ])("rejects %j with exit code 2", async (args, message) => {
+      expect(await runCli(args, io())).toBe(2);
+      expect(stderr).toContain(message);
+    });
+
+    const badEnv = [
+      ["LINK_CHECK_SAMPLE_RATE", "abc"],
+      ["LINK_CHECK_HOST_CONCURRENCY", "-1"],
+      ["LINK_CHECK_ALLOW_PRIVATE_HOSTS", "yes"],
+    ] as const;
+
+    it("rejects invalid environment variables when they are used (exit code 2)", async () => {
+      for (const [name, value] of badEnv) {
+        stderr = "";
+        expect(await runCli(["files", "a.md"], io({ [name]: value }))).toBe(2);
+        expect(stderr).toContain(`Invalid ${name} "${value}"`);
+      }
+    });
+
+    it("ignores invalid environment variables for --help and for flags that override them", async () => {
+      const env = Object.fromEntries(badEnv);
+      expect(await runCli(["--help"], io(env))).toBe(0);
+      expect(await runCli(["site", "--help"], io(env))).toBe(0);
+      expect(
+        await checkOptions(
+          ["--sample-rate", "0.5", "--host-concurrency", "3", "--allow-private-hosts"],
+          env,
+        ),
+      ).toMatchObject({ sampleRate: 0.5, hostConcurrency: 3, allowPrivateHosts: true });
+    });
+
+    it("prints help for help, --help and <command> --help to stdout", async () => {
+      for (const args of [["--help"], ["help"], ["files", "-h"], ["help", "site"]]) {
+        stdout = "";
+        expect(await runCli(args, io())).toBe(0);
+        expect(stdout).toContain("Usage: docs-link-checker");
+      }
+      expect(stdout).toContain("--include <prefix>");
+      expect(stdout).toContain("LINK_CHECK_SAMPLE_RATE");
+      expect(stderr).toBe("");
+    });
   });
 
   it("files: prints problems with lines, writes reports and outputs, fails on links to fix", async () => {
@@ -432,7 +418,9 @@ describe("runCli()", () => {
     const baselinePath = join(tempDir(), "baseline.json");
     writeFileSync(baselinePath, JSON.stringify({ ignore: [{ url: "x" }] }));
     expect(await runCli(["files", "docs/*.md", "--baseline", baselinePath], io())).toBe(2);
-    expect(stderr).toContain(`Invalid baseline file ${baselinePath}: ignore[0]: unknown key "url"`);
+    expect(stderr).toContain(
+      `Invalid baseline file ${baselinePath}: ignore[0]: Unrecognized key: "url"`,
+    );
   });
 
   it("site and github-org: pass the options to the checks", async () => {
@@ -468,7 +456,7 @@ describe("runCli()", () => {
       sampleRate: 1,
       baseline: expect.anything(),
       outputDir: "out",
-      hostConcurrency: undefined,
+      hostConcurrency: 8,
       allowPrivateHosts: false,
     });
   });
