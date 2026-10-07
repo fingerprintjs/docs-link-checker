@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./browser";
 import type { LinkCheckResult } from "./types";
 
 /**
@@ -1063,7 +1062,7 @@ describe("server errors (502, 503, 504)", () => {
     const { result, took } = await withFakeTimers(async () => {
       start = Date.now();
       // Every page slot (PLAYWRIGHT_CONCURRENCY_LIMIT) is busy for 1s
-      const busySlots = Array.from({ length: PLAYWRIGHT_CONCURRENCY_LIMIT }, (_, i) =>
+      const busySlots = Array.from({ length: 5 }, (_, i) =>
         checkLinkWithPlaywright(`https://slow.example.com/${i}`),
       );
       // Not paused yet: both wait for a page slot

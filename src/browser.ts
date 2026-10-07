@@ -4,7 +4,7 @@ import { isBlockedUrlLiteral } from "./destination";
 import { getBrowserSlot, incrementMetric, isPrivateHostsAllowed } from "./run";
 
 // How many Playwright pages (browser contexts) are open at the same time
-export const PLAYWRIGHT_CONCURRENCY_LIMIT = 10;
+export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
 
 // Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own
 export const PAGE_OPERATION_TIMEOUT = 30000;
