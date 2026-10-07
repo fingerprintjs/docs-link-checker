@@ -13,9 +13,8 @@ export const HASH_WAIT_TIMEOUT = 3000;
 // A hash still missing after HASH_WAIT_TIMEOUT is waited for longer, together with the other hashes of its page.
 // This is the overall budget of the page, counted from the first check (HASH_WAIT_TIMEOUT included): a missing
 // anchor takes all of it.
-// E.g. Mintlify docs expand collapsed sections and add their ids a few seconds after hydration.
-// Kept short: every anchor that never appears costs the whole budget.
-export const HASH_FALLBACK_WAIT_TIMEOUT = 8000;
+// E.g. Mintlify docs expand collapsed sections and add their ids several seconds after hydration.
+export const HASH_FALLBACK_WAIT_TIMEOUT = 15000;
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
