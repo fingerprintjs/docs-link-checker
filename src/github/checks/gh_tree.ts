@@ -25,7 +25,7 @@ export const checkGitHubTreeLink = async (
   return getApiErrorResult(
     content.error,
     path
-      ? `Path ${path} not found in branch/commit ${ref}`
-      : `Neither branch nor commit ${ref} found in repository ${owner}/${repo}`,
+      ? `Path ${path} not found in branch, tag or commit ${ref}`
+      : `No branch, tag or commit ${ref} found in repository ${owner}/${repo}`,
   );
 };

@@ -36,7 +36,7 @@ describe("checkGitHubTreeLink", () => {
       ok: false,
       error: "broken link",
       status: 404,
-      errorDetail: "Path nonexistent/path not found in branch/commit master",
+      errorDetail: "Path nonexistent/path not found in branch, tag or commit master",
     });
   });
 
@@ -51,7 +51,7 @@ describe("checkGitHubTreeLink", () => {
       error: "broken link",
       status: 404,
       errorDetail:
-        "Neither branch nor commit nonexistent-branch found in repository fingerprintjs/fingerprintjs",
+        "No branch, tag or commit nonexistent-branch found in repository fingerprintjs/fingerprintjs",
     });
   });
 

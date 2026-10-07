@@ -5,14 +5,29 @@ import { getErrorMessage } from "./utils/errors";
 // Long runs print progress, also in CI where an interactive progress bar would spam the log
 const PROGRESS_LOG_INTERVAL = 30000;
 
-/** Human-readable description of an item that failed processing: a URL or a link (`href` and the page it is on) */
+/**
+ * Human-readable description of an item that failed processing:
+ * - a link: `href` and the page it is on
+ * - a README file: `sourcePath`
+ * - a GitHub repository: `full_name` (`owner/repo`)
+ */
 const describeItem = (item: unknown): string => {
-  if (typeof item === "object" && item && "href" in item && typeof item.href === "string") {
+  if (typeof item !== "object" || !item) {
+    return String(item);
+  }
+  if ("href" in item && typeof item.href === "string") {
     return "page" in item && typeof item.page === "string"
       ? `${item.href} (on ${item.page})`
       : item.href;
   }
-  return String(item);
+  if ("sourcePath" in item && typeof item.sourcePath === "string") {
+    return item.sourcePath;
+  }
+  if ("full_name" in item && typeof item.full_name === "string") {
+    return item.full_name;
+  }
+  // Items of all callers are plain data
+  return JSON.stringify(item);
 };
 
 const formatConcurrentErrors = <T>(errors: ConcurrentError<T>[]) =>

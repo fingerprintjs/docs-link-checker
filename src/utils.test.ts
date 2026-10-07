@@ -60,6 +60,24 @@ describe("parallelProcess() error logging", () => {
     );
     expect(output).not.toContain("[object Object]");
   });
+
+  it.each([
+    { item: { full_name: "org/repo", name: "repo" }, expected: "org/repo" },
+    {
+      item: { sourcePath: "https://github.com/org/repo/blob/main/README.md" },
+      expected: "https://github.com/org/repo/blob/main/README.md",
+    },
+  ])("names the failed $expected", async ({ item, expected }) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await parallelProcess({
+      items: [item],
+      processFn: async () => {
+        throw new Error("Something exploded");
+      },
+    });
+    const output = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(output).toContain(`${expected}: Something exploded`);
+  });
 });
 
 describe("getSampleRate()", () => {

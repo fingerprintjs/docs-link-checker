@@ -387,7 +387,7 @@ describe("GitHub API server errors", () => {
       ok: false,
       error: "broken link",
       status: 404,
-      errorDetail: "Neither branch nor commit missing found in repository o/r",
+      errorDetail: "No branch, tag or commit missing found in repository o/r",
     });
   });
 });
