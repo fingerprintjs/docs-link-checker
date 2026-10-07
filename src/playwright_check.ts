@@ -121,14 +121,24 @@ const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
   result?.ok === false && result.error === "hash not found";
 
 const HASH_SET_TIMEOUT_MESSAGE = "Setting the hash timed out";
-/** The in-page hash retry hung: the page main thread does not respond */
-const HASH_RETRY_HUNG = "hung";
+/** Stop the in-page hash retries of the page: it hangs, or it does not render anything per hash */
+const STOP_HASH_RETRIES = "stop";
+
+declare global {
+  interface Window {
+    /** DOM changes since the last in-page hash retry (see `isHashPresentAfterSettingIt`) */
+    linkCheckerDomChanges?: number;
+  }
+}
 
 /**
  * Sets the hash of `url` in the open page and waits for its anchor (content rendered per hash), all within one
  * `HASH_WAIT_TIMEOUT`. A failure (e.g. the page navigated away) means not found, a closed page (browser crash) is
- * rethrown. Returns `HASH_RETRY_HUNG` if setting the hash never returns: `page.evaluate` has no Playwright timeout, so
- * a hung page would hold the page slot. The pending call is cancelled when `withPage` closes the context.
+ * rethrown. Returns `STOP_HASH_RETRIES`:
+ * - if setting the hash never returns: `page.evaluate` has no Playwright timeout, so a hung page would hold the page
+ *   slot. The pending call is cancelled when `withPage` closes the context.
+ * - if the DOM did not change at all after the hash was set: the page does not render content per hash, the other
+ *   hashes would not be found either (each one would take the whole `HASH_WAIT_TIMEOUT`).
  */
 async function isHashPresentAfterSettingIt(page: Page, url: string) {
   const { hash } = new URL(url);
@@ -136,6 +146,18 @@ async function isHashPresentAfterSettingIt(page: Page, url: string) {
   try {
     await withTimeout(
       page.evaluate((newHash) => {
+        // Counts DOM changes from now on, the observer is installed on the first retry of the page
+        if (window.linkCheckerDomChanges === undefined) {
+          new MutationObserver((records) => {
+            window.linkCheckerDomChanges = (window.linkCheckerDomChanges ?? 0) + records.length;
+          }).observe(document.documentElement, {
+            attributes: true,
+            characterData: true,
+            childList: true,
+            subtree: true,
+          });
+        }
+        window.linkCheckerDomChanges = 0;
         location.hash = newHash;
       }, hash),
       HASH_WAIT_TIMEOUT,
@@ -143,20 +165,28 @@ async function isHashPresentAfterSettingIt(page: Page, url: string) {
     );
     // A timeout of 0 would mean "no timeout" to Playwright
     const remaining = HASH_WAIT_TIMEOUT - (Date.now() - startedAt);
-    return (
+    if (
       remaining > 0 &&
       (await waitForSelectorAttached(
         page,
         getHashSelectors(hash.slice(1), url).join(", "),
         remaining,
       ))
+    ) {
+      return true;
+    }
+    const domChanges = await withTimeout(
+      page.evaluate(() => window.linkCheckerDomChanges ?? 0),
+      HASH_WAIT_TIMEOUT,
+      HASH_SET_TIMEOUT_MESSAGE,
     );
+    return domChanges === 0 ? STOP_HASH_RETRIES : false;
   } catch (error) {
     if (page.isClosed()) {
       throw error;
     }
     return error instanceof Error && error.message === HASH_SET_TIMEOUT_MESSAGE
-      ? HASH_RETRY_HUNG
+      ? STOP_HASH_RETRIES
       : false;
   }
 }
@@ -174,7 +204,8 @@ export const resultFor = (results: Map<string, LinkCheckResult>, url: string): L
  * navigates to the first URL, then waits for the hash of every URL in the same DOM (in parallel), all until one
  * deadline, `HASH_FALLBACK_WAIT_TIMEOUT` after the first check (anchors rendered late).
  * Some pages render different content per hash (e.g. SPA tabs): a hash still missing then is set in the same page
- * (one hash at a time) and waited for `HASH_WAIT_TIMEOUT` more, before it is reported as "hash not found".
+ * (one hash at a time) and waited for `HASH_WAIT_TIMEOUT` more, before it is reported as "hash not found". The retries
+ * stop at the first one that does not change the DOM at all.
  * GitHub code line links are checked against the rendered code view instead (see `isGithubCodeLinePresent`).
  * @returns results by URL
  */
@@ -295,8 +326,7 @@ async function navigateAndCheck(
           if (isHashNotFound(results.get(url)) && !isGithubCodeLineLink(url)) {
             incrementMetric("playwrightHashFallbacks");
             const found = await isHashPresentAfterSettingIt(page, url);
-            if (found === HASH_RETRY_HUNG) {
-              // The page would hang again for the next hashes
+            if (found === STOP_HASH_RETRIES) {
               break;
             }
             if (found) {

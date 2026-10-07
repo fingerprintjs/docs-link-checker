@@ -68,6 +68,8 @@ vi.mock("playwright", () => ({
         newPage: async () => {
           let currentUrl = "";
           let navigatedAt = 0;
+          const pageWindow = {};
+          let onDomChange = (_records: unknown[]) => {};
           return {
             isClosed: () => false,
             setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
@@ -94,22 +96,37 @@ vi.mock("playwright", () => ({
                     : Promise.resolve("Forbidden page"),
               };
             },
-            // Only used to set the hash of the page: runs the callback against a fake `location`
-            evaluate: async (fn: (hash: string) => void, hash: string) => {
+            // Runs the in-page hash retry callbacks against a fake `window`, `location` and `MutationObserver`.
+            // Setting a hash changes the DOM only if the page renders its own HTML for that hash.
+            evaluate: async (fn: (hash?: string) => unknown, hash?: string) => {
               if (playwrightState.evaluateFails) {
                 throw new Error("Execution context was destroyed");
               }
               if (playwrightState.evaluateHangs) {
                 return new Promise<void>(() => {});
               }
+              vi.stubGlobal("window", pageWindow);
+              vi.stubGlobal("document", { documentElement: {} });
+              vi.stubGlobal(
+                "MutationObserver",
+                class {
+                  constructor(callback: (records: unknown[]) => void) {
+                    onDomChange = callback;
+                  }
+                  observe() {}
+                },
+              );
               vi.stubGlobal("location", {
                 set hash(value: string) {
                   playwrightState.hashesSet.push(value);
                   currentUrl = currentUrl.replace(/#.*/, "") + value;
+                  if (playwrightState.htmlByUrl[currentUrl] !== undefined) {
+                    onDomChange([{}]);
+                  }
                 },
               });
               try {
-                fn(hash);
+                return fn(hash);
               } finally {
                 vi.unstubAllGlobals();
               }
@@ -856,17 +873,20 @@ describe("checkLinks() Playwright hashes of one page", () => {
     playwrightState.htmlByUrl = {
       [`${page}#tab-a`]: '<div id="tab-a"></div>',
       [`${page}#tab-b`]: '<div id="tab-b"></div>',
+      // Renders something else: the DOM changed, the retries go on
+      [`${page}#other`]: "<div></div>",
     };
 
-    const { byHash, counters } = await checkHashes(["#tab-a", "#tab-b", "#missing"]);
+    const { byHash, counters } = await checkHashes(["#tab-a", "#other", "#tab-b", "#missing"]);
 
     expect(byHash.get("#tab-a")).toEqual({ ok: true, status: 200 });
     expect(byHash.get("#tab-b")).toEqual({ ok: true, status: 200 });
     expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
     // No navigation per hash
     expect(playwrightState.visited).toEqual([`${page}#tab-a`]);
-    expect(playwrightState.hashesSet).toEqual(["#tab-b", "#missing"]);
-    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightHashFallbacks: 2 });
+    expect(byHash.get("#other")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(playwrightState.hashesSet).toEqual(["#other", "#tab-b", "#missing"]);
+    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightHashFallbacks: 3 });
   });
 
   it("keeps 'hash not found' for a hash whose in-page retry fails, other results stay", async () => {
@@ -898,8 +918,10 @@ describe("checkLinks() Playwright hashes of one page", () => {
     for (const hash of ["#a", "#b", "#c", "#d"]) {
       expect(byHash.get(hash)).toEqual({ ok: false, status: 200, error: "hash not found" });
     }
-    // 15s shared wait, then 3s for each of the 3 hashes set in the page
-    expect(took).toBe(15_000 + 3 * 3000);
+    // Setting #b did not change the DOM, the page does not render per hash: #c and #d are not set
+    expect(playwrightState.hashesSet).toEqual(["#b"]);
+    // 15s shared wait, then 3s for #b
+    expect(took).toBe(15_000 + 3000);
   });
 
   it("does not add navigations when every hash is in the shared DOM", async () => {
