@@ -48,6 +48,8 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     responseBodyHangs: false,
     // A missing selector times out after its whole timeout (instead of right away), for tests with fake timers
     waitForTakesTimeout: false,
+    // The DOM is quiet (no changes for `DOM_QUIET_TIME`) this long after the navigation, never if undefined
+    domQuietAfterMs: undefined as number | undefined,
   },
 }));
 
@@ -113,6 +115,16 @@ vi.mock("playwright", () => ({
               } finally {
                 vi.unstubAllGlobals();
               }
+            },
+            // Only used to wait for a quiet DOM
+            waitForFunction: async () => {
+              const quietAfterMs = playwrightState.domQuietAfterMs;
+              if (quietAfterMs === undefined) {
+                throw new Error("Timeout");
+              }
+              await new Promise((resolve) =>
+                setTimeout(resolve, Math.max(0, navigatedAt + quietAfterMs - Date.now())),
+              );
             },
             locator: (selector: string) => ({
               first: () => ({
@@ -185,6 +197,7 @@ beforeEach(() => {
   playwrightState.evaluateFails = false;
   playwrightState.evaluateHangs = false;
   playwrightState.waitForTakesTimeout = false;
+  playwrightState.domQuietAfterMs = undefined;
   playwrightState.status = 200;
   playwrightState.statuses = [];
   playwrightState.headers = {};
@@ -890,6 +903,15 @@ describe("checkLinks() Playwright hashes of one page", () => {
     expect(byHash.get("#missing2")).toEqual({ ok: false, status: 200, error: "hash not found" });
     // 15s shared wait, then one 3s timeout (the next hash is not tried)
     expect(took).toBe(15_000 + 3000);
+  });
+
+  it("ends the shared wait once the DOM is quiet", async () => {
+    playwrightState.domQuietAfterMs = 5000;
+
+    const { byHash, took } = await checkHashes(["#a"]);
+
+    expect(byHash.get("#a")).toEqual({ ok: false, status: 200, error: "hash not found" });
+    expect(took).toBe(5000);
   });
 
   it("spends the 15s budget once per page, not once per missing hash", async () => {

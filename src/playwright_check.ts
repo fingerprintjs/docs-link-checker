@@ -1,5 +1,6 @@
 import type { Page, Response as PlaywrightResponse } from "playwright";
 import {
+  DOM_QUIET_TIME,
   HASH_FALLBACK_WAIT_TIMEOUT,
   HASH_WAIT_TIMEOUT,
   PAGE_OPERATION_TIMEOUT,
@@ -74,12 +75,53 @@ async function isGithubCodeLinePresent(page: Page, lineSelector: string) {
   return waitForSelectorAttached(page, lineSelector, HASH_WAIT_TIMEOUT);
 }
 
+declare global {
+  interface Window {
+    /** Time of the last DOM change (`performance.now()`), see `waitForQuietDom` */
+    linkCheckerLastDomChange?: number;
+  }
+}
+
+/**
+ * Resolves `true` once the DOM of the page has not changed for `DOM_QUIET_TIME`, `false` if it keeps changing until
+ * `timeout` (or the page is closed).
+ */
+const waitForQuietDom = (page: Page, timeout: number): Promise<boolean> =>
+  page
+    .waitForFunction(
+      (quietTime) => {
+        // The first poll starts counting DOM changes
+        if (window.linkCheckerLastDomChange === undefined) {
+          window.linkCheckerLastDomChange = performance.now();
+          new MutationObserver(() => {
+            window.linkCheckerLastDomChange = performance.now();
+          }).observe(document.documentElement, {
+            attributes: true,
+            characterData: true,
+            childList: true,
+            subtree: true,
+          });
+        }
+        return performance.now() - window.linkCheckerLastDomChange >= quietTime;
+      },
+      DOM_QUIET_TIME,
+      { timeout, polling: 250 },
+    )
+    .then(
+      () => true,
+      () => false,
+    );
+
 /**
  * Checks the hash of `url` in the page DOM: waits `HASH_WAIT_TIMEOUT` for its anchor, then longer until `deadline`
- * (anchors rendered late). A quiet page is no proof the anchor is absent (a timer can add it any time), so a
- * missing anchor always takes the whole budget until `deadline`.
+ * (anchors rendered late) or until the DOM is quiet (`domQuiet`, the page is done rendering).
  */
-async function isHashPresentPlaywright(page: Page, hash: string, url: string, deadline: number) {
+async function isHashPresentPlaywright(
+  page: Page,
+  hash: string,
+  url: string,
+  { deadline, domQuiet }: { deadline: number; domQuiet: Promise<boolean> },
+) {
   // All values are escaped, so any hash produces a valid selector
   const selector = getHashSelectors(hash, url).join(", ");
   if (isGithubCodeLineLink(url)) {
@@ -92,13 +134,18 @@ async function isHashPresentPlaywright(page: Page, hash: string, url: string, de
   incrementMetric("playwrightLongHashWaits");
   const remaining = deadline - Date.now();
   // A timeout of 0 would mean "no timeout" to Playwright
-  return remaining > 0 && waitForSelectorAttached(page, selector, remaining);
+  if (remaining <= 0) {
+    return false;
+  }
+  // The losing wait is cut short when the page is closed, it must not reject unhandled
+  const anchor = waitForSelectorAttached(page, selector, remaining).catch(() => false);
+  return Promise.race([anchor, domQuiet.then((quiet) => (quiet ? false : anchor))]);
 }
 
 const getPlaywrightHashResult = async (
   page: Page,
   url: string,
-  { status, deadline }: { status: number; deadline: number },
+  { status, deadline, domQuiet }: { status: number; deadline: number; domQuiet: Promise<boolean> },
 ): Promise<LinkCheckResult> => {
   const hash = new URL(url).hash.replace("#", "");
   if (!hash) {
@@ -110,7 +157,7 @@ const getPlaywrightHashResult = async (
     return { ok: true, status, note };
   }
 
-  if (!(await isHashPresentPlaywright(page, hash, url, deadline))) {
+  if (!(await isHashPresentPlaywright(page, hash, url, { deadline, domQuiet }))) {
     return { ok: false, status, error: "hash not found" };
   }
 
@@ -172,7 +219,7 @@ export const resultFor = (results: Map<string, LinkCheckResult>, url: string): L
 /**
  * Checks URLs pointing to the same page (same URL without hash) with a single Playwright navigation:
  * navigates to the first URL, then waits for the hash of every URL in the same DOM (in parallel), all until one
- * deadline, `HASH_FALLBACK_WAIT_TIMEOUT` after the first check (anchors rendered late).
+ * deadline, `HASH_FALLBACK_WAIT_TIMEOUT` after the first check (anchors rendered late), or until the DOM is quiet.
  * Some pages render different content per hash (e.g. SPA tabs): a hash still missing then is set in the same page
  * (one hash at a time) and waited for `HASH_WAIT_TIMEOUT` more, before it is reported as "hash not found".
  * GitHub code line links are checked against the rendered code view instead (see `isGithubCodeLinePresent`).
@@ -276,6 +323,7 @@ async function navigateAndCheck(
         const status = response.status();
         // The overall budget of the long wait starts with the first check, it includes the regular wait
         const deadline = Date.now() + HASH_FALLBACK_WAIT_TIMEOUT;
+        const domQuiet = waitForQuietDom(page, HASH_FALLBACK_WAIT_TIMEOUT);
         const results = new Map(
           await Promise.all(
             urls.map(
@@ -285,6 +333,7 @@ async function navigateAndCheck(
                   await getPlaywrightHashResult(page, url, {
                     status,
                     deadline,
+                    domQuiet,
                   }),
                 ] as const,
             ),
