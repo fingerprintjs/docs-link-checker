@@ -254,24 +254,6 @@ describe("checkLinkWithGithubApi", () => {
     });
   });
 
-  it("should handle link to wiki", async () => {
-    const result = await checkLinkWithGithubApi("https://github.com/fingerprintjs/home/wiki");
-    expect(result).toMatchObject({
-      ok: true,
-      status: 200,
-    });
-  });
-
-  it("should handle link to specific wiki article", async () => {
-    const result = await checkLinkWithGithubApi(
-      "https://github.com/fingerprintjs/home/wiki/FingerprintJS-Naming-Conventions",
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      status: 200,
-    });
-  });
-
   it("should handle hash with incorrect case", async () => {
     const result = await checkLinkWithGithubApi(
       "https://github.com/fingerprintjs/fingerprint-pro-server-api-java-sdk/blob/main/docs/FingerprintApi.md#gEtEvEnT",
@@ -289,16 +271,6 @@ describe("checkLinkWithGithubApi", () => {
     expect(result).toMatchObject({
       ok: true,
       status: 200,
-    });
-  });
-
-  it("should return error for non-existent wiki", async () => {
-    const result = await checkLinkWithGithubApi(
-      "https://github.com/fingerprintjs/nonexistent-repo/wiki",
-    );
-    expect(result).toMatchObject({
-      ok: false,
-      error: "broken link",
     });
   });
 

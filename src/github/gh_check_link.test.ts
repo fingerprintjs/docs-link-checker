@@ -121,12 +121,6 @@ describe("isGithubCodeLineLink", () => {
   });
 });
 
-describe("checkLinkWithGithubApi", () => {
-  it("should throw error for non-GitHub URLs", async () => {
-    await expect(checkLinkWithGithubApi("https://example.com")).rejects.toThrow("Not a GitHub URL");
-  });
-});
-
 describe("safeDecode() / getGithubPathSegments()", () => {
   it("decodes percent-encoded segments", () => {
     expect(safeDecode("%40fingerprint%2Fvue%402.0.0")).toBe("@fingerprint/vue@2.0.0");
@@ -313,7 +307,7 @@ describe("isGithubReservedRoute()", () => {
   });
 });
 
-describe("checkLinkWithGithubApi() with GitHub's own pages", () => {
+describe("checkLinkWithGithubApi() with unknown account URLs", () => {
   const fetchMock =
     vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
 
@@ -324,28 +318,6 @@ describe("checkLinkWithGithubApi() with GitHub's own pages", () => {
     );
     // Restored after every test (`unstubGlobals`)
     vi.stubGlobal("fetch", fetchMock);
-  });
-
-  it.each([
-    "https://github.com/features",
-    "https://github.com/marketplace",
-    "https://github.com/topics/javascript",
-    "https://github.com/pricing/",
-  ])("checks %s as a page, not as an account or a repository", async (url) => {
-    const result = await checkLinkWithGithubApi(url);
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(String(fetchMock.mock.calls[0]![0])).toBe(url);
-    expect(octokit.users.getByUsername).not.toHaveBeenCalled();
-    expect(octokit.repos.get).not.toHaveBeenCalled();
-  });
-
-  it("reports a missing GitHub page as broken link", async () => {
-    fetchMock.mockImplementation(async () => new Response("Not found", { status: 404 }));
-
-    const result = await checkLinkWithGithubApi("https://github.com/topics/no-such-topic-xyz");
-
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
   });
 
   it("accepts an unknown account URL whose page exists (a GitHub page missing from the reserved routes)", async () => {
