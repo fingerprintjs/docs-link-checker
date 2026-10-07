@@ -30,7 +30,8 @@ import { checkLinks } from "../src/link";
 import { getRunContext, type RunMetrics, withRun } from "../src/run";
 import corpus from "./corpus.json";
 
-type Round = { totalMs: number; metrics: RunMetrics };
+// `outcomes`: href -> "ok" or the error kind
+type Round = { totalMs: number; metrics: RunMetrics; outcomes: Record<string, string> };
 type Stat = { median: number; min: number; max: number };
 type Verdict = "better" | "worse" | "same";
 
@@ -38,6 +39,7 @@ const ICON = { better: "🟢", worse: "🔴", same: "⚪" } as const;
 // Hidden marker, the workflow uses it to find and update its own PR comment
 const MARKER = "<!-- docs-link-checker-benchmark -->";
 const TOTAL = "**Total time**";
+const MAX_CHANGED_LINES = 50;
 const REPORT_FILE = "results/bench/benchmark.md";
 
 // A time diff must be both noticeable (relative) and meaningful (absolute), live sites are noisy
@@ -45,10 +47,15 @@ const TIME_RELATIVE = 0.15;
 const TIME_ABSOLUTE_MS = 5000;
 
 const isRound = (value: unknown): value is Round =>
-  typeof value === "object" && value !== null && "totalMs" in value && "metrics" in value;
+  typeof value === "object" &&
+  value !== null &&
+  "totalMs" in value &&
+  "metrics" in value &&
+  "outcomes" in value;
 
 const runRound = async (outFile: string) => {
   const start = performance.now();
+  const outcomes: Record<string, string> = {};
   const metrics = await withRun({}, async () => {
     const results = await checkLinks({ links: corpus });
     const context = getRunContext();
@@ -56,13 +63,15 @@ const runRound = async (outFile: string) => {
       throw new Error("No run context inside withRun");
     }
     // Counted like the other counters, so the report shows if a speed change altered results
-    for (const { result } of results) {
-      const name = `result: ${result.ok ? "ok" : result.error}`;
+    for (const { href, result } of results) {
+      const outcome = result.ok ? "ok" : result.error;
+      outcomes[href] = outcome;
+      const name = `result: ${outcome}`;
       context.metrics.counters[name] = (context.metrics.counters[name] ?? 0) + 1;
     }
     return context.metrics;
   });
-  const round: Round = { totalMs: performance.now() - start, metrics };
+  const round: Round = { totalMs: performance.now() - start, metrics, outcomes };
   writeFileSync(outFile, JSON.stringify(round));
 };
 
@@ -140,6 +149,12 @@ const formatMs = (ms: number) =>
 const format = (s: Stat, fmt: (n: number) => string) =>
   s.min === s.max ? fmt(s.median) : `${fmt(s.median)} (${fmt(s.min)}-${fmt(s.max)})`;
 
+/** Hrefs with a different outcome in every round pair, so one-off network flakes are left out */
+const changedResults = (head: Round[], base: Round[]): string[] =>
+  Object.keys(head[0]?.outcomes ?? {})
+    .filter((href) => head.every((round, i) => round.outcomes[href] !== base[i]?.outcomes[href]))
+    .map((href) => `- ${href}: ${base[0]?.outcomes[href]} → ${head[0]?.outcomes[href]}`);
+
 const reportOf = (head: Round[], base: Round[] | undefined): string => {
   const kinds = [
     { pick: (r: Round) => ({ [TOTAL]: r.totalMs }), isTime: true },
@@ -170,7 +185,19 @@ const reportOf = (head: Round[], base: Round[] | undefined): string => {
   const columns = base
     ? ["| Metric | Base | Head | Verdict |", "| --- | ---: | ---: | --- |"]
     : ["| Metric | Head |", "| --- | ---: |"];
-  return [MARKER, headline, "", ...columns, ...rows, ""].join("\n");
+  const changed = base ? changedResults(head, base) : [];
+  const changedSection = changed.length
+    ? [
+        "",
+        "### Changed results",
+        "",
+        ...changed.slice(0, MAX_CHANGED_LINES),
+        ...(changed.length > MAX_CHANGED_LINES
+          ? [`- ...and ${changed.length - MAX_CHANGED_LINES} more`]
+          : []),
+      ]
+    : [];
+  return [MARKER, headline, "", ...columns, ...rows, ...changedSection, ""].join("\n");
 };
 
 const main = async () => {
