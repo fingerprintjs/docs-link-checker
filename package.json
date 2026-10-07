@@ -24,8 +24,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "knip": "knip",
-    "lint:suppressions": "tsx checks/lint_suppressions.ts",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run lint:suppressions && pnpm run tsc && pnpm run knip",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run tsc && pnpm run knip",
     "check:fix": "oxfmt && oxlint --fix",
     "gh-limit": "tsx ./checks/gh_rate_limit.ts"
   },
@@ -42,7 +41,6 @@
     "@octokit/plugin-throttling": "^11.0.5",
     "@octokit/rest": "^22.0.1",
     "cheerio": "^1.2.0",
-    "cli-progress": "^3.12.0",
     "commander": "^15.0.0",
     "github-slugger": "^2.0.0",
     "mdast-util-from-markdown": "^2.1.0",
@@ -59,7 +57,6 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/cli-progress": "^3.11.6",
     "@types/node": "^24.19.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
