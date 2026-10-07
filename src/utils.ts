@@ -71,24 +71,25 @@ export const parallelProcess = async <T, R>({
   progressBar?.start(items.length, 0);
   try {
     const limit = pLimit(concurrencyLimit);
-    const tasks = items.map((item) => ({
-      item,
-      done: limit(async () => {
-        try {
-          return await processFn(item);
-        } finally {
-          progressBar?.increment();
-        }
-      }),
-    }));
-    await Promise.allSettled(tasks.map((task) => task.done));
+    const settled = await Promise.allSettled(
+      items.map((item) =>
+        limit(async () => {
+          try {
+            return await processFn(item);
+          } finally {
+            progressBar?.increment();
+          }
+        }),
+      ),
+    );
     const results: R[] = [];
     const errors: ConcurrentError<T>[] = [];
-    for (const { item, done } of tasks) {
-      try {
-        results.push(await done);
-      } catch (error) {
-        errors.push({ item, error });
+    for (const [i, item] of items.entries()) {
+      const outcome = settled[i];
+      if (outcome?.status === "fulfilled") {
+        results.push(outcome.value);
+      } else {
+        errors.push({ item, error: outcome?.reason });
       }
     }
 
