@@ -1,28 +1,51 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatFileProblems, runCli } from "./cli";
 import { getJSONReport } from "./report/report";
 
-const mocks = vi.hoisted(() => ({
-  checkWebsite: vi.fn(),
-  checkReadmesInGithubOrg: vi.fn(),
-}));
-vi.mock("./website", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./website")>()),
-  checkWebsite: mocks.checkWebsite,
-}));
+// GitHub organizations need GH_TOKEN and the network
+const mocks = vi.hoisted(() => ({ checkReadmesInGithubOrg: vi.fn() }));
 vi.mock("./github/gh_get_links", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./github/gh_get_links")>()),
   checkReadmesInGithubOrg: mocks.checkReadmesInGithubOrg,
 }));
-// Local files mode must never hit the network in these tests
-vi.mock("./link", () => ({
-  checkLinks: vi.fn(async () => {
-    throw new Error("checkLinks must not be called");
-  }),
-}));
+
+// Local site for the `site` command: a sitemap with one page linking to a working and two missing URLs
+let server: Server;
+let siteUrl: string;
+
+beforeAll(async () => {
+  server = createServer((req, res) => {
+    const send = (status: number, body = "") => {
+      res.writeHead(status, { "content-type": "text/html" });
+      res.end(body);
+    };
+    if (req.url === "/sitemap.xml") {
+      send(200, `<urlset><url><loc>${siteUrl}/page</loc></url></urlset>`);
+    } else if (req.url === "/page") {
+      send(
+        200,
+        `<a href="/keep/ok">ok</a><a href="/keep/missing">a</a><a href="/other/missing">b</a>`,
+      );
+    } else {
+      send(req.url === "/keep/ok" ? 200 : 404);
+    }
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Test server has no port");
+  }
+  siteUrl = `http://127.0.0.1:${address.port}`;
+});
+
+afterAll(() => {
+  server.closeAllConnections();
+  server.close();
+});
 
 const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");
 const tempDir = () => mkdtempSync(join(tmpdir(), "cli-test-"));
@@ -71,7 +94,6 @@ describe("runCli()", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
-    mocks.checkWebsite.mockReset();
     mocks.checkReadmesInGithubOrg.mockReset();
   });
 
@@ -80,49 +102,27 @@ describe("runCli()", () => {
   });
 
   describe("arguments and options", () => {
-    const brokenLink = {
-      href: "https://a.com/broken",
-      page: "https://example.com/",
-      text: "",
-      result: { ok: false, error: "broken link", status: 404 },
-    };
-    const checkOptions = async (args: string[], env: Record<string, string> = {}) => {
-      mocks.checkWebsite.mockResolvedValue([]);
-      const code = await runCli(
-        ["site", "https://example.com", "--output-dir", tempDir(), ...args],
-        io(env),
-      );
+    // Number of files checked by `files --dry-run`, 3 files match without sampling
+    const filesChecked = async (args: string[], env: Record<string, string> = {}) => {
+      stdout = "";
+      const code = await runCli(["files", "docs/*.md", "--dry-run", ...args], io(env));
       expect(stderr).toBe("");
       expect(code).toBe(0);
-      return mocks.checkWebsite.mock.calls[0]![0];
+      return Number(/^(\d+) files,/m.exec(stdout)?.[1]);
     };
 
-    it("uses defaults without flags and environment variables", async () => {
-      expect(await checkOptions([])).toMatchObject({ sampleRate: 1 });
-    });
-
-    it("passes common options", async () => {
-      expect(await checkOptions(["--sample-rate", "0.5"])).toMatchObject({ sampleRate: 0.5 });
-      const outputDir = tempDir();
-      mocks.checkWebsite.mockResolvedValue([]);
-      expect(await runCli(["site", "https://example.com", "--output-dir", outputDir], io())).toBe(
-        0,
-      );
-      expect(existsSync(join(outputDir, "example-com.json"))).toBe(true);
-    });
-
-    it("uses environment variables as defaults, flags win", async () => {
+    it("--sample-rate limits the checked files, LINK_CHECK_SAMPLE_RATE is the default and flags win", async () => {
       const env = { LINK_CHECK_SAMPLE_RATE: "0.1" };
-      expect(await checkOptions([], env)).toMatchObject({ sampleRate: 0.1 });
-      mocks.checkWebsite.mockClear();
-      expect(await checkOptions(["--sample-rate=1"], env)).toMatchObject({ sampleRate: 1 });
+      expect(await filesChecked([])).toBe(3);
+      expect(await filesChecked(["--sample-rate", "0.5"])).toBe(2);
+      expect(await filesChecked([], env)).toBe(1);
+      expect(await filesChecked(["--sample-rate=1"], env)).toBe(3);
     });
 
     it("FAIL_ON_BROKEN_LINKS=false and --no-fail-on-broken only report links to fix", async () => {
-      mocks.checkWebsite.mockResolvedValue([brokenLink]);
       const outputDir = tempDir();
       const exitCode = (args: string[], env: Record<string, string> = {}) =>
-        runCli(["site", "https://example.com", "--output-dir", outputDir, ...args], io(env));
+        runCli(["files", "docs/*.md", "--output-dir", outputDir, ...args], io(env));
       expect(await exitCode([])).toBe(1);
       expect(await exitCode([], { FAIL_ON_BROKEN_LINKS: "true" })).toBe(1);
       expect(await exitCode([], { FAIL_ON_BROKEN_LINKS: "false" })).toBe(0);
@@ -130,50 +130,39 @@ describe("runCli()", () => {
       expect(await exitCode(["--fail-on-broken"], { FAIL_ON_BROKEN_LINKS: "false" })).toBe(1);
     });
 
-    it("LINK_CHECK_BASELINE is the default baseline file, --update-baseline defaults to linkcheck.baseline.json", async () => {
-      const dir = tempDir();
-      writeFileSync(join(dir, "env.json"), JSON.stringify({ ignore: ["https://a.com/**"] }));
-      mocks.checkWebsite.mockResolvedValue([brokenLink]);
+    it("LINK_CHECK_BASELINE is the default baseline file", async () => {
+      const baselinePath = join(tempDir(), "env.json");
+      writeFileSync(baselinePath, JSON.stringify({ ignore: [{ href: "../nope.md" }] }));
       const outputDir = tempDir();
       expect(
         await runCli(
-          ["site", "https://example.com", "--output-dir", outputDir],
-          io({ LINK_CHECK_BASELINE: join(dir, "env.json") }),
+          ["files", "docs/*.md", "--output-dir", outputDir],
+          io({ LINK_CHECK_BASELINE: baselinePath }),
         ),
       ).toBe(0);
-      expect(
-        JSON.parse(readFileSync(join(outputDir, "example-com.json"), "utf8")).summary,
-      ).toMatchObject({ ignored: 1 });
+      const report = JSON.parse(readFileSync(join(outputDir, "local-files.json"), "utf8"));
+      expect(report.summary).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
+    });
 
-      // The default file is relative to the current directory
-      const cwd = tempDir();
-      mocks.checkWebsite.mockResolvedValue([]);
+    it("--update-baseline without --baseline writes linkcheck.baseline.json in process.cwd(), not in io.cwd", async () => {
+      // Only the globs are resolved against io.cwd, the baseline path is used as is by the file system
+      const processCwd = tempDir();
       const previous = process.cwd();
-      process.chdir(cwd);
+      process.chdir(processCwd);
       try {
         expect(
           await runCli(
-            ["site", "https://example.com", "--update-baseline", "--output-dir", tempDir()],
+            ["files", "docs/*.md", "--update-baseline", "--output-dir", tempDir()],
             io(),
           ),
         ).toBe(0);
       } finally {
         process.chdir(previous);
       }
-      expect(JSON.parse(readFileSync(join(cwd, "linkcheck.baseline.json"), "utf8"))).toEqual({
-        ignore: [],
-      });
-    });
-
-    it("site: --include is repeatable and filters links by prefix", async () => {
-      const { linkFilter } = await checkOptions([
-        "--include",
-        "https://a.com",
-        "--include=https://b",
-      ]);
-      expect(linkFilter({ href: "https://a.com/x" })).toBe(true);
-      expect(linkFilter({ href: "https://b/x" })).toBe(true);
-      expect(linkFilter({ href: "https://c.com" })).toBe(false);
+      expect(JSON.parse(readFileSync(join(processCwd, "linkcheck.baseline.json"), "utf8"))).toEqual(
+        { ignore: [{ href: "../nope.md", page: "docs/guide.md" }] },
+      );
+      expect(existsSync(join(FIXTURE, "linkcheck.baseline.json"))).toBe(false);
     });
 
     it.each([
@@ -224,9 +213,7 @@ describe("runCli()", () => {
       const env = Object.fromEntries(badEnv);
       expect(await runCli(["--help"], io(env))).toBe(0);
       expect(await runCli(["site", "--help"], io(env))).toBe(0);
-      expect(
-        await checkOptions(["--sample-rate", "0.5", "--host-concurrency", "3"], env),
-      ).toMatchObject({ sampleRate: 0.5 });
+      expect(await filesChecked(["--sample-rate", "0.5", "--host-concurrency", "3"], env)).toBe(2);
     });
 
     it("prints help for help, --help and <command> --help to stdout", async () => {
@@ -394,34 +381,6 @@ describe("runCli()", () => {
     });
   });
 
-  it("site: saves the report, applies the baseline and fails on broken links", async () => {
-    mocks.checkWebsite.mockResolvedValue([
-      {
-        href: "https://example.com/broken",
-        page: "https://example.com/",
-        text: "",
-        result: { ok: false, error: "broken link", status: 404 },
-      },
-    ]);
-    const outputDir = tempDir();
-    const args = ["site", "https://example.com", "--output-dir", outputDir];
-    expect(await runCli(args, io())).toBe(1);
-    const saved = JSON.parse(readFileSync(join(outputDir, "example-com.json"), "utf8"));
-    expect(saved.summary).toMatchObject({ totalLinksToFix: 1 });
-    expect(console.log).toHaveBeenCalledWith(expect.objectContaining({ totalLinksToFix: 1 }));
-    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/^Finished in /));
-
-    const baselinePath = join(tempDir(), "baseline.json");
-    writeFileSync(
-      baselinePath,
-      JSON.stringify({ ignore: [{ pattern: "https://example.com/**" }] }),
-    );
-    expect(await runCli([...args, "--baseline", baselinePath], io())).toBe(0);
-    expect(
-      JSON.parse(readFileSync(join(outputDir, "example-com.json"), "utf8")).summary,
-    ).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
-  });
-
   it("baseline: returns 2 with a clear message for an invalid file", async () => {
     const baselinePath = join(tempDir(), "baseline.json");
     writeFileSync(baselinePath, JSON.stringify({ ignore: [{ url: "x" }] }));
@@ -431,40 +390,46 @@ describe("runCli()", () => {
     );
   });
 
-  it("site and github-org: pass the options to the checks, name the reports", async () => {
-    mocks.checkWebsite.mockResolvedValue([]);
+  it("site: checks the sitemap pages, --include (repeatable) filters links, reports links to fix, applies the baseline", async () => {
+    const outputDir = tempDir();
+    const args = [
+      "site",
+      siteUrl,
+      "--include",
+      `${siteUrl}/keep`,
+      "--include=https://other.example",
+      "--output-dir",
+      outputDir,
+    ];
+    expect(await runCli(args, io())).toBe(1);
+    const reportPath = join(outputDir, "127-0-0-1.json");
+    expect(JSON.parse(readFileSync(reportPath, "utf8")).summary).toMatchObject({
+      linksChecked: 2,
+      totalLinksToFix: 1,
+    });
+
+    const baselinePath = join(tempDir(), "baseline.json");
+    writeFileSync(baselinePath, JSON.stringify({ ignore: [{ pattern: `${siteUrl}/**` }] }));
+    expect(await runCli([...args, "--baseline", baselinePath], io())).toBe(0);
+    expect(JSON.parse(readFileSync(reportPath, "utf8")).summary).toMatchObject({
+      totalLinksToFix: 0,
+      ignored: 1,
+    });
+  });
+
+  it("github-org: passes the organization and sample rate, names the report", async () => {
     mocks.checkReadmesInGithubOrg.mockResolvedValue([]);
     const outputDir = tempDir();
-
     expect(
-      await runCli(
-        [
-          "site",
-          "https://example.com",
-          "--include",
-          "https://a.com/",
-          "--sample-rate",
-          "0.2",
-          "--output-dir",
-          outputDir,
-        ],
-        io(),
-      ),
+      await runCli(["github-org", "org", "--sample-rate", "0.5", "--output-dir", outputDir], io()),
     ).toBe(0);
-    const args = mocks.checkWebsite.mock.calls[0]![0];
-    expect(args).toMatchObject({ websiteUrl: "https://example.com", sampleRate: 0.2 });
-    expect(args.linkFilter({ href: "https://a.com/x" })).toBe(true);
-    expect(args.linkFilter({ href: "https://b.com/x" })).toBe(false);
-    expect(existsSync(join(outputDir, "example-com.json"))).toBe(true);
-
-    expect(await runCli(["github-org", "org", "--output-dir", outputDir], io())).toBe(0);
-    expect(mocks.checkReadmesInGithubOrg).toHaveBeenCalledWith("org", { sampleRate: 1 });
+    expect(mocks.checkReadmesInGithubOrg).toHaveBeenCalledWith("org", { sampleRate: 0.5 });
     expect(existsSync(join(outputDir, "org-github-readmes.json"))).toBe(true);
   });
 
   it("returns 1 when the check crashes", async () => {
-    mocks.checkWebsite.mockRejectedValue(new Error("sitemap exploded"));
-    expect(await runCli(["site", "https://example.com"], io())).toBe(1);
-    expect(stderr).toContain("sitemap exploded");
+    mocks.checkReadmesInGithubOrg.mockRejectedValue(new Error("GitHub exploded"));
+    expect(await runCli(["github-org", "org"], io())).toBe(1);
+    expect(stderr).toContain("GitHub exploded");
   });
 });

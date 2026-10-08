@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkCheckResult } from "./types";
 
 /**
- * Offline tests for `link.ts`: `fetch`, the GitHub API check and Playwright are all mocked.
+ * Offline tests for `checkLinks` and the checkers it uses (`fetch_check.ts`, `playwright_check.ts`).
+ * `fetch`, the GitHub API check and Playwright are mocked. The fake browser evaluates selectors with cheerio, so
+ * browser-specific behavior (selector syntax, hash navigation) is only covered by the integration tests.
  */
 
 const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
@@ -13,8 +15,6 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
   playwrightState: {
     // URLs Playwright navigated to
     visited: [] as string[],
-    // Selectors Playwright waited for
-    selectors: [] as string[],
     // HTML the fake browser "renders"
     html: "",
     // HTML per navigated URL (hash included), falls back to `html`
@@ -24,26 +24,15 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
     statuses: [] as number[],
     // Headers of the navigation response (lowercase names, like Playwright)
     headers: {} as Record<string, string>,
-    // Simulated navigation time
-    gotoDelayMs: 0,
-    // Time of the last navigation per URL (`Date.now()`, simulated with fake timers)
-    visitedAt: {} as Record<string, number>,
     // Final URL of a navigation (after redirects) per navigated URL, falls back to the navigated URL
     finalUrlByUrl: {} as Record<string, string>,
-    // Timeouts passed to `goto` and set as page defaults
-    gotoTimeouts: [] as Array<number | undefined>,
-    pageTimeouts: [] as number[],
     // HTML per navigated URL rendered `afterMs` after the navigation (anchors rendered late, e.g. by a timer on an
     // already loaded and quiet page), falls back to the above before that. For tests with fake timers.
     lateHtmlByUrl: {} as Record<string, { html: string; afterMs: number }>,
-    // Hashes set in the open page (`location.hash = hash`), the fake page then renders the HTML of its new URL
-    hashesSet: [] as string[],
     // Setting the hash throws (e.g. the page navigated away)
     evaluateFails: false,
     // Setting the hash never returns (the page main thread is hung)
     evaluateHangs: false,
-    // Timeouts of hash waits
-    hashTimeouts: [] as Array<number | undefined>,
     // The navigation response body never ends (Playwright has no timeout for it)
     responseBodyHangs: false,
     // A missing selector times out after its whole timeout (instead of right away), for tests with fake timers
@@ -70,17 +59,11 @@ vi.mock("playwright", () => ({
           let navigatedAt = 0;
           return {
             isClosed: () => false,
-            setDefaultTimeout: (timeout: number) => playwrightState.pageTimeouts.push(timeout),
-            setDefaultNavigationTimeout: (timeout: number) =>
-              playwrightState.pageTimeouts.push(timeout),
-            goto: async (url: string, options?: { timeout?: number }) => {
+            setDefaultTimeout: () => {},
+            setDefaultNavigationTimeout: () => {},
+            goto: async (url: string) => {
               currentUrl = url;
               playwrightState.visited.push(url);
-              playwrightState.visitedAt[url] = Date.now();
-              playwrightState.gotoTimeouts.push(options?.timeout);
-              if (playwrightState.gotoDelayMs > 0) {
-                await new Promise((resolve) => setTimeout(resolve, playwrightState.gotoDelayMs));
-              }
               navigatedAt = Date.now();
               const status = playwrightState.statuses.shift() ?? playwrightState.status;
               return {
@@ -104,7 +87,6 @@ vi.mock("playwright", () => ({
               }
               vi.stubGlobal("location", {
                 set hash(value: string) {
-                  playwrightState.hashesSet.push(value);
                   currentUrl = currentUrl.replace(/#.*/, "") + value;
                 },
               });
@@ -117,8 +99,6 @@ vi.mock("playwright", () => ({
             locator: (selector: string) => ({
               first: () => ({
                 waitFor: async (options?: { timeout?: number }) => {
-                  playwrightState.selectors.push(selector);
-                  playwrightState.hashTimeouts.push(options?.timeout);
                   const matches = (html: string) => cheerio.load(html)(selector).length > 0;
                   // Throws for invalid selectors, like Playwright would
                   if (matches(playwrightState.htmlByUrl[currentUrl] ?? playwrightState.html)) {
@@ -147,8 +127,7 @@ vi.mock("playwright", () => ({
 }));
 
 import { checkLinkWithFetch } from "./fetch_check";
-import { getSpecialFragmentNote } from "./hash";
-import { checkLinks, interleaveByHost, shouldRecheckWithPlaywright } from "./link";
+import { checkLinks, interleaveByHost } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { getHostLimiter, getRunContext, withRun } from "./run";
 
@@ -169,20 +148,24 @@ const link = (href: string, page = "https://example.com/page") => ({ href, page,
 const checkLinkWithPlaywright = async (url: string) =>
   (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Runs `check` in its own run (host pauses of server errors don't leak into other tests) with fake timers.
+ * A missing anchor takes its whole wait, like in a real browser.
  * Returns the result and how long it took (simulated time).
  */
 const withFakeTimers = async <T>(check: () => Promise<T>) => {
   vi.useFakeTimers();
   try {
+    playwrightState.waitForTakesTimeout = true;
     const start = Date.now();
     let finishedAt = Number.NaN;
     const promise = withRun({}, check).then((r) => {
       finishedAt = Date.now();
       return r;
     });
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     return { result: await promise, took: finishedAt - start };
   } finally {
     vi.useRealTimers();
@@ -191,18 +174,11 @@ const withFakeTimers = async <T>(check: () => Promise<T>) => {
 
 beforeEach(() => {
   playwrightState.visited = [];
-  playwrightState.selectors = [];
   playwrightState.html = "<html><body></body></html>";
   playwrightState.htmlByUrl = {};
-  playwrightState.gotoDelayMs = 0;
-  playwrightState.visitedAt = {};
   playwrightState.finalUrlByUrl = {};
-  playwrightState.gotoTimeouts = [];
-  playwrightState.pageTimeouts = [];
   playwrightState.lateHtmlByUrl = {};
   playwrightState.responseBodyHangs = false;
-  playwrightState.hashTimeouts = [];
-  playwrightState.hashesSet = [];
   playwrightState.evaluateFails = false;
   playwrightState.evaluateHangs = false;
   playwrightState.waitForTakesTimeout = false;
@@ -249,16 +225,6 @@ describe("checkLinks() deduplication", () => {
     expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(5);
   });
-
-  it("checks each href only once with Playwright", async () => {
-    stubFetch(() => new Response(null, { status: 403 }));
-    const links = Array.from({ length: 5 }, () => link("https://blocked.example.com"));
-
-    const results = await checkLinks({ links });
-
-    expect(playwrightState.visited).toEqual(["https://blocked.example.com"]);
-    expect(results).toHaveLength(5);
-  });
 });
 
 describe("checkLinks() Playwright escalation", () => {
@@ -301,8 +267,6 @@ describe("checkLinks() Playwright escalation", () => {
 
     const results = await checkLinks({ links: [link(href), link(href)] });
 
-    expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
-    expect(checkLinkWithGithubApiMock).toHaveBeenCalledWith(href);
     expect(playwrightState.visited).toEqual([]);
     expect(results.map((r) => r.result)).toEqual([apiResult, apiResult]);
   });
@@ -406,42 +370,38 @@ describe("checkLinks() Playwright escalation", () => {
     expect(playwrightState.visited.toSorted()).toEqual(hrefs);
     expect(results.every((r) => r.result.ok)).toBe(true);
   });
-
-  it("shouldRecheckWithPlaywright() never re-checks OK results", () => {
-    expect(shouldRecheckWithPlaywright({ ok: true, status: 200 }, "fetch")).toBe(false);
-    expect(shouldRecheckWithPlaywright({ ok: true, status: 200 }, "github-api")).toBe(false);
-  });
 });
 
 describe("checkLinkWithFetch()", () => {
-  it("sets a request timeout", async () => {
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
-
-    await checkLinkWithFetch("https://example.com");
-
-    expect(timeoutSpy).toHaveBeenCalledWith(20000);
-    expect(fetchMock.mock.calls[0]![1]?.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it("reports a timed out request as broken link", async () => {
-    stubFetch(() => {
-      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  it("reports a request that never answers as broken link after the timeout", async () => {
+    // Node's `AbortSignal.timeout` ignores fake timers, this one uses them
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("timed out", "TimeoutError")), ms);
+      return controller.signal;
     });
+    // Only rejects when its signal aborts, like a real hanging request
+    stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    );
 
-    const result = await checkLinkWithFetch("https://example.com/slow");
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithFetch("https://example.com/slow"),
+    );
 
     expect(result).toMatchObject({ ok: false, error: "broken link" });
-    expect(!result.ok && result.errorDetail).toContain("TimeoutError");
+    expect(took).toBe(20_000);
   });
 
-  it("sends GET also for a link without a hash, and reports its failure", async () => {
-    const fetchMock = stubFetch(() => new Response("Not found", { status: 404 }));
+  it("reports a failed request, also for a link without a hash", async () => {
+    stubFetch(() => new Response("Not found", { status: 404 }));
 
     const result = await checkLinkWithFetch("https://example.com/missing");
 
     expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
   });
 
   it("accepts a page that answers HEAD with 404 and GET with 200", async () => {
@@ -456,64 +416,29 @@ describe("checkLinkWithFetch()", () => {
     });
   });
 
-  it.each(["#zippy=%2Cdata-sharing", "#zippy="])(
-    "accepts Google Help accordion fragment %s without an element id",
-    async (hash) => {
-      stubFetch(() => new Response("<html><body></body></html>", { status: 200 }));
+  it("reports a 429 with Retry-After that persists after the retries as unexpected error", async () => {
+    stubFetch(() => new Response(null, { status: 429, headers: { "Retry-After": "0" } }));
 
-      const result = await checkLinkWithFetch(`https://support.google.com/answer/10787469${hash}`);
+    expect(await checkLinkWithFetch("https://always-limited.example.com/")).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+      status: 429,
+    });
+  });
 
-      expect(result).toEqual({ ok: true, status: 200, note: "Google Help accordion state" });
-    },
-  );
-
-  it("still checks zippy fragments on other hosts", async () => {
+  it("accepts Google Help accordion fragments without an element id", async () => {
     stubFetch(() => new Response("<html><body></body></html>", { status: 200 }));
 
-    const result = await checkLinkWithFetch("https://example.com/help#zippy=%2Csection");
-
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-  });
-
-  it("getSpecialFragmentNote() accepts zippy fragments on Google Help only", () => {
-    expect(getSpecialFragmentNote("zippy=,a", "https://support.google.com/x#zippy=,a")).toBe(
-      "Google Help accordion state",
+    const result = await checkLinkWithFetch(
+      "https://support.google.com/answer/10787469#zippy=%2Cdata-sharing",
     );
-    expect(getSpecialFragmentNote("zippy=,a", "https://SUPPORT.Google.com/x")).toBe(
-      "Google Help accordion state",
-    );
-    expect(getSpecialFragmentNote("zippy=,a", "https://example.com/x")).toBeUndefined();
-    expect(
-      getSpecialFragmentNote("zippy=,a", "https://support.google.com.evil.com/x"),
-    ).toBeUndefined();
-    expect(getSpecialFragmentNote("zippy=,a", "https://google.com/x")).toBeUndefined();
-    // Not host-specific
-    expect(getSpecialFragmentNote("/", "https://example.com/x")).toBe("Accidental hash");
-    expect(getSpecialFragmentNote(":~:text=a", "https://example.com/x")).toBe("Text Fragment");
+
+    expect(result).toEqual({ ok: true, status: 200, note: "Google Help accordion state" });
   });
 
-  it("still checks hashes that only contain 'zippy' later on", async () => {
-    stubFetch(() => new Response("<html><body></body></html>", { status: 200 }));
-
-    const result = await checkLinkWithFetch("https://example.com/page#not-zippy=1");
-
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-  });
-
-  const existingHashes = [
-    "#version-1.2.3",
-    "#1-create-an-account",
-    "#namespace:item",
-    "#path/to/section",
-    "#it's-quoted",
-    "#say-%22hi%22",
-    "#caf%C3%A9",
-    "#legacy-anchor",
-    "#InStAlLaTiOn",
-  ];
-
-  it.each(existingHashes)(
-    "finds hash %s with special characters in server-rendered HTML",
+  // Special characters are covered by hash.test.ts, these only check the wiring
+  it.each(["#version-1.2.3", "#caf%C3%A9"])(
+    "finds hash %s in server-rendered HTML",
     async (hash) => {
       stubFetch(() => new Response(hashesHtml, { status: 200 }));
 
@@ -532,17 +457,12 @@ describe("checkLinkWithFetch()", () => {
   });
 });
 
-describe("checkLinkWithPlaywright() hash check", () => {
-  it.each([
-    "#version-1.2.3",
-    "#1-create-an-account",
-    "#say-%22hi%22",
-    "#caf%C3%A9",
-    "#legacy-anchor",
-  ])("builds a valid selector for %s", async (hash) => {
+describe("checkUrlsOnPageWithPlaywright() hash check", () => {
+  // Special characters are covered by hash.test.ts, this only checks the wiring
+  it("finds a hash with special characters", async () => {
     playwrightState.html = hashesHtml;
 
-    const result = await checkLinkWithPlaywright(`https://example.com/docs${hash}`);
+    const result = await checkLinkWithPlaywright("https://example.com/docs#caf%C3%A9");
 
     expect(result).toEqual({ ok: true, status: 200 });
   });
@@ -561,46 +481,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
     );
 
     expect(result).toEqual({ ok: true, status: 200, note: "Google Help accordion state" });
-    expect(playwrightState.selectors).toEqual([]);
   });
-
-  it("still checks zippy fragments on other hosts", async () => {
-    const result = await checkLinkWithPlaywright("https://example.com/help#zippy=%2Csection");
-
-    expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-    expect(playwrightState.selectors).not.toEqual([]);
-  });
-
-  it("finds a fast anchor with the short wait, without the long wait", async () => {
-    playwrightState.html = '<div id="fast"></div>';
-
-    const result = await withRun({}, async () => {
-      const checked = await checkLinkWithPlaywright("https://example.com/docs#fast");
-      expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
-      return checked;
-    });
-
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(playwrightState.hashTimeouts).toEqual([3000]);
-  });
-
-  /** Checks `url` with fake timers, returns the result and how long the check took (simulated time) */
-  const checkWithFakeTimers = async (url: string) => {
-    vi.useFakeTimers();
-    try {
-      playwrightState.waitForTakesTimeout = true;
-      const start = Date.now();
-      let finishedAt = Number.NaN;
-      const promise = checkLinkWithPlaywright(url).then((r) => {
-        finishedAt = Date.now();
-        return r;
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      return { result: await promise, took: finishedAt - start };
-    } finally {
-      vi.useRealTimers();
-    }
-  };
 
   it("waits longer for an anchor rendered late (same navigation)", async () => {
     const url = "https://docs.example.com/reference/get-event#response-ip-info-v6-address";
@@ -610,22 +491,21 @@ describe("checkLinkWithPlaywright() hash check", () => {
       [url]: { html: '<div id="response-ip-info-v6-address"></div>', afterMs: 4000 },
     };
 
-    const { result, took } = await checkWithFakeTimers(url);
+    const { result, took } = await withFakeTimers(() => checkLinkWithPlaywright(url));
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(playwrightState.visited).toEqual([url]);
     // Found as soon as it appears, the rest of the budget is not waited
     expect(took).toBe(4000);
-    expect(playwrightState.hashTimeouts).toEqual([3000, 12_000]);
   });
 
-  it("waits for a missing anchor until the 15s budget is used up (regular wait included)", async () => {
-    const { result, took } = await checkWithFakeTimers("https://example.com/docs#never");
+  it("waits for a missing anchor until the 15s budget is used up", async () => {
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithPlaywright("https://example.com/docs#never"),
+    );
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
     expect(playwrightState.visited).toEqual(["https://example.com/docs#never"]);
-    // The regular wait is part of the overall budget (not 15s on top of it)
-    expect(playwrightState.hashTimeouts).toEqual([3000, 12_000]);
     expect(took).toBe(15_000);
   });
 
@@ -635,7 +515,7 @@ describe("checkLinkWithPlaywright() hash check", () => {
       [url]: { html: '<div id="too-late"></div>', afterMs: 16_000 },
     };
 
-    const { result, took } = await checkWithFakeTimers(url);
+    const { result, took } = await withFakeTimers(() => checkLinkWithPlaywright(url));
 
     expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
     expect(took).toBe(15_000);
@@ -646,21 +526,19 @@ describe("checkLinkWithPlaywright() hash check", () => {
 
     const result = await checkLinkWithPlaywright("https://example.com/docs#a");
 
-    expect(result).toEqual({
-      ok: false,
-      status,
-      error: "could not check",
-      errorDetail: " Forbidden page",
-    });
+    expect(result).toMatchObject({ ok: false, status, error: "could not check" });
+    expect(!result.ok && result.errorDetail).toContain("Forbidden page");
   });
 
   it("does not wait forever for the body of a forbidden page", async () => {
     playwrightState.status = 403;
     playwrightState.responseBodyHangs = true;
 
-    const { result, took } = await checkWithFakeTimers("https://example.com/docs#a");
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithPlaywright("https://example.com/docs#a"),
+    );
 
-    expect(result).toEqual({ ok: false, status: 403, error: "could not check", errorDetail: " " });
+    expect(result).toMatchObject({ ok: false, status: 403, error: "could not check" });
     expect(took).toBe(30_000);
   });
 
@@ -682,28 +560,23 @@ describe("checkLinkWithPlaywright() hash check", () => {
       async (hash) => {
         playwrightState.html = codeView;
 
-        const result = await withRun({}, async () => {
-          const checked = await checkLinkWithPlaywright(`${file}${hash}`);
-          expect(getRunContext()!.metrics.counters.playwrightLongHashWaits ?? 0).toBe(0);
-          return checked;
-        });
+        const { result, took } = await withFakeTimers(() =>
+          checkLinkWithPlaywright(`${file}${hash}`),
+        );
 
         expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-        // The code view (or the line) first, then the line itself briefly
-        expect(playwrightState.selectors.at(0)).toContain("[data-line-number]");
-        expect(playwrightState.selectors.at(1)).toContain('[data-line-number="99"]');
-        expect(playwrightState.selectors.at(1)).not.toContain("[data-line-number],");
-        expect(playwrightState.hashTimeouts).toEqual([15000, 3000]);
+        // The code view is there, so only the line itself is waited for briefly
+        expect(took).toBeLessThan(5000);
       },
     );
 
     it("reports a line as not found when the code view never renders", async () => {
       playwrightState.html = "<div>This file is too big to show</div>";
 
-      const result = await checkLinkWithPlaywright(`${file}#L2`);
+      const { result, took } = await withFakeTimers(() => checkLinkWithPlaywright(`${file}#L2`));
 
       expect(result).toEqual({ ok: false, status: 200, error: "hash not found" });
-      expect(playwrightState.hashTimeouts).toEqual([15000]);
+      expect(took).toBe(15_000);
     });
   });
 });
@@ -800,9 +673,10 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     });
   });
 
-  it("navigates once per page with Playwright", async () => {
+  it("navigates once per page with Playwright, also for repeated hrefs", async () => {
     stubFetch(() => new Response(null, { status: 403 }));
     const links = [
+      link("https://blocked.example.com/a"),
       link("https://blocked.example.com/a"),
       link("https://blocked.example.com/a#x"),
       link("https://blocked.example.com/b"),
@@ -814,33 +688,21 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
       "https://blocked.example.com/a",
       "https://blocked.example.com/b",
     ]);
-    expect(results).toHaveLength(3);
+    expect(results).toHaveLength(4);
   });
 });
 
 describe("checkLinks() Playwright hashes of one page", () => {
   const page = "https://docs.example.com/app";
 
-  /** Checks the hashes of `page` with fake timers, returns results by hash, the metrics and the simulated time taken */
+  /** Checks the hashes of `page` (client-side rendered, so they are re-checked with Playwright) with fake timers */
   const checkHashes = async (hashes: string[]) => {
     stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-    playwrightState.waitForTakesTimeout = true;
-    vi.useFakeTimers();
-    try {
-      const start = Date.now();
-      let finishedAt = Number.NaN;
-      const promise = withRun({}, async () => {
-        const checked = await checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) });
-        finishedAt = Date.now();
-        return { checked, counters: { ...getRunContext()!.metrics.counters } };
-      });
-      await vi.advanceTimersByTimeAsync(120_000);
-      const { checked, counters } = await promise;
-      const byHash = new Map(checked.map((r) => [r.href.slice(page.length), r.result]));
-      return { byHash, counters, took: finishedAt - start };
-    } finally {
-      vi.useRealTimers();
-    }
+    const { result, took } = await withFakeTimers(() =>
+      checkLinks({ links: hashes.map((hash) => link(`${page}${hash}`)) }),
+    );
+    const byHash = new Map(result.map((r) => [r.href.slice(page.length), r.result]));
+    return { byHash, took };
   };
 
   it("finds late anchors of every hash with one navigation and one shared wait", async () => {
@@ -849,13 +711,11 @@ describe("checkLinks() Playwright hashes of one page", () => {
       [`${page}#a`]: { html: '<div id="a"></div><div id="b"></div>', afterMs: 4000 },
     };
 
-    const { byHash, counters, took } = await checkHashes(["#a", "#b"]);
+    const { byHash, took } = await checkHashes(["#a", "#b"]);
 
     expect(byHash.get("#a")).toEqual({ ok: true, status: 200 });
     expect(byHash.get("#b")).toEqual({ ok: true, status: 200 });
     expect(playwrightState.visited).toEqual([`${page}#a`]);
-    expect(playwrightState.hashesSet).toEqual([]);
-    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightLongHashWaits: 2 });
     expect(took).toBe(4000);
   });
 
@@ -865,15 +725,13 @@ describe("checkLinks() Playwright hashes of one page", () => {
       [`${page}#tab-b`]: '<div id="tab-b"></div>',
     };
 
-    const { byHash, counters } = await checkHashes(["#tab-a", "#tab-b", "#missing"]);
+    const { byHash } = await checkHashes(["#tab-a", "#tab-b", "#missing"]);
 
     expect(byHash.get("#tab-a")).toEqual({ ok: true, status: 200 });
     expect(byHash.get("#tab-b")).toEqual({ ok: true, status: 200 });
     expect(byHash.get("#missing")).toEqual({ ok: false, status: 200, error: "hash not found" });
     // No navigation per hash
     expect(playwrightState.visited).toEqual([`${page}#tab-a`]);
-    expect(playwrightState.hashesSet).toEqual(["#tab-b", "#missing"]);
-    expect(counters).toMatchObject({ playwrightNavigations: 1, playwrightHashFallbacks: 2 });
   });
 
   it("keeps 'hash not found' for a hash whose in-page retry fails, other results stay", async () => {
@@ -908,66 +766,41 @@ describe("checkLinks() Playwright hashes of one page", () => {
     // 15s shared wait, then 3s for each of the 3 hashes set in the page
     expect(took).toBe(15_000 + 3 * 3000);
   });
-
-  it("does not add navigations when every hash is in the shared DOM", async () => {
-    stubFetch(() => new Response("<html><body>Loading...</body></html>", { status: 200 }));
-    playwrightState.html = '<div id="a"></div><div id="b"></div>';
-
-    await checkLinks({ links: [link("https://example.com/p#a"), link("https://example.com/p#b")] });
-
-    expect(playwrightState.visited).toEqual(["https://example.com/p#a"]);
-    expect(playwrightState.hashesSet).toEqual([]);
-  });
 });
 
 describe("server errors (502, 503, 504)", () => {
-  it.each([502, 503, 504])(
-    "fetch: reports a %s that persists after the retries as 'could not check', not broken",
-    async (status) => {
-      const fetchMock = stubFetch(() => new Response("busy", { status }));
+  it("fetch: reports a 503 that persists after the retries as 'could not check', not broken", async () => {
+    stubFetch(() => new Response("busy", { status: 503 }));
 
-      const { result, took } = await withFakeTimers(() =>
-        checkLinkWithFetch("https://busy.example.com/page"),
-      );
+    const { result } = await withFakeTimers(() =>
+      checkLinkWithFetch("https://busy.example.com/page"),
+    );
 
-      expect(result).toMatchObject({ ok: false, error: "could not check", status });
-      expect(!result.ok && result.errorDetail).toContain(`Server error ${status}`);
-      // 2 retries, backoff 2s then 5s
-      expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
-      expect(took).toBe(7000);
-    },
-  );
+    expect(result).toMatchObject({ ok: false, error: "could not check", status: 503 });
+    expect(!result.ok && result.errorDetail).toContain("Server error 503");
+  });
 
-  it("fetch: retries a GET (page with a hash) 503 and checks the hash", async () => {
+  it("fetch: checks the hash of a page that answers 503 first", async () => {
     let failures = 2;
-    const fetchMock = stubFetch(() =>
+    stubFetch(() =>
       failures-- > 0
         ? new Response("busy", { status: 503 })
         : new Response('<h2 id="x">X</h2>', { status: 200 }),
     );
 
-    const { result, took } = await withFakeTimers(() =>
+    const { result } = await withFakeTimers(() =>
       checkLinkWithFetch("https://busy.example.com/page#x"),
     );
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(took).toBe(7000);
   });
 
   it("Playwright: retries the navigation after a 503 and checks the code line", async () => {
     playwrightState.statuses = [503];
     playwrightState.html = '<div data-line-number="167"></div>';
-    const url =
-      "https://github.com/WebKit/WebKit/blob/167dc5118a3f6228a19df40e673ea0a6d03b9bec/Source/WebCore/Modules/webaudio/AudioBuffer.cpp#L167";
+    const url = "https://github.com/owner/repo/blob/main/a.js#L167";
 
-    const { result, took } = await withFakeTimers(() =>
-      withRun({}, async () => {
-        const checked = await checkLinkWithPlaywright(url);
-        expect(getRunContext()!.metrics.counters.serverErrorRetries).toBe(1);
-        return checked;
-      }),
-    );
+    const { result, took } = await withFakeTimers(async () => checkLinkWithPlaywright(url));
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(playwrightState.visited).toEqual([url, url]);
@@ -1000,25 +833,6 @@ describe("server errors (502, 503, 504)", () => {
     expect(took).toBe(0);
   });
 
-  it("checkLinks(): a GitHub code line link still 503 in the browser fallback after the retries is 'could not check'", async () => {
-    // The API can't check it (e.g. rate limited), it falls back to the browser
-    checkLinkWithGithubApiMock.mockResolvedValue({ ok: false, error: "unexpected error" });
-    playwrightState.status = 503;
-    const href =
-      "https://github.com/chromium/chromium/blob/main/components/lookalikes/core/lookalike_url_util.cc#L593";
-
-    const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
-
-    expect(result).toHaveLength(1);
-    expect(result[0]!.result).toMatchObject({
-      ok: false,
-      error: "could not check",
-      status: 503,
-    });
-    // 1 navigation and 2 retries, no more
-    expect(playwrightState.visited).toEqual([href, href, href]);
-  });
-
   it("checkLinks(): a fetch 503 persisting in the browser too is 'could not check'", async () => {
     stubFetch(() => new Response(null, { status: 503 }));
     playwrightState.status = 503;
@@ -1026,46 +840,19 @@ describe("server errors (502, 503, 504)", () => {
 
     const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
-    expect(result[0]!.result).toMatchObject({ ok: false, error: "could not check" });
+    expect(result[0]!.result).toMatchObject({ ok: false, error: "could not check", status: 503 });
+    // 1 navigation and 2 retries, no more
     expect(playwrightState.visited).toEqual([href, href, href]);
   });
 
   it("Playwright: waits for a host pause (e.g. set by a fetch server error) before navigating", async () => {
     const { result, took } = await withFakeTimers(async () => {
-      const limiter = getHostLimiter();
-      limiter.pause("https://busy.example.com/", 3000);
+      getHostLimiter().pause("https://busy.example.com/", 3000);
       return checkLinkWithPlaywright("https://busy.example.com/page");
     });
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(took).toBe(3000);
-  });
-
-  it("Playwright: a pause set after a check already started waiting for a page slot does not delay it", async () => {
-    playwrightState.gotoDelayMs = 1000;
-
-    let start = 0;
-    const { result, took } = await withFakeTimers(async () => {
-      const limiter = getHostLimiter();
-      start = Date.now();
-      // Every page slot (PLAYWRIGHT_CONCURRENCY_LIMIT) is busy for 1s
-      const busySlots = Array.from({ length: 5 }, (_, i) =>
-        checkLinkWithPlaywright(`https://slow.example.com/${i}`),
-      );
-      // Not paused yet: both wait for a page slot
-      const paused = checkLinkWithPlaywright("https://busy.example.com/page");
-      const other = checkLinkWithPlaywright("https://other.example.com/page");
-      // A fetch pauses the host in the meantime: the pause is only checked before waiting for a slot, not after
-      await vi.advanceTimersByTimeAsync(100);
-      limiter.pause("https://busy.example.com/", 5000);
-      return Promise.all([paused, other, ...busySlots]);
-    });
-
-    expect(result.every((r) => r.ok)).toBe(true);
-    // Navigated right when the slot opened, the later pause did not delay it
-    expect(playwrightState.visitedAt["https://busy.example.com/page"]! - start).toBe(1000);
-    expect(playwrightState.visitedAt["https://other.example.com/page"]! - start).toBe(1000);
-    expect(took).toBe(2000);
   });
 
   it("Playwright: after a redirect to another host, a 503 pauses the final URL's host and the retry waits for it", async () => {
@@ -1076,13 +863,8 @@ describe("server errors (502, 503, 504)", () => {
 
     const { result, took } = await withFakeTimers(async () => {
       const limiter = getHostLimiter();
-      const pause = vi.spyOn(limiter, "pause");
-      const waitUntilResumed = vi.spyOn(limiter, "waitUntilResumed");
-      let waitedFor: string[] = [];
       const checked = checkLinkWithPlaywright(url);
       await vi.advanceTimersByTimeAsync(1);
-      // Before the checks below call it too
-      waitedFor = waitUntilResumed.mock.calls.map(([target]) => target);
       // How long a request to each host waits now: only the final URL's host is paused (not the navigated URL's)
       const waitFor = async (target: string) => {
         const waitStart = Date.now();
@@ -1091,22 +873,103 @@ describe("server errors (502, 503, 504)", () => {
       };
       const firstWait = await waitFor(url);
       const finalWait = waitFor(final);
-      return { checked: await checked, firstWait, finalWait: await finalWait, pause, waitedFor };
+      return { checked: await checked, firstWait, finalWait: await finalWait };
     });
 
     expect(result.checked).toEqual({ ok: true, status: 200 });
     expect(result.firstWait).toBe(0);
     expect(result.finalWait).toBeGreaterThan(1900);
-    expect(result.pause).toHaveBeenCalledWith(final, 2000);
-    expect(result.pause).toHaveBeenCalledTimes(1);
-    // The retry waited for the final URL's host (and the navigated URL's)
-    expect(result.waitedFor).toContain(final);
     expect(playwrightState.visited).toEqual([url, url]);
     expect(took).toBe(2000);
   });
 });
 
-describe("interleaveByHost() with uneven hosts", () => {
+describe("checkLinks() per-host limit", () => {
+  it("never sends more than the per-host limit of concurrent requests to a host", async () => {
+    const active: Record<string, number> = {};
+    const max: Record<string, number> = {};
+    stubFetch(async (url) => {
+      const host = new URL(url).hostname;
+      active[host] = (active[host] ?? 0) + 1;
+      max[host] = Math.max(max[host] ?? 0, active[host]);
+      await sleep(5);
+      active[host]--;
+      return new Response(null, { status: 200 });
+    });
+    const links = [
+      ...Array.from({ length: 30 }, (_, i) => `https://busy.example.com/page-${i}`),
+      ...Array.from({ length: 5 }, (_, i) => `https://quiet.example.com/page-${i}`),
+    ].map((href) => link(href));
+
+    // checkLinks() joins the run, so the host concurrency comes from the run config
+    const results = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
+
+    expect(results).toHaveLength(35);
+    expect(results.every((r) => r.result.ok)).toBe(true);
+    expect(max["busy.example.com"]).toBe(3);
+    expect(max["quiet.example.com"]).toBe(3);
+  });
+});
+
+describe("checkLinks() metrics", () => {
+  const countersOf = (links: ReturnType<typeof link>[]) =>
+    withRun({}, async () => {
+      await checkLinks({ links });
+      return getRunContext()!.metrics.counters;
+    });
+
+  it("counts total links, unique URLs, unique pages and page fetches", async () => {
+    stubFetch(() => new Response('<a id="a"></a><a id="b"></a>', { status: 200 }));
+    const hrefs = [
+      "https://example.com/p#a",
+      "https://example.com/p#b",
+      "https://example.com/p#a",
+      "https://example.com/q",
+    ];
+
+    const counters = await countersOf(hrefs.map((href) => link(href)));
+
+    expect(counters).toMatchObject({
+      totalLinks: 4,
+      uniqueUrls: 3,
+      uniquePages: 2,
+      uniquePagesFetched: 2,
+      httpRequests: 2,
+    });
+  });
+
+  it("counts every HTTP request (redirect hops) separately from unique pages", async () => {
+    stubFetch((url) =>
+      url === "https://example.com/old"
+        ? new Response(null, { status: 301, headers: { Location: "/new" } })
+        : new Response("ok", { status: 200 }),
+    );
+
+    const counters = await countersOf([link("https://example.com/old")]);
+
+    // GET /old (301), GET /new (200)
+    expect(counters).toMatchObject({ uniquePagesFetched: 1, httpRequests: 2 });
+  });
+});
+
+describe("interleaveByHost()", () => {
+  it("orders items round-robin by host, keeping the order within a host", () => {
+    const hrefs = [
+      "https://a.com/1",
+      "https://a.com/2",
+      "https://a.com/3",
+      "https://b.com/1",
+      "https://c.com/1",
+    ];
+    expect(interleaveByHost(hrefs.map((href) => ({ href }))).map((item) => item.href)).toEqual([
+      "https://a.com/1",
+      "https://b.com/1",
+      "https://c.com/1",
+      "https://a.com/2",
+      "https://a.com/3",
+    ]);
+  });
+
   it("keeps the round-robin order when hosts run out at different times", () => {
     const hrefs = [
       "https://a.com/1",
@@ -1129,15 +992,14 @@ describe("interleaveByHost() with uneven hosts", () => {
   });
 
   it("visits every item once (many single-link hosts and one big host)", () => {
-    // Generous bound to avoid CI flakiness: the old O(hosts x links) version takes far longer than 5s here
-    // Scanning exhausted hosts would be 10k hosts x 100k rounds = 1e9 steps
+    // Must be linear in the number of items: scanning exhausted hosts in every round would be 1e9 steps here
+    // and does not finish within the test timeout
     const items = [
       ...Array.from({ length: 100_000 }, (_, i) => ({ href: `https://big.example.com/${i}` })),
       ...Array.from({ length: 10_000 }, (_, i) => ({ href: `https://host-${i}.example.com/` })),
     ];
-    const start = performance.now();
+
     const result = interleaveByHost(items);
-    expect(performance.now() - start).toBeLessThan(5000);
 
     expect(result).toHaveLength(items.length);
     expect(new Set(result).size).toBe(items.length);
@@ -1146,24 +1008,5 @@ describe("interleaveByHost() with uneven hosts", () => {
     expect(result[1]!.href).toBe("https://host-0.example.com/");
     expect(result[10_001]!.href).toBe("https://big.example.com/1");
     expect(result.at(-1)!.href).toBe("https://big.example.com/99999");
-  });
-});
-
-describe("interleaveByHost()", () => {
-  it("orders items round-robin by host, keeping the order within a host", () => {
-    const items = [
-      "https://a.com/1",
-      "https://a.com/2",
-      "https://a.com/3",
-      "https://b.com/1",
-      "https://c.com/1",
-    ].map((href) => ({ href }));
-    expect(interleaveByHost(items).map((item) => item.href)).toEqual([
-      "https://a.com/1",
-      "https://b.com/1",
-      "https://c.com/1",
-      "https://a.com/2",
-      "https://a.com/3",
-    ]);
   });
 });

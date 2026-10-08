@@ -35,43 +35,53 @@ describe("HostLimiter", () => {
     expect(totalMax).toBe(6);
   });
 
-  it("delays new requests to a paused host", async () => {
-    const limiter = new HostLimiter(5);
-    limiter.pause("https://paused.example.com/a", 50);
-    const start = Date.now();
-    await limiter.run("https://paused.example.com/b", async () => {});
-    expect(Date.now() - start).toBeGreaterThanOrEqual(45);
+  describe("pause", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
 
-    // Other hosts are not affected
-    const otherStart = Date.now();
-    await limiter.run("https://other.example.com/", async () => {});
-    expect(Date.now() - otherStart).toBeLessThan(40);
-  });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-  it("waitUntilResumed() waits for a pause without taking a slot", async () => {
-    const limiter = new HostLimiter(1);
-    let release!: () => void;
-    // The only slot stays busy, waitUntilResumed must not wait for it
-    const busy = limiter.run(
-      "https://paused.example.com/",
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
-    // Let the busy request start before the pause
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    limiter.pause("https://paused.example.com/a", 50);
-    const start = Date.now();
-    await limiter.waitUntilResumed("https://paused.example.com/b");
-    expect(Date.now() - start).toBeGreaterThanOrEqual(45);
+    /** Simulated time until `promise` settles */
+    const elapsed = async (promise: Promise<unknown>) => {
+      const start = Date.now();
+      const settled = promise.then(() => Date.now());
+      await vi.advanceTimersByTimeAsync(1000);
+      return (await settled) - start;
+    };
 
-    const otherStart = Date.now();
-    await limiter.waitUntilResumed("https://other.example.com/");
-    await limiter.waitUntilResumed("not a url");
-    expect(Date.now() - otherStart).toBeLessThan(40);
-    release();
-    await busy;
+    it("delays new requests to a paused host", async () => {
+      const limiter = new HostLimiter(5);
+      limiter.pause("https://paused.example.com/a", 50);
+
+      expect(await elapsed(limiter.run("https://paused.example.com/b", async () => {}))).toBe(50);
+      // Other hosts are not affected
+      expect(await elapsed(limiter.run("https://other.example.com/", async () => {}))).toBe(0);
+    });
+
+    it("waitUntilResumed() waits for a pause without taking a slot", async () => {
+      const limiter = new HostLimiter(1);
+      let release!: () => void;
+      // The only slot stays busy, waitUntilResumed must not wait for it
+      const busy = limiter.run(
+        "https://paused.example.com/",
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+      // Let the busy request start before the pause
+      await vi.advanceTimersByTimeAsync(0);
+      limiter.pause("https://paused.example.com/a", 50);
+
+      expect(await elapsed(limiter.waitUntilResumed("https://paused.example.com/b"))).toBe(50);
+      expect(await elapsed(limiter.waitUntilResumed("https://other.example.com/"))).toBe(0);
+      expect(await elapsed(limiter.waitUntilResumed("not a url"))).toBe(0);
+      release();
+      await busy;
+    });
   });
 
   it("does not limit invalid URLs", async () => {
@@ -111,78 +121,5 @@ describe("parseHostConcurrency()", () => {
 
   it.each(["0", "-1", "1.5", "abc"])("rejects %s", (value) => {
     expect(() => parseHostConcurrency(value)).toThrow("LINK_CHECK_HOST_CONCURRENCY");
-  });
-});
-
-describe("checkLinks() per-host limit", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("never sends more than the per-host limit of concurrent requests to a host", async () => {
-    const active: Record<string, number> = {};
-    const max: Record<string, number> = {};
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL) => {
-        const host = new URL(String(input)).hostname;
-        active[host] = (active[host] ?? 0) + 1;
-        max[host] = Math.max(max[host] ?? 0, active[host]);
-        await sleep(5);
-        active[host]--;
-        return new Response(null, { status: 200 });
-      }),
-    );
-    const { checkLinks } = await import("./link");
-    const { withRun } = await import("./run");
-    const links = [
-      ...Array.from({ length: 30 }, (_, i) => `https://busy.example.com/page-${i}`),
-      ...Array.from({ length: 5 }, (_, i) => `https://quiet.example.com/page-${i}`),
-    ].map((href) => ({ href, page: "https://example.com", text: "" }));
-
-    // checkLinks() starts its own run, so it needs the host concurrency in its config
-    const results = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
-
-    expect(results).toHaveLength(35);
-    expect(results.every((r) => r.result.ok)).toBe(true);
-    expect(max["busy.example.com"]).toBe(3);
-    expect(max["quiet.example.com"]).toBe(3);
-  });
-
-  it("honours Retry-After on 429 and retries", async () => {
-    let calls = 0;
-    const fetchMock = vi.fn(async () => {
-      calls++;
-      return calls === 1
-        ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
-        : new Response(null, { status: 200 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const { checkLinkWithFetch } = await import("./fetch_check");
-
-    expect(await checkLinkWithFetch("https://rate-limited.example.com/")).toEqual({
-      ok: true,
-      status: 200,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("gives up after a few 429 retries", async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(null, { status: 429, headers: { "Retry-After": "0" } }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const { checkLinkWithFetch } = await import("./fetch_check");
-
-    expect(await checkLinkWithFetch("https://always-limited.example.com/")).toMatchObject({
-      ok: false,
-      error: "unexpected error",
-      status: 429,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

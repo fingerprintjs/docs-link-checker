@@ -12,13 +12,7 @@ vi.mock("./github_client", () => ({
   getMyOctokit: () => octokit,
 }));
 
-import { withRun } from "../run";
-import {
-  checkReadmesInGithubOrg,
-  getReadmeLinks,
-  getReadmesFromOrg,
-  resolveReadmeHref,
-} from "./gh_get_links";
+import { getReadmeLinks, getReadmesFromOrg, resolveReadmeHref } from "./gh_get_links";
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
   full_name: `org/${name}`,
@@ -78,6 +72,17 @@ describe("getReadmesFromOrg()", () => {
     ).toBe(false);
   });
 
+  it("skips archived repositories", async () => {
+    octokit.paginate.mockResolvedValue([
+      ...repos,
+      { full_name: "org/old", owner: { login: "org" }, name: "old", archived: true },
+    ]);
+
+    const readmes = await getReadmesFromOrg("org");
+    expect(readmes).toHaveLength(8);
+    expect(readmes.some((readme) => readme.sourcePath.includes("/org/old/"))).toBe(false);
+  });
+
   it("throws a clear error when the repositories cannot be listed", async () => {
     octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
     await expect(getReadmesFromOrg("org")).rejects.toThrow(
@@ -87,24 +92,12 @@ describe("getReadmesFromOrg()", () => {
 
   it("samples README files deterministically with LINK_CHECK_SAMPLE_RATE", async () => {
     vi.stubEnv("LINK_CHECK_SAMPLE_RATE", "0.25");
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
     const first = await getReadmesFromOrg("org");
     octokit.paginate.mockResolvedValue(repos.toReversed());
     const second = await getReadmesFromOrg("org");
 
     expect(first).toHaveLength(2);
     expect(second).toEqual(first);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Sampling 2 of 8 README files"));
-  });
-});
-
-describe("checkReadmesInGithubOrg()", () => {
-  it("fails with a clear error (instead of crashing on undefined) when listing READMEs fails", async () => {
-    octokit.paginate.mockRejectedValue(new Error("Not Found"));
-    await expect(checkReadmesInGithubOrg("org")).rejects.toThrow(
-      "Failed to list repositories of GitHub organization org: Not Found",
-    );
   });
 });
 
@@ -124,36 +117,39 @@ describe("resolveReadmeHref()", () => {
 });
 
 describe("getReadmeLinks()", () => {
-  it("downloads README files within the per-host limit and retries after a 429", () =>
-    withRun({ hostConcurrency: 3 }, async () => {
-      let active = 0;
-      let maxActive = 0;
-      const rateLimited = new Set<string>();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL) => {
-          const url = String(input);
-          active++;
-          maxActive = Math.max(maxActive, active);
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          active--;
-          // The first download of file 0 is rate limited
-          if (url.endsWith("/0/README.md") && !rateLimited.has(url)) {
-            rateLimited.add(url);
-            return new Response(null, { status: 429, headers: { "Retry-After": "0" } });
-          }
-          return new Response("[link](https://example.com/)", { status: 200 });
-        }),
-      );
-      const files = Array.from({ length: 20 }, (_, i) => ({
-        sourcePath: `https://github.com/org/repo/blob/main/${i}/README.md`,
-        downloadUrl: `https://raw.githubusercontent.com/org/repo/main/${i}/README.md`,
-      }));
+  const file = (name: string) => ({
+    sourcePath: `https://github.com/org/repo/blob/main/${name}/README.md`,
+    downloadUrl: `https://raw.githubusercontent.com/org/repo/main/${name}/README.md`,
+  });
 
-      const links = await getReadmeLinks(files);
+  it("returns the links of downloaded READMEs, resolved against the README page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("[abs](https://example.com/) [root](/docs/a.md) [sib](b.md)")),
+    );
 
-      expect(maxActive).toBe(3);
-      expect(links).toHaveLength(20);
-      expect(rateLimited.size).toBe(1);
-    }));
+    const links = await getReadmeLinks([file("pkg")]);
+
+    const page = "https://github.com/org/repo/blob/main/pkg/README.md";
+    expect(links).toEqual([
+      { page, href: "https://example.com/", text: "abs" },
+      { page, href: "https://github.com/org/repo/blob/main/docs/a.md", text: "root" },
+      { page, href: "https://github.com/org/repo/blob/main/pkg/b.md", text: "sib" },
+    ]);
+  });
+
+  it("skips READMEs that cannot be downloaded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) =>
+        String(input).includes("/gone/")
+          ? new Response("Not Found", { status: 404 })
+          : new Response("[x](https://example.com/)"),
+      ),
+    );
+
+    const links = await getReadmeLinks([file("gone"), file("ok")]);
+
+    expect(links.map((link) => link.page)).toEqual([file("ok").sourcePath]);
+  });
 });

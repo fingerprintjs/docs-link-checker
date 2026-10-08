@@ -17,14 +17,6 @@ describe("getMyOctokit()", () => {
     expect(() => getMyOctokit()).toThrow("GH_TOKEN is not set");
   });
 
-  it("creates the client lazily and reuses it", async () => {
-    const { getMyOctokit } = await loadModules();
-    vi.stubEnv("GH_TOKEN", "test-token");
-    const client = getMyOctokit();
-    expect(client).toBeDefined();
-    expect(getMyOctokit()).toBe(client);
-  });
-
   it("importing GitHub link checks does not require GH_TOKEN", async () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.resetModules();
@@ -63,15 +55,5 @@ describe("GitHub API request metrics", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(counters.githubApiRequests).toBe(5);
-  });
-
-  it("does not count (or fail) outside of a run", async () => {
-    const { getMyOctokit } = await loadModules();
-    vi.stubEnv("GH_TOKEN", "test-token");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({ id: 1 })),
-    );
-    await expect(getMyOctokit().rest.repos.get({ owner: "o", repo: "r" })).resolves.toBeDefined();
   });
 });

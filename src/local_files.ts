@@ -26,7 +26,7 @@ const toPosixPath = (path: string) => path.split(sep).join("/");
  * Expands glob patterns (and plain file paths) to markdown files, relative to `cwd`, sorted and deduplicated.
  * `node_modules` and `.git` are skipped, non-markdown files are ignored.
  */
-export const findMarkdownFiles = async (patterns: string[], cwd: string): Promise<string[]> => {
+const findMarkdownFiles = async (patterns: string[], cwd: string): Promise<string[]> => {
   const files = new Set<string>();
   for (const pattern of patterns) {
     for await (const match of glob(pattern, {
@@ -42,14 +42,14 @@ export const findMarkdownFiles = async (patterns: string[], cwd: string): Promis
   return [...files].toSorted();
 };
 
-export type LinkKind = "local" | "external" | "skip";
+type LinkKind = "local" | "external" | "skip";
 
 /**
  * - `external`: `http(s)://` and protocol-relative (`//host/path`) links, checked over the network.
  * - `skip`: other schemes (`mailto:`, `tel:`, `data:`...) and empty links.
  * - `local`: everything else (relative paths, root-relative paths, `#anchors`), checked on the filesystem.
  */
-export const getLinkKind = (href: string): LinkKind => {
+const getLinkKind = (href: string): LinkKind => {
   if (href.trim() === "") return "skip";
   if (/^https?:\/\//i.test(href) || href.startsWith("//")) return "external";
   if (/^[a-z][a-z\d+.-]*:/i.test(href)) return "skip";
@@ -89,7 +89,7 @@ const README_NAMES = ["readme.md", "readme.markdown"];
  * `Readme.markdown`...). Deterministic when there are several: `.md` first, then by name in code point order
  * (`README.md` before `Readme.md` before `readme.md`). Directories with such names are ignored, symlinks to files are followed.
  */
-export const findReadme = (directory: string): string | undefined => {
+const findReadme = (directory: string): string | undefined => {
   const candidates = readdirSync(directory, { withFileTypes: true })
     .filter(
       (entry) =>

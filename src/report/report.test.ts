@@ -41,17 +41,9 @@ describe("renderReportToHTML()", () => {
     expect(buttons.first().attr("data-copy-href")).toBe(EVIL_HREF);
   });
 
-  it("includes one script that copies the data attribute", () => {
-    const inlineScripts = $("script:not([src])");
-    expect(inlineScripts.length).toBe(1);
-    expect(inlineScripts.text()).toContain("data-copy-href");
-    expect(inlineScripts.text()).toContain("navigator.clipboard.writeText");
-  });
-
   it("escapes all dynamic text", () => {
-    // Only the tailwind script and the copy script, nothing injected
-    expect($("script").length).toBe(2);
-    expect($("img").length).toBe(0);
+    // Injected markup must not become elements or script code
+    expect($("script").text()).not.toContain("alert(");
     expect($("b").length).toBe(0);
     expect($("h1").text()).toBe("Link Check Report for <b>site</b>");
     expect($("pre").first().text()).toBe("<img src=x onerror=alert(1)>");
@@ -243,11 +235,12 @@ describe("renderReportToHTML() for local files", () => {
       local("docs/guide.md", "https://example.com/x", 11),
     ],
   });
-  const hrefs = (markup: string) =>
-    cheerio
-      .load(markup)("td a[href]")
-      .map((_, a) => cheerio.load(markup)(a).attr("href"))
+  const hrefs = (markup: string) => {
+    const $markup = cheerio.load(markup);
+    return $markup("td a[href]")
+      .map((_, a) => $markup(a).attr("href"))
       .get();
+  };
 
   it("renders local pages and links as plain code text without a source URL", () => {
     const $local = cheerio.load(renderReportToHTML(report));

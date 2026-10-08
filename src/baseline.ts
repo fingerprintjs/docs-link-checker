@@ -88,7 +88,7 @@ const baselineSchema = z.preprocess(
  * Validates the parsed JSON of a baseline file. Accepts `{ "ignore": [...] }` or a bare array of entries.
  * @throws {BaselineError} with a message pointing to the invalid entry
  */
-export const validateBaseline = (data: unknown): BaselineFile => {
+const validateBaseline = (data: unknown): BaselineFile => {
   const result = baselineSchema.safeParse(data);
   if (!result.success) {
     // Only the first issue, like a fail-fast check: later ones are often side effects of it

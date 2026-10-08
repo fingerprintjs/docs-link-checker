@@ -16,7 +16,7 @@ type GlobToken = { type: "literal"; value: string } | { type: "star" } | { type:
 /** Longest accepted pattern, longer values are rejected when the baseline is validated */
 export const MAX_GLOB_LENGTH = 2048;
 
-export const parseGlob = (glob: string): GlobToken[] => {
+const parseGlob = (glob: string): GlobToken[] => {
   const tokens: GlobToken[] = [];
   let literal = "";
   let i = 0;

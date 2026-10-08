@@ -134,7 +134,7 @@ export const timePhase = async <T>(name: string, fn: () => Promise<T>): Promise<
 const formatMs = (ms: number) =>
   ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 
-export const formatRunMetrics = (metrics: RunMetrics, totalMs?: number): string => {
+const formatRunMetrics = (metrics: RunMetrics, totalMs?: number): string => {
   const lines = ["Run metrics:"];
   for (const [name, label] of Object.entries(METRICS)) {
     const value = metrics.counters[name];

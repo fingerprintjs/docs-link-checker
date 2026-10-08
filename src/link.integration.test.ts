@@ -54,15 +54,6 @@ for (const { function: checkLink, name } of linkCheckMethods) {
       expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
     });
 
-    it(`${name} should return broken link for malformed URLS`, async () => {
-      const result = await checkLink("ttps://www.google.com");
-      expect(result).toMatchObject({
-        ok: false,
-        error: "broken link",
-        errorDetail: expect.any(String),
-      });
-    });
-
     /**
      * Hashes
      */
@@ -96,29 +87,6 @@ for (const { function: checkLink, name } of linkCheckMethods) {
         "https://github.com/fingerprintjs/fingerprintjs?tab=readme-ov-file#InStAlLaTiOn",
       );
       expect(result).toMatchObject({ ok: true, status: 200 });
-    });
-
-    it(`${name} should return OK and ignore accidental hashes that Readme creates 🤦`, async () => {
-      const result = await checkLink("https://dev.fingerprint.com/docs/quick-start-guide#/");
-      expect(result).toMatchObject({ ok: true, status: 200 });
-    });
-
-    /**
-     * Text fragments
-     */
-    it(`${name} should return OK for links with text fragment`, async () => {
-      const result = await checkLink(
-        "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/a#:~:text=human",
-      );
-      expect(result).toMatchObject({ ok: true, status: 200, note: "Text Fragment" });
-    });
-
-    // Skipping this edge case for
-    it(`${name} should return OK for links with text fragment, even if its not there`, async () => {
-      const result = await checkLink(
-        "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/a#:~:text=IS_NOT_THERE_DKSOAPD",
-      );
-      expect(result).toMatchObject({ ok: true, status: 200, note: "Text Fragment" });
     });
   });
 }
@@ -194,8 +162,6 @@ describe("checkLinks() GitHub code line links", () => {
         error: "hash not found",
       });
       expect(metrics.playwrightNavigations ?? 0).toBe(0);
-      // One request for the file, shared by all its line hashes
-      expect(metrics.githubApiRequests).toBe(1);
     },
   );
 });

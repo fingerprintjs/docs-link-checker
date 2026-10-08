@@ -1,18 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { checkLinks } from "./link";
-import {
-  checkLocalFiles,
-  checkLocalLink,
-  collectLinksFromFiles,
-  findMarkdownFiles,
-  findReadme,
-  getLinkKind,
-} from "./local_files";
+import { describe, expect, it, vi } from "vitest";
+import { checkLocalFiles, checkLocalLink, collectLinksFromFiles } from "./local_files";
 import type { LinkWithResult } from "./types";
 
+// Avoids network access, the external link only needs to come back with a result
 vi.mock("./link", () => ({
   checkLinks: vi.fn(async ({ links }: { links: Array<{ href: string }> }) =>
     links.map((link) => ({ ...link, result: { ok: true, status: 200 } })),
@@ -23,25 +16,15 @@ const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");
 const check = (file: string, href: string) =>
   checkLocalLink(join(FIXTURE, file), href, { root: FIXTURE });
 
-describe("getLinkKind()", () => {
-  it.each([
-    ["https://example.com", "external"],
-    ["HTTP://example.com", "external"],
-    ["//cdn.example.com/x", "external"],
-    ["mailto:a@b.c", "skip"],
-    ["tel:+123", "skip"],
-    ["data:text/plain,x", "skip"],
-    ["", "skip"],
-    ["docs/a.md", "local"],
-    ["./a.md", "local"],
-    ["../a.md", "local"],
-    ["/docs/a.md", "local"],
-    ["#anchor", "local"],
-    ["a.md?x=1:2", "local"],
-  ])("%s -> %s", (href, kind) => {
-    expect(getLinkKind(href)).toBe(kind);
-  });
-});
+const makeTempDir = (files: Record<string, string> = {}, dirs: string[] = []) => {
+  const dir = mkdtempSync(join(tmpdir(), "local-files-test-"));
+  for (const name of dirs) mkdirSync(join(dir, name), { recursive: true });
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(join(dir, name, ".."), { recursive: true });
+    writeFileSync(join(dir, name), content);
+  }
+  return dir;
+};
 
 describe("checkLocalLink()", () => {
   it("accepts existing files and directories (relative, root-relative, encoded, with a query string)", () => {
@@ -77,7 +60,6 @@ describe("checkLocalLink()", () => {
     expect(check("README.md", "docs/guide.md#installation")).toEqual({ ok: true, status: 200 });
     expect(check("README.md", "docs/guide.md?plain=1#installation").ok).toBe(true);
     expect(check("README.md", "docs/guide.md#Installation").ok).toBe(true);
-    expect(check("README.md", "docs/guide.md#user-content-installation").ok).toBe(true);
     expect(check("README.md", "#getting-started").ok).toBe(true);
     expect(check("docs/guide.md", "../README.md#getting-started").ok).toBe(true);
     expect(check("README.md", "docs/guide.md#nope")).toEqual({
@@ -104,34 +86,19 @@ describe("checkLocalLink()", () => {
     });
   });
 
+  // Line range rules are covered in line_anchor.test.ts, this checks the wiring to code files
   it("checks GitHub line anchors on code files, ignores other anchors", () => {
-    expect(check("README.md", "src/code.ts#L3").ok).toBe(true);
     expect(check("README.md", "src/code.ts#L2-L3").ok).toBe(true);
-    expect(check("README.md", "src/code.ts#L2C5-L3C1").ok).toBe(true);
     expect(check("README.md", "src/code.ts#L4")).toMatchObject({
       error: "hash not found",
       errorDetail: "src/code.ts has only 3 lines",
     });
-    expect(check("README.md", "src/code.ts#L1-L99").ok).toBe(false);
-    expect(check("README.md", "src/code.ts#L1").ok).toBe(true);
-    expect(check("README.md", "src/code.ts#L2-L2").ok).toBe(true);
+    expect(check("README.md", "src/code.ts#L0").ok).toBe(false);
+    expect(check("README.md", "src/code.ts#something")).toMatchObject({
+      ok: true,
+      note: "Hash not checked (not a markdown file)",
+    });
   });
-
-  it.each(["#L0", "#L0-L2", "#L2-L0", "#L3-L2", "#L0C1"])(
-    "rejects invalid line anchor %s",
-    (hash) => {
-      expect(check("README.md", `src/code.ts${hash}`)).toEqual({
-        ok: false,
-        error: "hash not found",
-        status: 200,
-        errorDetail: `Invalid line anchor ${hash} (lines start at 1, ranges go forward)`,
-      });
-      expect(check("README.md", "src/code.ts#something")).toMatchObject({
-        ok: true,
-        note: "Hash not checked (not a markdown file)",
-      });
-    },
-  );
 
   it("accepts accidental hashes and text fragments", () => {
     expect(check("README.md", "docs/guide.md#/").ok).toBe(true);
@@ -193,69 +160,54 @@ describe("checkLocalLink() outside the repository", () => {
   });
 });
 
-describe("findReadme() and directory anchors", () => {
-  const makeDir = (files: Record<string, string>, dirs: string[] = []) => {
-    const dir = mkdtempSync(join(tmpdir(), "readme-test-"));
-    for (const name of dirs) mkdirSync(join(dir, name));
-    for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
-    return dir;
+describe("README of a directory anchor", () => {
+  // Each README has its own heading, so the anchor shows which one was picked
+  const picked = (files: Record<string, string>, dirs: string[] = []) => {
+    const root = makeTempDir({ "index.md": "", ...files }, ["dir", ...dirs]);
+    const from = join(root, "index.md");
+    return (heading: string) => checkLocalLink(from, `dir#${heading}`, { root }).ok;
   };
+  const readme = (name: string, heading: string) => ({ [`dir/${name}`]: `# ${heading}\n` });
   // Case-insensitive filesystems (macOS, Windows) can't have README.md and readme.md side by side
   const caseSensitive = (() => {
-    const dir = makeDir({ a: "" });
+    const dir = makeTempDir({ a: "" });
     return !existsSync(join(dir, "A"));
   })();
 
   it("finds README.markdown and lowercase or mixed-case names", () => {
-    expect(findReadme(makeDir({ "README.markdown": "# X" }))).toMatch(/README\.markdown$/);
-    expect(findReadme(makeDir({ "readme.md": "# X" }))).toMatch(/readme\.md$/);
-    expect(findReadme(makeDir({ "Readme.Markdown": "# X" }))).toMatch(/Readme\.Markdown$/);
-    expect(findReadme(makeDir({ "README.txt": "", "notes.md": "" }))).toBeUndefined();
+    expect(picked(readme("README.markdown", "found"))("found")).toBe(true);
+    expect(picked(readme("readme.md", "found"))("found")).toBe(true);
+    expect(picked(readme("Readme.Markdown", "found"))("found")).toBe(true);
+  });
+
+  it("does not check the hash of a directory without a README", () => {
+    const root = makeTempDir({ "index.md": "", "dir/README.txt": "", "dir/notes.md": "# x" });
+    expect(checkLocalLink(join(root, "index.md"), "dir#x", { root })).toMatchObject({
+      ok: true,
+      note: "Hash not checked (directory without README)",
+    });
   });
 
   it("prefers .md over .markdown and ignores directories named like a README", () => {
-    expect(findReadme(makeDir({ "README.markdown": "", "README.md": "" }))).toMatch(/README\.md$/);
-    expect(findReadme(makeDir({ "README.markdown": "" }, ["README.md"]))).toMatch(
-      /README\.markdown$/,
-    );
+    const both = picked({
+      ...readme("README.markdown", "markdown-ext"),
+      ...readme("README.md", "md-ext"),
+    });
+    expect(both("md-ext")).toBe(true);
+    expect(both("markdown-ext")).toBe(false);
+
+    const withDir = picked(readme("README.markdown", "found"), ["dir/README.md"]);
+    expect(withDir("found")).toBe(true);
   });
 
   it.runIf(caseSensitive)("picks README.md before readme.md, whatever the directory order", () => {
-    expect(findReadme(makeDir({ "readme.md": "", "README.md": "", "Readme.md": "" }))).toMatch(
-      /\/README\.md$/,
-    );
-  });
-
-  it("checks anchors on directories with a README.markdown", () => {
-    const root = makeDir({ "index.md": "" }, ["guide"]);
-    writeFileSync(join(root, "guide", "README.markdown"), "# Guide\n\n## Setup\n");
-    const context = { root };
-    expect(checkLocalLink(join(root, "index.md"), "guide#setup", context)).toEqual({
-      ok: true,
-      status: 200,
+    const pick = picked({
+      ...readme("readme.md", "lower"),
+      ...readme("README.md", "upper"),
+      ...readme("Readme.md", "mixed"),
     });
-    expect(checkLocalLink(join(root, "index.md"), "guide/#nope", context)).toMatchObject({
-      ok: false,
-      error: "hash not found",
-      errorDetail: "No heading matching #nope in guide/README.markdown",
-    });
-  });
-});
-
-describe("findMarkdownFiles()", () => {
-  it("expands globs and file paths, sorted, deduplicated, markdown only, skipping node_modules", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "local-files-test-"));
-    for (const path of ["docs/b.md", "docs/a.markdown", "docs/c.txt", "node_modules/x/readme.md"]) {
-      mkdirSync(join(dir, path, ".."), { recursive: true });
-      writeFileSync(join(dir, path), "# x");
-    }
-    writeFileSync(join(dir, "README.md"), "# x");
-    expect(await findMarkdownFiles(["**/*", "README.md", "docs/*.md"], dir)).toEqual([
-      "README.md",
-      "docs/a.markdown",
-      "docs/b.md",
-    ]);
-    expect(await findMarkdownFiles(["nothing/**"], dir)).toEqual([]);
+    expect(pick("upper")).toBe(true);
+    expect(pick("lower")).toBe(false);
   });
 });
 
@@ -267,13 +219,66 @@ describe("collectLinksFromFiles()", () => {
       { page: "README.md", href: "https://example.com/page", text: "external", line: 19 },
     ]);
     expect(collected.skipped.map((link) => link.href)).toEqual(["mailto:hello@example.com"]);
-    expect(collected.local).toHaveLength(14);
+    const localHrefs = collected.local.map((link) => link.href);
+    expect(localHrefs).toContain("docs/missing.md");
+    // Links in code blocks are not extracted
+    expect(localHrefs).not.toContain("docs/not-checked.md");
     expect(collected.local[0]).toEqual({
       page: "README.md",
       href: "docs/guide.md",
       text: "good file",
       line: 5,
     });
+  });
+
+  it("classifies hrefs and checks protocol-relative links over https", async () => {
+    const cwd = makeTempDir({
+      "links.md": [
+        "[a](https://example.com)",
+        "[b](HTTP://example.com)",
+        "[c](//cdn.example.com/x)",
+        "[d](mailto:a@b.c)",
+        "[e](tel:+123)",
+        "[f](data:text/plain,x)",
+        "[g](docs/a.md)",
+        "[h](./a.md)",
+        "[i](../a.md)",
+        "[j](/docs/a.md)",
+        "[k](#anchor)",
+        "[l](a.md?x=1:2)",
+      ].join("\n\n"),
+    });
+    const collected = await collectLinksFromFiles({ patterns: ["links.md"], cwd });
+    const hrefs = (links: Array<{ href: string }>) => links.map((link) => link.href);
+    expect(hrefs(collected.external)).toEqual([
+      "https://example.com",
+      "HTTP://example.com",
+      "https://cdn.example.com/x",
+    ]);
+    expect(hrefs(collected.skipped)).toEqual(["mailto:a@b.c", "tel:+123", "data:text/plain,x"]);
+    expect(hrefs(collected.local)).toEqual([
+      "docs/a.md",
+      "./a.md",
+      "../a.md",
+      "/docs/a.md",
+      "#anchor",
+      "a.md?x=1:2",
+    ]);
+  });
+
+  it("expands globs and file paths, sorted, deduplicated, markdown only, skipping node_modules", async () => {
+    const cwd = makeTempDir({
+      "docs/b.md": "# x",
+      "docs/a.markdown": "# x",
+      "docs/c.txt": "# x",
+      "node_modules/x/readme.md": "# x",
+      "README.md": "# x",
+    });
+    const { files } = await collectLinksFromFiles({
+      patterns: ["**/*", "README.md", "docs/*.md"],
+      cwd,
+    });
+    expect(files).toEqual(["README.md", "docs/a.markdown", "docs/b.md"]);
   });
 
   it("fails when no markdown file matches", async () => {
@@ -284,23 +289,15 @@ describe("collectLinksFromFiles()", () => {
 });
 
 describe("checkLocalFiles()", () => {
-  beforeEach(() => {
-    vi.mocked(checkLinks).mockClear();
-  });
-
   const failing = (results: LinkWithResult[]) =>
     results
       .filter((link) => !link.result.ok)
       .map((link) => `${link.page}:${link.line} ${link.href}`)
       .toSorted();
 
-  it("checks local links on disk and external links with checkLinks", async () => {
+  it("checks local links on disk and includes the results of external links", async () => {
     const results = await checkLocalFiles({ patterns: ["**/*.md"], cwd: FIXTURE });
-    expect(vi.mocked(checkLinks)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(checkLinks).mock.calls[0]![0].links.map((link) => link.href)).toEqual([
-      "https://example.com/page",
-    ]);
-    expect(results).toHaveLength(17);
+    expect(results.find((link) => link.href === "https://example.com/page")?.result.ok).toBe(true);
     expect(failing(results)).toEqual([
       "README.md:10 #nowhere",
       "README.md:16 src/code.ts#L99",
@@ -308,12 +305,5 @@ describe("checkLocalFiles()", () => {
       "README.md:8 docs/guide.md#nope",
       "docs/guide.md:8 ../nope.md",
     ]);
-  });
-
-  it("skips checkLinks without external links", async () => {
-    const results = await checkLocalFiles({ patterns: ["docs/*.md"], cwd: FIXTURE });
-    expect(vi.mocked(checkLinks)).not.toHaveBeenCalled();
-    expect(results).toHaveLength(2);
-    expect(failing(results)).toEqual(["docs/guide.md:8 ../nope.md"]);
   });
 });

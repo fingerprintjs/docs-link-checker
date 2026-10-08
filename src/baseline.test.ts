@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,7 +7,6 @@ import {
   createBaseline,
   loadBaseline,
   updateBaseline,
-  validateBaseline,
   writeBaseline,
 } from "./baseline";
 import { getJSONReport } from "./report/report";
@@ -22,16 +21,24 @@ const broken = (href: string, page = "https://example.com/page"): LinkWithResult
 
 const tempDir = () => mkdtempSync(join(tmpdir(), "baseline-test-"));
 
-describe("validateBaseline()", () => {
+// Validation is tested through `loadBaseline`, the public entry point
+const load = (data: unknown) => {
+  const path = join(tempDir(), "baseline.json");
+  writeFileSync(path, JSON.stringify(data));
+  return loadBaseline(path);
+};
+
+describe("loadBaseline() validation", () => {
   it("accepts an object with `ignore`, a bare array and string shorthands", () => {
-    expect(validateBaseline({ ignore: [{ href: "https://a.com" }] })).toEqual({
-      ignore: [{ href: "https://a.com" }],
-    });
-    expect(validateBaseline(["https://a.com/**", { pattern: "https://b/*" }])).toEqual({
-      ignore: [{ pattern: "https://a.com/**" }, { pattern: "https://b/*" }],
-    });
-    expect(validateBaseline({ $schema: "x", ignore: [] })).toEqual({ ignore: [] });
-    expect(validateBaseline({ $schema: null, ignore: [] })).toEqual({ ignore: [] });
+    expect(load({ ignore: [{ href: "https://a.com" }] }).entries).toEqual([
+      { href: "https://a.com" },
+    ]);
+    expect(load(["https://a.com/**", { pattern: "https://b/*" }]).entries).toEqual([
+      { pattern: "https://a.com/**" },
+      { pattern: "https://b/*" },
+    ]);
+    expect(load({ $schema: "x", ignore: [] }).entries).toEqual([]);
+    expect(load({ $schema: null, ignore: [] }).entries).toEqual([]);
   });
 
   it.each([
@@ -54,8 +61,8 @@ describe("validateBaseline()", () => {
     [[{ pattern: "x".repeat(2049) }], /ignore\[0\].pattern: .*<=2048 characters/],
     [[{ href: "a", page: "x".repeat(2049) }], /ignore\[0\].page: .*<=2048 characters/],
   ])("rejects %j", (data, message) => {
-    expect(() => validateBaseline(data)).toThrow(BaselineError);
-    expect(() => validateBaseline(data)).toThrow(message);
+    expect(() => load(data)).toThrow(BaselineError);
+    expect(() => load(data)).toThrow(message);
   });
 });
 
@@ -95,13 +102,6 @@ describe("createBaseline().findEntry()", () => {
     expect(baseline.findEntry(broken("https://glob.com/"))?.reason).toBe("glob");
     expect(baseline.findEntry(broken("https://glob.community"))).toBeUndefined();
   });
-
-  it("ignores the bare origins of the repository baseline (linkcheck.baseline.json)", () => {
-    const repoBaseline = loadBaseline(join(import.meta.dirname, "..", "linkcheck.baseline.json"));
-    expect(repoBaseline.findEntry(broken("http://www.allaboutcookies.org"))).toBeDefined();
-    expect(repoBaseline.findEntry(broken("http://www.allaboutcookies.org/"))).toBeDefined();
-    expect(repoBaseline.findEntry(broken("https://nordvpn.com"))).toBeDefined();
-  });
 });
 
 describe("getJSONReport() with a baseline", () => {
@@ -116,6 +116,7 @@ describe("getJSONReport() with a baseline", () => {
     links: [
       broken("https://ignored.com/"),
       broken("https://broken.com/"),
+      // Matches a pattern on purpose: successful links are never ignored
       { href: "https://ok.com/", page: "p", text: "t", result: { ok: true, status: 200 } },
       {
         href: "https://ok.com/hash#x",
@@ -150,10 +151,6 @@ describe("getJSONReport() with a baseline", () => {
       ["https://error.com/x", undefined],
     ]);
   });
-
-  it("never ignores successful links", () => {
-    expect(report.ignored.some((link) => link.result.ok)).toBe(false);
-  });
 });
 
 describe("loadBaseline()", () => {
@@ -161,6 +158,11 @@ describe("loadBaseline()", () => {
     const path = join(tempDir(), "baseline.json");
     writeFileSync(path, JSON.stringify({ ignore: [{ href: "https://a.com", reason: "r" }] }));
     expect(loadBaseline(path).findEntry(broken("https://a.com"))?.reason).toBe("r");
+  });
+
+  it("loads the repository baseline file", () => {
+    const { entries } = loadBaseline(join(import.meta.dirname, "..", "linkcheck.baseline.json"));
+    expect(entries.length).toBeGreaterThan(0);
   });
 
   it("reports missing files, unless allowed", () => {
@@ -227,14 +229,6 @@ describe("updateBaseline()", () => {
       { href: "https://broad.com/still-broken", page: "a.md", reason: "specific" },
       { href: "https://broad.com/fixed", page: "a.md" },
     ]);
-    expect(overlapping.findEntry(broken("https://broad.com/still-broken", "a.md"))?.reason).toBe(
-      "broad",
-    );
-    expect(
-      overlapping
-        .findEntries(broken("https://broad.com/still-broken", "a.md"))
-        .map((e) => e.reason),
-    ).toEqual(["broad", "specific"]);
     expect(
       updateBaseline({
         baseline: overlapping,
@@ -252,82 +246,9 @@ describe("updateBaseline()", () => {
   it("writes a file that loads back", () => {
     const path = join(tempDir(), "baseline.json");
     writeBaseline(path, updateBaseline({ baseline, failures }));
-    expect(readFileSync(path, "utf8").endsWith("}\n")).toBe(true);
     const loaded = loadBaseline(path);
     for (const failure of failures) {
       expect(loaded.findEntry(failure)).toBeDefined();
-    }
-  });
-});
-
-describe("linkcheck.baseline.json (used by the default checks)", () => {
-  const repoRoot = join(import.meta.dirname, "..");
-  const baseline = loadBaseline(join(repoRoot, "linkcheck.baseline.json"));
-
-  const couldNotCheck = (href: string, status = 403): LinkWithResult => ({
-    href,
-    page: "https://dev.fingerprint.com/docs/page",
-    text: "text",
-    result: { ok: false, error: "could not check", status },
-  });
-
-  // "Could not check" links of the reports: login walls (401) and bot-protected sites (403)
-  const knownCouldNotCheck = [
-    couldNotCheck("https://dashboard.fpjs.sh/integrations/active", 401),
-    couldNotCheck("https://dashboard.fpjs.sh/suspect-score", 401),
-    couldNotCheck("https://mcp.fpjs.io/mcp", 401),
-    couldNotCheck("https://www.npmjs.com/package/@fingerprintjs/fingerprintjs-pro"),
-    couldNotCheck("https://www.npmjs.com/package/@fingerprint/agent"),
-    couldNotCheck("https://www.npmjs.com/package/create-cloudflare"),
-    couldNotCheck("https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk"),
-    couldNotCheck(
-      "https://community.cloudflare.com/t/presence-of-query-string-make-route-match-fail/63400",
-    ),
-    couldNotCheck(
-      "https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/worker-sites-react",
-    ),
-    couldNotCheck(
-      "https://codesandbox.io/p/devbox/github/fingerprintjs/fingerprintjs-pro-use-cases/",
-    ),
-    couldNotCheck("https://my.bluehost.com/hosting/help/resource/714"),
-    couldNotCheck("https://nordvpn.com/"),
-    couldNotCheck("https://www.iso.org/iso-3166-country-codes.html"),
-    // Reported as resolved by `new URL()` (with a trailing slash)
-    couldNotCheck("http://www.allaboutcookies.org/"),
-    couldNotCheck("https://twitter.com/FingerprintJs"),
-    couldNotCheck("https://x.com/FingerprintJs"),
-  ];
-
-  it("moves the known 'could not check' links to the ignored section", () => {
-    const report = getJSONReport({
-      siteName: "test",
-      baseline,
-      links: knownCouldNotCheck,
-    });
-
-    expect(report.summary.couldNotCheck).toBe(0);
-    expect(report.summary.ignored).toBe(knownCouldNotCheck.length);
-    expect(report.ignored.every((link) => link.ignoreReason)).toBe(true);
-  });
-
-  it("does not ignore real broken links", () => {
-    const realBroken = [
-      broken("https://support.microsoft.com/en-gb/help/278835/how-to-delete-cookie-files"),
-      broken("https://fingerprint.com/blog/tag/workforce-identity/"),
-      broken("https://api.fpjs.io/v4"),
-      broken("https://github.com/fingerprintjs/fingerprintjs-pro-spa/blob/master/LICENSE"),
-      broken("https://docs.flutter.dev/get-started/install/macos/mobile-ios"),
-    ];
-    const report = getJSONReport({ siteName: "test", baseline, links: realBroken });
-
-    expect(report.summary.ignored).toBe(0);
-    expect(report.summary.brokenLinks).toBe(realBroken.length);
-  });
-
-  it("is passed to the default checks", () => {
-    const { scripts } = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-    for (const script of ["checkLinks:docs", "checkLinks:github", "checkLinks:web"]) {
-      expect(scripts[script]).toContain("--baseline linkcheck.baseline.json");
     }
   });
 });

@@ -46,7 +46,7 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
  * Parses links from a single page. Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL.
  * @throws {Error} if the page can't be fetched, so it shows up in the extraction errors instead of silently having no links
  */
-export async function parseLinksFromPage(pageUrl: string): Promise<Link[]> {
+async function parseLinksFromPage(pageUrl: string): Promise<Link[]> {
   // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
   const response = await fetchWithHostLimit(
     pageUrl,

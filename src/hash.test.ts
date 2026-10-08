@@ -4,9 +4,9 @@ import * as cheerio from "cheerio";
 import { describe, expect, it } from "vitest";
 import {
   buildAnchorIndex,
-  cssString,
   decodeHash,
   getHashSelectors,
+  getSpecialFragmentNote,
   isHashInAnchorIndex,
 } from "./hash";
 
@@ -51,19 +51,6 @@ describe("decodeHash", () => {
   });
 });
 
-describe("cssString", () => {
-  it("escapes quotes, backslashes and newlines", () => {
-    expect(cssString('a"b\\c\nd')).toBe('"a\\"b\\\\c\\a d"');
-  });
-
-  it("escapes every non-printable character, so any hash gives a valid selector", () => {
-    expect(cssString("a\u0001b\u001fc\u007fd")).toBe('"a\\1 b\\1f c\\7f d"');
-    // A control character in a hash (`#%01section`) must not break the selector
-    const index = buildAnchorIndex('<h2 id="\u0001section">A</h2>');
-    expect(isHashInAnchorIndex(index, "#%01section")).toBe(true);
-  });
-});
-
 describe("buildAnchorIndex() / isHashInAnchorIndex()", () => {
   const index = buildAnchorIndex(html);
 
@@ -87,13 +74,37 @@ describe("getHashSelectors() (used by Playwright)", () => {
   });
 
   it.each(missingHashes)("builds a valid selector that does not match %s", (hash) => {
-    expect(() => $(getHashSelectors(hash.slice(1), PAGE).join(", "))).not.toThrow();
     expect(matches(hash.slice(1))).toBe(false);
+  });
+
+  it("builds a valid selector for a hash with a control character", () => {
+    const withControlChar = cheerio.load('<h2 id="\u0001section">A</h2>');
+    expect(withControlChar(getHashSelectors("%01section", PAGE).join(", ")).length).toBe(1);
   });
 
   it("matches GitHub line numbers for GitHub code line links", () => {
     expect(matches("L12-L20", "https://github.com/o/r/blob/main/a.js#L12-L20")).toBe(true);
     expect(matches("L13", "https://github.com/o/r/blob/main/a.js#L13")).toBe(false);
     expect(matches("L12C3", "https://github.com/o/r/blob/main/a.js#L12C3")).toBe(true);
+  });
+});
+
+describe("getSpecialFragmentNote()", () => {
+  it("accepts zippy fragments on Google Help only", () => {
+    expect(getSpecialFragmentNote("zippy=,a", "https://support.google.com/x#zippy=,a")).toBe(
+      "Google Help accordion state",
+    );
+    expect(getSpecialFragmentNote("zippy=,a", "https://SUPPORT.Google.com/x")).toBe(
+      "Google Help accordion state",
+    );
+    expect(getSpecialFragmentNote("zippy=,a", "https://example.com/x")).toBeUndefined();
+    expect(
+      getSpecialFragmentNote("zippy=,a", "https://support.google.com.evil.com/x"),
+    ).toBeUndefined();
+    expect(getSpecialFragmentNote("zippy=,a", "https://google.com/x")).toBeUndefined();
+    expect(getSpecialFragmentNote("not-zippy=1", "https://support.google.com/x")).toBeUndefined();
+    // Not host-specific
+    expect(getSpecialFragmentNote("/", "https://example.com/x")).toBe("Accidental hash");
+    expect(getSpecialFragmentNote(":~:text=a", "https://example.com/x")).toBe("Text Fragment");
   });
 });

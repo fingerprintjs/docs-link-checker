@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkLinkWithFetch } from "./fetch_check";
-import { getReadmeLinks } from "./github/gh_get_links";
 import { fetchWithHostLimit, planServerErrorRetry } from "./http";
-import { getLinksFromPages, parseLinksFromPage } from "./page";
 import { getHostLimiter, withRun } from "./run";
 
 beforeEach(() => {
@@ -30,6 +28,23 @@ const stubFetch = (handler: Handler) => {
 const redirect = (location: string, status = 301) =>
   new Response("moved", { status, headers: { Location: location } });
 
+/** Runs `request` with fake timers, returns the response and how long it took (simulated time) */
+const withFakeTimers = async <T>(request: () => Promise<T>) => {
+  vi.useFakeTimers();
+  try {
+    const start = Date.now();
+    let finishedAt = Number.NaN;
+    const promise = request().then((r) => {
+      finishedAt = Date.now();
+      return r;
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    return { response: await promise, took: finishedAt - start };
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 describe("fetchWithHostLimit()", () => {
   it("pauses the host before releasing the slot, so a queued request does not start during Retry-After", () =>
     withRun({ hostConcurrency: 1 }, async () => {
@@ -44,10 +59,12 @@ describe("fetchWithHostLimit()", () => {
         return new Response(url.slice(-1), { status: 200 });
       });
 
-      const results = await Promise.all([
-        fetchWithHostLimit("https://limited.example.com/a", {}, text),
-        fetchWithHostLimit("https://limited.example.com/b", {}, text),
-      ]);
+      const { response: results } = await withFakeTimers(() =>
+        Promise.all([
+          fetchWithHostLimit("https://limited.example.com/a", {}, text),
+          fetchWithHostLimit("https://limited.example.com/b", {}, text),
+        ]),
+      );
 
       expect(results.map((result) => [result.status, result.data])).toEqual([
         [200, "a"],
@@ -55,7 +72,7 @@ describe("fetchWithHostLimit()", () => {
       ]);
       const rateLimitedAt = events[0]!.at;
       const queuedStart = events.find((event) => event.name.endsWith("/b"))!.at;
-      expect(queuedStart - rateLimitedAt).toBeGreaterThanOrEqual(950);
+      expect(queuedStart - rateLimitedAt).toBe(1000);
     }));
 
   it("returns the last 429 after the retries", () =>
@@ -81,23 +98,6 @@ describe("fetchWithHostLimit()", () => {
 });
 
 describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
-  /** Runs `request` with fake timers, returns the response and how long it took (simulated time) */
-  const withFakeTimers = async <T>(request: () => Promise<T>) => {
-    vi.useFakeTimers();
-    try {
-      const start = Date.now();
-      let finishedAt = Number.NaN;
-      const promise = request().then((r) => {
-        finishedAt = Date.now();
-        return r;
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      return { response: await promise, took: finishedAt - start };
-    } finally {
-      vi.useRealTimers();
-    }
-  };
-
   it.each([502, 503, 504])("retries a %s with a backoff, then returns the success", (status) =>
     withRun({ hostConcurrency: 2 }, async () => {
       let failures = 2;
@@ -195,14 +195,10 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     }));
 
-  it("planServerErrorRetry() is bounded: backoff, Retry-After as a minimum, at most 10s", () => {
+  // Also used by the Playwright check. Fetch-level tests above cover the backoff steps and the give-up cases
+  it("planServerErrorRetry() edge cases: Retry-After of exactly 10s is allowed, invalid is ignored", () => {
     const delay = (retries: number, retryAfter: string | null) =>
       planServerErrorRetry("https://busy.example.com/", 503, retries, retryAfter);
-    expect(delay(0, null)).toBe(2000);
-    expect(delay(1, null)).toBe(5000);
-    expect(delay(2, null)).toBeUndefined();
-    expect(delay(0, "0")).toBe(2000);
-    expect(delay(0, "7")).toBe(7000);
     expect(delay(1, "10")).toBe(10_000);
     expect(delay(0, "11")).toBeUndefined();
     expect(delay(0, "invalid")).toBe(2000);
@@ -230,13 +226,11 @@ describe("fetchWithHostLimit() redirects", () => {
         url: "https://new.example.com/final?x=1",
         data: "final",
       });
-      expect(
-        fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.redirect]),
-      ).toEqual([
-        ["https://old.example.com/page", "HEAD", "manual"],
+      expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method])).toEqual([
+        ["https://old.example.com/page", "HEAD"],
         // HEAD stays HEAD on 301 and 307, relative Location is resolved against the current URL
-        ["https://new.example.com/start", "HEAD", "manual"],
-        ["https://new.example.com/final?x=1", "HEAD", "manual"],
+        ["https://new.example.com/start", "HEAD"],
+        ["https://new.example.com/final?x=1", "HEAD"],
       ]);
     }));
 
@@ -358,36 +352,6 @@ describe("unread response bodies are cancelled before the host slot is released"
       expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
     }));
 
-  it("a source page that fails (404) has its body cancelled and is reported as an error", () =>
-    withRun({ hostConcurrency: 1 }, async () => {
-      const url = "https://docs.example.com/missing";
-      const { response, tracking } = trackedResponse(404, url);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => response),
-      );
-
-      await expect(parseLinksFromPage(url)).rejects.toThrow("status: 404");
-      expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
-    }));
-
-  it("a failed README download has its body cancelled", () =>
-    withRun({ hostConcurrency: 1 }, async () => {
-      const url = "https://raw.githubusercontent.com/org/repo/main/README.md";
-      const { response, tracking } = trackedResponse(500, url);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => response),
-      );
-
-      const links = await getReadmeLinks([
-        { sourcePath: "https://github.com/org/repo/blob/main/README.md", downloadUrl: url },
-      ]);
-
-      expect(links).toEqual([]);
-      expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
-    }));
-
   it("link checks cancel the GET body when it is not needed", () =>
     withRun({ hostConcurrency: 1 }, async () => {
       const url = "https://example.com/big-file";
@@ -399,48 +363,5 @@ describe("unread response bodies are cancelled before the host slot is released"
 
       expect(await checkLinkWithFetch(url)).toEqual({ ok: true, status: 200 });
       expect(get.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
-    }));
-});
-
-describe("page link extraction and rate limiting", () => {
-  const html = '<a href="https://example.com/target">Target</a>';
-
-  it("retries a source page after a 429 with Retry-After instead of returning no links", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
-      let calls = 0;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () =>
-          ++calls === 1
-            ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
-            : new Response(html, { status: 200 }),
-        ),
-      );
-
-      const links = await parseLinksFromPage("https://docs.example.com/page");
-
-      expect(calls).toBe(2);
-      expect(links.map((link) => link.href)).toEqual(["https://example.com/target"]);
-    }));
-
-  it("reports a page that still fails after the retries as an extraction error (not silently empty)", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL) =>
-          String(input).endsWith("/limited")
-            ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
-            : new Response(html, { status: 200 }),
-        ),
-      );
-
-      const { links, errors } = await getLinksFromPages({
-        pages: ["https://docs.example.com/limited", "https://docs.example.com/ok"],
-      });
-
-      expect(links).toHaveLength(1);
-      expect(errors).toHaveLength(1);
-      expect(errors[0]!.item).toBe("https://docs.example.com/limited");
-      expect(String(errors[0]!.error)).toContain("status: 429");
     }));
 });

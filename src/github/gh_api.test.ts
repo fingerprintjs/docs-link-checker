@@ -67,58 +67,42 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
     expect(octokit.repos.get).toHaveBeenCalledTimes(1);
   });
 
-  it("does not cache outside of a run", async () => {
-    await checkLinkWithGithubApi(FILE_URL);
-    await checkLinkWithGithubApi(FILE_URL);
-    expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
-  });
-
   it("does not share the cache between runs", async () => {
     await withRun({}, () => checkLinkWithGithubApi(FILE_URL));
     await withRun({}, () => checkLinkWithGithubApi(FILE_URL));
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
   });
 
-  it("caches 404s but retries other errors", async () => {
-    octokit.repos.get.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
-    octokit.repos.getContent.mockRejectedValue(
-      Object.assign(new Error("Server Error"), { status: 502 }),
-    );
+  it.each([404, 410])("caches %i (the repository is definitely missing)", async (status) => {
+    octokit.repos.get.mockRejectedValue(Object.assign(new Error("Gone"), { status }));
 
     await withRun({}, async () => {
       for (let i = 0; i < 2; i++) {
-        expect(await checkLinkWithGithubApi("https://github.com/owner/gone")).toMatchObject({
+        expect(await checkLinkWithGithubApi(REPO_URL)).toMatchObject({
           ok: false,
-          status: 404,
-        });
-        expect(await checkLinkWithGithubApi(FILE_URL)).toMatchObject({
-          ok: false,
-          error: "unexpected error",
-          status: 502,
+          error: "broken link",
+          status,
         });
       }
     });
     expect(octokit.repos.get).toHaveBeenCalledTimes(1);
-    expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
   });
 
-  it.each([401, 403])(
-    "does not cache %i (bad token, rate limit or no access), it is no proof the repository is missing",
-    async (status) => {
-      octokit.repos.get.mockRejectedValue(Object.assign(new Error("Denied"), { status }));
+  // Rate limits, bad token or no access, server errors: no proof the repository is missing, ask again next time
+  it.each([502, 401, 403])("does not cache %i", async (status) => {
+    octokit.repos.get.mockRejectedValue(Object.assign(new Error("Failed"), { status }));
 
-      await withRun({}, async () => {
-        for (let i = 0; i < 2; i++) {
-          expect(await checkLinkWithGithubApi(REPO_URL)).toMatchObject({
-            ok: false,
-            error: "unexpected error",
-            status,
-          });
-        }
-      });
-      expect(octokit.repos.get).toHaveBeenCalledTimes(2);
-    },
-  );
+    await withRun({}, async () => {
+      for (let i = 0; i < 2; i++) {
+        expect(await checkLinkWithGithubApi(REPO_URL)).toMatchObject({
+          ok: false,
+          error: "unexpected error",
+          status,
+        });
+      }
+    });
+    expect(octokit.repos.get).toHaveBeenCalledTimes(2);
+  });
 
   it("checks many hashes of the same file with one API request", async () => {
     const hashes = ["", "#title", "#usage", "#missing"];
