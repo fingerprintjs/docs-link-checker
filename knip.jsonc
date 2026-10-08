@@ -5,10 +5,6 @@
     // TEMPORARY (EFFECT_DESIGN.md STEP 1), remove in STEP 3: stubs that nothing imports until the STEP 2 groups
     // implement them
     "src/fetch_check.ts",
-    "src/github/checks/gh_content.ts",
-    "src/github/checks/gh_simple.ts",
-    "src/github/gh_api.ts",
-    "src/github/gh_check_link.ts",
     "src/local_files.ts",
     "src/playwright_check.ts",
     "src/sitemap.ts",
@@ -20,8 +16,7 @@
     "src/browser.ts": ["exports"],
     "src/errors.ts": ["exports"],
     "src/github_actions.ts": ["exports"],
-    "src/github/gh_get_links.ts": ["exports", "types"],
-    "src/github/github_client.ts": ["types"],
+    "src/github/gh_get_links.ts": ["exports"],
     "src/glob.ts": ["exports"],
     "src/hash.ts": ["exports"],
     "src/http.ts": ["exports", "types"],
@@ -31,12 +26,5 @@
     "src/utils.ts": ["exports"],
   },
   // TEMPORARY, remove in STEP 3: dependencies that only the STEP 2 implementations use
-  "ignoreDependencies": [
-    "@effect/platform-node-shared",
-    "@octokit/core",
-    "@octokit/plugin-retry",
-    "@octokit/plugin-throttling",
-    "@octokit/rest",
-    "commander",
-  ],
+  "ignoreDependencies": ["@effect/platform-node-shared", "commander"],
 }

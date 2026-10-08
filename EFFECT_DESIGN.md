@@ -902,3 +902,17 @@ Non-test lines of `src/` (+ nothing else changes). Main 5205, port 5536 (the por
 - Tests of stubbed modules are skeleton files: main's `describe` / test titles as `it.todo` (cannot be `it.skip`: the old bodies do not type check against the new signatures). A group replaces the `it.todo` lines of its files with real tests. `vitest/warn-todo` is off in `.oxlintrc.jsonc` until the last skeleton is gone. Files with real tests and `it.todo` blocks mixed: `baseline.test.ts`, `github_actions.test.ts`, `github/gh_get_links.test.ts`, `link.test.ts`, `page.test.ts`.
 - `knip.jsonc` (was `knip.json`, needs comments) ignores the stub files, the exports only STEP 2 uses and the dependencies only STEP 2 uses (`commander`, `@octokit/*`, `@effect/platform-node-shared`). STEP 3 deletes those entries.
 - `bench/bench.ts` and `checks/gh_rate_limit.ts` were adapted minimally (`runLive`, `Metrics.snapshot`, `GitHub.getRateLimit`). `pnpm bench --base <main worktree>` copies `bench.ts` into the base checkout, where `../src/app` does not exist: the CLI group must make the round script work against main (e.g. a main-compatible fallback) or STEP 3 compares in another way.
+
+### STEP 2 notes
+
+#### GITHUB group
+
+No signature changed. Implementation notes for STEP 3:
+
+- `GitHub.layer`: `githubCacheHits` uses `Cache.getEither` (Left = reused entry, also one still in flight) instead of `contains` + `get`: `contains` is also true for expired entries. Failed lookups other than "not found" are removed right after the lookup (`Cache` TTL zero is still valid in the same millisecond, so it cannot express "do not cache"). The caches have infinite TTL.
+- Cache keys lowercase owner and repo, so the API requests use the lowercased names (GitHub names are case-insensitive).
+- Real `GitHub` over `fakeFetch` is used in `gh_api.test.ts` (caches), `gh_content.test.ts` (ref resolution), `github_client.test.ts`. 5xx and 429 are not tested through it: Octokit's retry plugin retries them for about 14 s of real time. They are tested with `fakeGitHub` instead.
+- `gh_check_link.test.ts` has 2 `it.todo` (unknown account whose page exists / page answers 404 or 429): they need the real `checkLinkWithFetch` of the PIPELINE group. Port them with `fakeGitHub({ getUser: notFound })` + `fakeFetch` + `testRunLayer` in STEP 3 (verified against a throwaway fetch implementation).
+- `it.effect.each` is not in `vitest/no-standalone-expect`'s `additionalTestBlockFunctions` (`.oxlintrc.jsonc`), so `expect` inside it is a lint error. The GITHUB tests use `for` loops around `it.effect`. STEP 3 can add `it.effect.each` to the rule.
+- `knip.jsonc`: only the `exports` entry of `src/github/gh_get_links.ts` is left (`checkReadmesInGithubOrg`, `getGithubOrgSiteName` are used by the `cli.ts` stub's future code).
+- Integration tests use `runLive` and read `GH_TOKEN` from the environment only (`.env` is loaded by `runCli`, not here).
