@@ -46,12 +46,14 @@ describe("filterOutIrrelevantLinks()", () => {
     expect(filterOutIrrelevantLinks([link(href)])).toEqual([]);
   });
 
-  // The patterns are anchored on purpose, a similar URL on another host or path must still be checked
+  // Hosts are matched exactly, a similar URL on another host or path must still be checked
   it.each([
     "https://example.com/localhost",
     "https://example.com/apps.apple.com",
     "https://example.com/portal.azure.com",
     "https://example.com/dash.cloudflare.com",
+    "https://portal.azure.com.example.com/",
+    "https://dash.cloudflare.com.example.com/",
     "https://dev.fingerprint.com/reference/get-event",
     "https://dev.fingerprint.com/docs/recipes",
     "https://example.com/doc:page",

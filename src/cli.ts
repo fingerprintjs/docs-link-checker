@@ -1,4 +1,5 @@
 import { Console } from "node:console";
+import { resolve } from "node:path";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 import {
   type Baseline,
@@ -423,10 +424,12 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
   const { options } = command;
   const { env, stdout, stderr } = context;
 
+  // Relative to `cwd` like the file globs
+  const baselinePath = options.baseline && resolve(context.cwd, options.baseline);
   let baseline = EMPTY_BASELINE;
-  if (options.baseline) {
+  if (baselinePath) {
     try {
-      baseline = loadBaseline(options.baseline, { allowMissing: options.updateBaseline });
+      baseline = loadBaseline(baselinePath, { allowMissing: options.updateBaseline });
     } catch (error) {
       if (error instanceof BaselineError) {
         stderr(`Error: ${error.message}\n`);
@@ -465,7 +468,7 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
     env.GITHUB_OUTPUT,
   );
 
-  if (options.updateBaseline && options.baseline) {
+  if (options.updateBaseline && baselinePath) {
     const file = updateBaseline({
       baseline,
       failures: [...getLinksToFix(report), ...report.ignored],
@@ -473,7 +476,7 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
       // entries are only removed when asked for
       prune: options.pruneBaseline,
     });
-    writeBaseline(options.baseline, file);
+    writeBaseline(baselinePath, file);
     console.log(
       `Updated baseline ${options.baseline}: ${file.ignore.length} entries (was ${baseline.entries.length}).`,
     );

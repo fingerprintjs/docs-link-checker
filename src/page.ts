@@ -13,32 +13,42 @@ const isHttpUrl = (href: string) => {
   }
 };
 
+// Compared with the parsed host, a regex on the raw URL also matches `portal.azure.com.example.com`
+const hostsToFilterOut = [
+  // Gives 500 and redirects to the native app store
+  "apps.apple.com",
+  // Requires login, also regional subdomains (`eu-west-1.console.aws.amazon.com`)
+  "console.aws.amazon.com",
+  // Requires login
+  "portal.azure.com",
+  "dash.cloudflare.com",
+];
+
+const patternsToFilterOut = [
+  // Not a real page, tied to the path and not to the host
+  /cdn-cgi\/l\/email-protection/,
+  // Readme sends the internal link syntax from the server only updates it with JavaScript client-side 🤦
+  /^doc:/,
+  /^ref:/,
+  // And other readme bugs
+  /^https:\/\/dev\.fingerprint\.com\/recipes/,
+  /^https:\/\/dev\.fingerprint\.com\/discuss/,
+];
+
+const isHostToFilterOut = (href: string) => {
+  const { hostname } = URL.canParse(href) ? new URL(href) : { hostname: "" };
+  return (
+    hostname === "localhost" ||
+    hostsToFilterOut.some((host) => hostname === host || hostname.endsWith(`.${host}`))
+  );
+};
+
 export function filterOutIrrelevantLinks(links: Link[]): Link[] {
-  const patternsToFilterOut = [
-    // Localhost
-    /^http:\/\/localhost/,
-    // Starts with mailto:
-    /^mailto:/,
-    // Starts with https://apps.apple.com/ (gives 500 and redirects to native app store)
-    /^https:\/\/apps\.apple\.com/,
-    // includes `console.aws.amazon.com` (Requires login)
-    /console\.aws\.amazon\.com/,
-    // https://portal.azure.com (Requires login)
-    /^https:\/\/portal\.azure\.com/,
-    // Included Cloudflare email link protection pattern like cdn-cgi/l/email-protection#1e6d6b6e6e716c6a5e787770797b6c6e6c77706a307d7173216d6b7c747b7d6a23573b2c2e697f706a3b2c2e6a713b2c2e757b7b6e3b2c2e544d3b2c2e5f797b706a3b2c2e7d717a7b3b2c2e71703b2c2e73673b2c2e6d7b6c687b6c
-    /cdn-cgi\/l\/email-protection/,
-    // dash.cloudflare.com (Requires login)
-    /^https:\/\/dash\.cloudflare\.com/,
-    // Readme sends the internal link syntax from the server only updates it with JavaScript client-side 🤦
-    /^doc:/,
-    /^ref:/,
-    // And other readme bugs
-    /^https:\/\/dev\.fingerprint\.com\/recipes/,
-    /^https:\/\/dev\.fingerprint\.com\/discuss/,
-  ];
   return links.filter(
     (link) =>
-      isHttpUrl(link.href) && !patternsToFilterOut.some((pattern) => pattern.test(link.href)),
+      isHttpUrl(link.href) &&
+      !isHostToFilterOut(link.href) &&
+      !patternsToFilterOut.some((pattern) => pattern.test(link.href)),
   );
 }
 
