@@ -917,3 +917,15 @@ Non-test lines of `src/` (+ nothing else changes). Main 5205, port 5536 (the por
 - `bench/round.ts` is new: one round, only Node built-ins and dynamic imports of `../src`, so it runs inside a main checkout (`pnpm bench --base <dir>` copies it to `<dir>/.bench/`). It picks the Effect API (`src/app.ts`) or main's `src/run.ts` API. Remove `runLegacy` once main has the Effect version. `bench.ts` only drives the rounds and validates the round files with `Schema`.
 - Dropped test: "never falls back to the real GITHUB_STEP_SUMMARY / GITHUB_OUTPUT": the writers have no env fallback anymore (the file comes from `ActionsEnv` via `Config`, tests use `ConfigProvider.fromMap`). New cases: `saveReport`, multi-line output value dies and writes nothing, unreadable baseline file, `--host-concurrency` reaches the run layer, usage error output format, `--dry-run --json`, `runCli` smoke test.
 - `knip.jsonc`: the `src/website.ts` ignore entry can go now (the CLI imports it), left to the PIPELINE group to avoid a merge conflict.
+
+#### GITHUB group
+
+No signature changed. Implementation notes for STEP 3:
+
+- `GitHub.layer`: `githubCacheHits` uses `Cache.getEither` (Left = reused entry, also one still in flight) instead of `contains` + `get`: `contains` is also true for expired entries. Failed lookups other than "not found" are removed right after the lookup (`Cache` TTL zero is still valid in the same millisecond, so it cannot express "do not cache"). The caches have infinite TTL.
+- Cache keys lowercase owner and repo, so the API requests use the lowercased names (GitHub names are case-insensitive).
+- Real `GitHub` over `fakeFetch` is used in `gh_api.test.ts` (caches), `gh_content.test.ts` (ref resolution), `github_client.test.ts`. 5xx and 429 are not tested through it: Octokit's retry plugin retries them for about 14 s of real time. They are tested with `fakeGitHub` instead.
+- `gh_check_link.test.ts` has 2 `it.todo` (unknown account whose page exists / page answers 404 or 429): they need the real `checkLinkWithFetch` of the PIPELINE group. Port them with `fakeGitHub({ getUser: notFound })` + `fakeFetch` + `testRunLayer` in STEP 3 (verified against a throwaway fetch implementation).
+- `it.effect.each` is not in `vitest/no-standalone-expect`'s `additionalTestBlockFunctions` (`.oxlintrc.jsonc`), so `expect` inside it is a lint error. The GITHUB tests use `for` loops around `it.effect`. STEP 3 can add `it.effect.each` to the rule.
+- `knip.jsonc`: only the `exports` entry of `src/github/gh_get_links.ts` is left (`checkReadmesInGithubOrg`, `getGithubOrgSiteName` are used by the `cli.ts` stub's future code).
+- Integration tests use `runLive` and read `GH_TOKEN` from the environment only (`.env` is loaded by `runCli`, not here).
