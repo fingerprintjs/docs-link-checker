@@ -4,7 +4,7 @@ import { checkLinks } from "../link";
 import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
 import { timePhase } from "../run";
-import type { Link, LinkWithResult } from "../types";
+import type { Link } from "../types";
 import { processInParallel, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_api";
@@ -176,8 +176,8 @@ export const checkReadmesInGithubOrg = (
       getReadmesFromOrg(org, sampleRate),
     );
     const links = yield* timePhase("Extract links", getReadmeLinks(fingerprintPublicReadmes));
-    // TODO(effect): `checkLinks` is an Effect after phase 3
-    return yield* Effect.promise((): Promise<LinkWithResult[]> =>
-      checkLinks({ links: filterOutIrrelevantLinks(links), fetchConcurrencyLimit: 20 }),
-    );
+    return yield* checkLinks({
+      links: filterOutIrrelevantLinks(links),
+      fetchConcurrencyLimit: 20,
+    });
   });

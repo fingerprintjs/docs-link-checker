@@ -111,7 +111,7 @@ const formatPath = (path: ReadonlyArray<PropertyKey>) =>
  * Validates the parsed JSON of a baseline file. Accepts `{ "ignore": [...] }` or a bare array of entries.
  * Fails with a `BaselineError` pointing to the invalid entry.
  */
-export const validateBaseline = (data: unknown): Effect.Effect<BaselineFile, BaselineError> =>
+const validateBaseline = (data: unknown): Effect.Effect<BaselineFile, BaselineError> =>
   Schema.decodeUnknown(BaselineSchema, { onExcessProperty: "error", errors: "first" })(
     normalize(data),
   ).pipe(

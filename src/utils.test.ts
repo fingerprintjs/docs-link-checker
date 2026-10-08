@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { getSampleRate, parallelProcess, processInParallel, sampleItems } from "./utils";
+import { getSampleRate, processInParallel, sampleItems } from "./utils";
 
 let logSpy: MockInstance<typeof console.log>;
 let errorSpy: MockInstance<typeof console.error>;
@@ -15,7 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("parallelProcess() progress", () => {
+describe("processInParallel() progress", () => {
   it("logs progress while running and stops when done", async () => {
     vi.useFakeTimers();
     let resolve = () => {};
@@ -23,10 +23,12 @@ describe("parallelProcess() progress", () => {
       resolve = done;
     });
 
-    const run = parallelProcess({
-      items: [1, 2],
-      processFn: async (item) => (item === 2 ? slow : undefined),
-    });
+    const run = Effect.runPromise(
+      processInParallel({
+        items: [1, 2],
+        processFn: (item) => (item === 2 ? Effect.promise(() => slow) : Effect.void),
+      }),
+    );
     await vi.advanceTimersByTimeAsync(30000);
     expect(logSpy).toHaveBeenCalledWith("Progress: 1/2");
 
@@ -38,22 +40,22 @@ describe("parallelProcess() progress", () => {
   });
 });
 
-describe("parallelProcess() error logging", () => {
+describe("processInParallel() error logging", () => {
   it("logs the failed item and the error message (not [object Object])", async () => {
     const items = [
       { href: "https://example.com/ok", page: "https://example.com", text: "ok" },
       { href: "https://example.com/fails", page: "https://example.com/source", text: "fails" },
     ];
 
-    const { errors } = await parallelProcess({
-      items,
-      processFn: async (item) => {
-        if (item.href.endsWith("fails")) {
-          throw new Error("Something exploded");
-        }
-        return item;
-      },
-    });
+    const { errors } = await Effect.runPromise(
+      processInParallel({
+        items,
+        processFn: (item) =>
+          item.href.endsWith("fails")
+            ? Effect.fail(new Error("Something exploded"))
+            : Effect.succeed(item),
+      }),
+    );
 
     expect(errors).toHaveLength(1);
     const output = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
@@ -70,12 +72,12 @@ describe("parallelProcess() error logging", () => {
       expected: "https://github.com/org/repo/blob/main/README.md",
     },
   ])("names the failed $expected", async ({ item, expected }) => {
-    await parallelProcess({
-      items: [item],
-      processFn: async () => {
-        throw new Error("Something exploded");
-      },
-    });
+    await Effect.runPromise(
+      processInParallel({
+        items: [item],
+        processFn: () => Effect.fail(new Error("Something exploded")),
+      }),
+    );
     const output = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
     expect(output).toContain(`${expected}: Something exploded`);
   });

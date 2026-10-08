@@ -11,12 +11,7 @@ import { getJSONReport } from "./report/report";
 const mocks = vi.hoisted(() => ({ checkReadmesInGithubOrg: vi.fn() }));
 vi.mock("./github/gh_get_links", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./github/gh_get_links")>()),
-  // TODO(effect): convert, the mock returns an Effect of the Promise mock
-  checkReadmesInGithubOrg: (...args: unknown[]) =>
-    Effect.tryPromise({
-      try: () => mocks.checkReadmesInGithubOrg(...args),
-      catch: (error) => error,
-    }),
+  checkReadmesInGithubOrg: mocks.checkReadmesInGithubOrg,
 }));
 
 // Local site for the `site` command: a sitemap with one page linking to a working and two missing URLs
@@ -416,7 +411,7 @@ describe("runCli()", () => {
   });
 
   it("github-org: passes the organization and sample rate, names the report", async () => {
-    mocks.checkReadmesInGithubOrg.mockResolvedValue([]);
+    mocks.checkReadmesInGithubOrg.mockReturnValue(Effect.succeed([]));
     const outputDir = tempDir();
     expect(
       await runCli(["github-org", "org", "--sample-rate", "0.5", "--output-dir", outputDir], io()),
@@ -426,7 +421,7 @@ describe("runCli()", () => {
   });
 
   it("returns 1 when the check crashes", async () => {
-    mocks.checkReadmesInGithubOrg.mockRejectedValue(new Error("GitHub exploded"));
+    mocks.checkReadmesInGithubOrg.mockReturnValue(Effect.die(new Error("GitHub exploded")));
     expect(await runCli(["github-org", "org"], io())).toBe(1);
     expect(stderr).toContain("GitHub exploded");
   });

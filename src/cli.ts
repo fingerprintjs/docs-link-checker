@@ -1,18 +1,16 @@
 import { Console } from "node:console";
 import { resolve } from "node:path";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
+import { Cause, Effect, Either } from "effect";
+import { withApp } from "./app_layer";
 import {
   type Baseline,
-  BaselineError,
   DEFAULT_BASELINE_FILE,
   EMPTY_BASELINE,
   loadBaseline,
   updateBaseline,
   writeBaseline,
 } from "./baseline";
-// TODO(effect): convert
-// TODO(effect): convert
-import { runEffect, withRun } from "./effect_compat";
 import { checkReadmesInGithubOrg, getGithubOrgSiteName } from "./github/gh_get_links";
 import {
   describeResult,
@@ -31,7 +29,6 @@ import {
   type LinkCheckReport,
   saveReport,
 } from "./report/report";
-import type { LinkWithResult } from "./types";
 import { getSampleRate } from "./utils";
 import { getErrorMessage } from "./utils/errors";
 import { checkWebsite, createPrefixFilter } from "./website";
@@ -307,58 +304,50 @@ type CliIO = {
 };
 
 /** Checks the links of the command, `siteName` names the report */
-const checkCommandLinks = async (
-  command: CheckCommand,
-  cwd: string,
-): Promise<{ results: LinkWithResult[]; siteName: string }> => {
-  const { sampleRate } = command.options;
-  switch (command.command) {
-    case "site":
-      return {
-        results: await checkWebsite({
-          websiteUrl: command.url,
-          linkFilter: command.include.length > 0 ? createPrefixFilter(command.include) : undefined,
-          sampleRate,
-        }),
-        siteName: new URL(command.url).hostname,
-      };
-    case "github-org":
-      return {
-        results: await runEffect(checkReadmesInGithubOrg(command.org, { sampleRate })), // TODO(effect): convert
-        siteName: getGithubOrgSiteName(command.org),
-      };
-    case "files":
-      return {
-        results: await checkLocalFiles({ patterns: command.patterns, cwd, sampleRate }),
-        siteName: LOCAL_FILES_SITE_NAME,
-      };
-  }
-};
+const checkCommandLinks = (command: CheckCommand, cwd: string) =>
+  Effect.gen(function* () {
+    const { sampleRate } = command.options;
+    switch (command.command) {
+      case "site":
+        return {
+          results: yield* checkWebsite({
+            websiteUrl: command.url,
+            linkFilter:
+              command.include.length > 0 ? createPrefixFilter(command.include) : undefined,
+            sampleRate,
+          }),
+          siteName: new URL(command.url).hostname,
+        };
+      case "github-org":
+        return {
+          results: yield* checkReadmesInGithubOrg(command.org, { sampleRate }),
+          siteName: getGithubOrgSiteName(command.org),
+        };
+      case "files":
+        return {
+          results: yield* checkLocalFiles({ patterns: command.patterns, cwd, sampleRate }),
+          siteName: LOCAL_FILES_SITE_NAME,
+        };
+    }
+  });
 
 /**
- * Runs the check as a single run (see `withRun`) and does what all commands share:
+ * Runs the check as a single run (see `withApp`) and does what all commands share:
  * builds and saves the report, logs the summary and the duration.
  */
-const runCommand = (
-  command: CheckCommand,
-  baseline: Baseline,
-  cwd: string,
-  env: Env,
-): Promise<LinkCheckReport> => {
-  const { outputDir, hostConcurrency } = command.options;
-  return withRun({ hostConcurrency }, async () => {
+const runCommand = (command: CheckCommand, baseline: Baseline, cwd: string, env: Env) =>
+  Effect.gen(function* () {
     const startTime = performance.now();
-    const { results, siteName } = await checkCommandLinks(command, cwd);
+    const { results, siteName } = yield* checkCommandLinks(command, cwd);
 
     const report = getJSONReport({ links: results, siteName, baseline });
-    saveReport(report, outputDir, {
+    saveReport(report, command.options.outputDir, {
       sourceBaseUrl: command.command === "files" ? getGithubBlobBaseUrl(env, cwd) : undefined,
     });
     console.log(report.summary);
     console.log(`Finished in ${(performance.now() - startTime) / 1000} seconds.`);
     return report;
-  });
-};
+  }).pipe(withApp({ hostConcurrency: command.options.hostConcurrency }));
 
 /** Local, compiler-like list of links to fix: `docs/a.md:7: broken link: docs/missing.md (File not found...)` */
 export const formatFileProblems = (report: LinkCheckReport): string[] =>
@@ -370,40 +359,39 @@ export const formatFileProblems = (report: LinkCheckReport): string[] =>
   });
 
 /** `--dry-run` of the files command: lists the links found, checks nothing */
-const runDryRun = async (
+const runDryRun = (
   command: Extract<CheckCommand, { command: "files" }>,
   { env, cwd, stdout }: RunContext,
-) => {
-  const { options } = command;
-  const collected = await collectLinksFromFiles({
-    patterns: command.patterns,
-    cwd,
-    sampleRate: options.sampleRate,
-  });
-  if (options.json) {
-    stdout(`${JSON.stringify(collected, null, 2)}\n`);
-  } else {
-    const groups = [
-      ["local", collected.local],
-      ["external", collected.external],
-      ["skipped", collected.skipped],
-    ] as const;
-    for (const [kind, links] of groups) {
-      for (const link of links) {
-        stdout(`${kind}\t${formatLocation(link)}\t${link.href}\n`);
+) =>
+  Effect.gen(function* () {
+    const { options } = command;
+    const collected = yield* collectLinksFromFiles({
+      patterns: command.patterns,
+      cwd,
+      sampleRate: options.sampleRate,
+    });
+    if (options.json) {
+      stdout(`${JSON.stringify(collected, null, 2)}\n`);
+    } else {
+      const groups = [
+        ["local", collected.local],
+        ["external", collected.external],
+        ["skipped", collected.skipped],
+      ] as const;
+      for (const [kind, links] of groups) {
+        for (const link of links) {
+          stdout(`${kind}\t${formatLocation(link)}\t${link.href}\n`);
+        }
       }
+      stdout(
+        `${collected.files.length} files, ${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped links.\n`,
+      );
     }
-    stdout(
-      `${collected.files.length} files, ${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped links.\n`,
-    );
-  }
-  await runEffect(
-    writeGithubOutputs(
+    yield* writeGithubOutputs(
       { "local-links": collected.local.length, "external-links": collected.external.length },
       env.GITHUB_OUTPUT,
-    ),
-  );
-};
+    );
+  });
 
 /** Exit code for the links to fix: 1 only when failing on broken links and not updating the baseline */
 const getExitCode = (linksToFix: number, options: CommonOptions): number => {
@@ -424,92 +412,93 @@ const getExitCode = (linksToFix: number, options: CommonOptions): number => {
   return 0;
 };
 
-const runCheckCommand = async (command: CheckCommand, context: RunContext): Promise<number> => {
-  const { options } = command;
-  const { env, stdout, stderr } = context;
+/** @returns the exit code */
+const runCheckCommand = (command: CheckCommand, context: RunContext) =>
+  Effect.gen(function* () {
+    const { options } = command;
+    const { env, stdout, stderr } = context;
 
-  // Relative to `cwd` like the file globs
-  const baselinePath = options.baseline && resolve(context.cwd, options.baseline);
-  let baseline = EMPTY_BASELINE;
-  if (baselinePath) {
-    try {
-      baseline = await runEffect(
-        loadBaseline(baselinePath, { allowMissing: options.updateBaseline }),
-      );
-    } catch (error) {
-      if (error instanceof BaselineError) {
-        stderr(`Error: ${error.message}\n`);
+    // Relative to `cwd` like the file globs
+    const baselinePath = options.baseline && resolve(context.cwd, options.baseline);
+    let baseline = EMPTY_BASELINE;
+    if (baselinePath) {
+      const loaded = yield* loadBaseline(baselinePath, {
+        allowMissing: options.updateBaseline,
+      }).pipe(Effect.either);
+      if (Either.isLeft(loaded)) {
+        stderr(`Error: ${loaded.left.message}\n`);
         return 2;
       }
-      throw error;
+      baseline = loaded.right;
+      console.log(`Using baseline ${options.baseline} (${baseline.entries.length} entries).`);
     }
-    console.log(`Using baseline ${options.baseline} (${baseline.entries.length} entries).`);
-  }
 
-  if (command.command === "files" && command.dryRun) {
-    await runDryRun(command, context);
-    return 0;
-  }
-
-  const report = await runCommand(command, baseline, context.cwd, env);
-  const reportPaths = getReportPaths(report.siteName, options.outputDir);
-  const linksToFix = report.summary.totalLinksToFix;
-
-  if (command.command === "files" && command.annotations) {
-    // Workflow commands (annotations) are read from stdout, keep them off it only in --json mode
-    const annotationOut = options.json ? stderr : stdout;
-    const problems =
-      env.GITHUB_ACTIONS === "true" ? getFileAnnotations(report) : formatFileProblems(report);
-    for (const line of problems) {
-      annotationOut(`${line}\n`);
+    if (command.command === "files" && command.dryRun) {
+      yield* runDryRun(command, context);
+      return 0;
     }
-  }
-  await runEffect(writeJobSummary(report, { reportPaths }, env.GITHUB_STEP_SUMMARY));
-  await runEffect(
-    writeGithubOutputs(
+
+    const report = yield* runCommand(command, baseline, context.cwd, env);
+    const reportPaths = getReportPaths(report.siteName, options.outputDir);
+    const linksToFix = report.summary.totalLinksToFix;
+
+    if (command.command === "files" && command.annotations) {
+      // Workflow commands (annotations) are read from stdout, keep them off it only in --json mode
+      const annotationOut = options.json ? stderr : stdout;
+      const problems =
+        env.GITHUB_ACTIONS === "true" ? getFileAnnotations(report) : formatFileProblems(report);
+      for (const line of problems) {
+        annotationOut(`${line}\n`);
+      }
+    }
+    yield* writeJobSummary(report, { reportPaths }, env.GITHUB_STEP_SUMMARY);
+    yield* writeGithubOutputs(
       {
         "links-to-fix": linksToFix,
         "report-path": reportPaths.json,
         "report-html-path": reportPaths.html,
       },
       env.GITHUB_OUTPUT,
-    ),
-  );
-
-  if (options.updateBaseline && baselinePath) {
-    const file = updateBaseline({
-      baseline,
-      failures: [...getLinksToFix(report), ...report.ignored],
-      // A run can check only part of what the baseline covers (file globs, --include, sampling),
-      // entries are only removed when asked for
-      prune: options.pruneBaseline,
-    });
-    await runEffect(writeBaseline(baselinePath, file));
-    console.log(
-      `Updated baseline ${options.baseline}: ${file.ignore.length} entries (was ${baseline.entries.length}).`,
     );
-  }
 
-  if (options.json) {
-    stdout(`${JSON.stringify(report, null, 2)}\n`);
-  }
+    if (options.updateBaseline && baselinePath) {
+      const file = updateBaseline({
+        baseline,
+        failures: [...getLinksToFix(report), ...report.ignored],
+        // A run can check only part of what the baseline covers (file globs, --include, sampling),
+        // entries are only removed when asked for
+        prune: options.pruneBaseline,
+      });
+      yield* writeBaseline(baselinePath, file);
+      console.log(
+        `Updated baseline ${options.baseline}: ${file.ignore.length} entries (was ${baseline.entries.length}).`,
+      );
+    }
 
-  return getExitCode(linksToFix, options);
-};
+    if (options.json) {
+      stdout(`${JSON.stringify(report, null, 2)}\n`);
+    }
 
-/** Runs `fn` with the process set up for the options: with --json, console output goes to stderr (restored at the end) */
-const withCliEnvironment = async <T>(options: CommonOptions, fn: () => Promise<T>): Promise<T> => {
-  const originalConsole = globalThis.console;
-  if (options.json) {
-    // stdout only gets the JSON report: send all logs (console.log, console.table...) to stderr
-    globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
-  }
-  try {
-    return await fn();
-  } finally {
-    globalThis.console = originalConsole;
-  }
-};
+    return getExitCode(linksToFix, options);
+  });
+
+/** Runs `effect` with the process set up for the options: with --json, console output goes to stderr (restored at the end) */
+const withCliEnvironment =
+  (options: CommonOptions) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.suspend(() => {
+      const originalConsole = globalThis.console;
+      if (options.json) {
+        // stdout only gets the JSON report: send all logs (console.log, console.table...) to stderr
+        globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
+      }
+      return Effect.ensuring(
+        effect,
+        Effect.sync(() => {
+          globalThis.console = originalConsole;
+        }),
+      );
+    });
 
 /**
  * Runs the CLI. Never throws: errors are printed and turned into the exit code.
@@ -524,17 +513,28 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
   };
 
   let exitCode = 0;
+  // The only place where the Effect program starts: one run per command
   const run = (command: CheckCommand) =>
-    withCliEnvironment(command.options, async () => {
-      try {
-        exitCode = await runCheckCommand(command, context);
-      } catch (error) {
-        context.stderr(
-          `Error: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-        );
-        exitCode = 1;
-      }
-    });
+    Effect.runPromise(
+      runCheckCommand(command, context).pipe(
+        Effect.catchAllCause((cause) =>
+          Effect.sync(() => {
+            const error = Cause.squash(cause);
+            context.stderr(
+              `Error: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+            );
+            return 1;
+          }),
+        ),
+        withCliEnvironment(command.options),
+        Effect.tap((code) =>
+          Effect.sync(() => {
+            exitCode = code;
+          }),
+        ),
+        Effect.asVoid,
+      ),
+    );
 
   try {
     await buildProgram(context, run).parseAsync(argv, { from: "user" });

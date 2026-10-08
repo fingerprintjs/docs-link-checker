@@ -1,16 +1,35 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { glob } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-// TODO(effect): convert
-import { timePhase } from "./effect_compat";
+import { Data, Effect } from "effect";
 import { safeDecode } from "./github/gh_url";
 import { decodeHash } from "./hash";
 import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
 import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "./markdown";
 import { filterOutIrrelevantLinks } from "./page";
+import { timePhase } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { compareStrings, sampleItems } from "./utils";
+import { getErrorMessage } from "./utils/errors";
+
+/** Reading the files failed (permissions, a file removed while checking...) */
+class LocalFilesError extends Data.TaggedError("LocalFilesError")<{
+  readonly cause: unknown;
+}> {
+  override get message() {
+    return getErrorMessage(this.cause);
+  }
+}
+
+/** The patterns match no markdown file (probably a typo, checking nothing would pass silently) */
+class NoMarkdownFilesError extends Data.TaggedError("NoMarkdownFilesError")<{
+  readonly patterns: string[];
+}> {
+  override get message() {
+    return `No markdown files match ${this.patterns.map((p) => `"${p}"`).join(", ")}.`;
+  }
+}
 
 /** Report name of the `files` command */
 export const LOCAL_FILES_SITE_NAME = "local files";
@@ -27,21 +46,25 @@ const toPosixPath = (path: string) => path.split(sep).join("/");
  * Expands glob patterns (and plain file paths) to markdown files, relative to `cwd`, sorted and deduplicated.
  * `node_modules` and `.git` are skipped, non-markdown files are ignored.
  */
-const findMarkdownFiles = async (patterns: string[], cwd: string): Promise<string[]> => {
-  const files = new Set<string>();
-  for (const pattern of patterns) {
-    for await (const match of glob(pattern, {
-      cwd,
-      exclude: (path) => IGNORED_DIRECTORIES.has(basename(path)),
-    })) {
-      const absolutePath = resolve(cwd, match);
-      if (isMarkdownFile(absolutePath) && statSync(absolutePath).isFile()) {
-        files.add(toPosixPath(relative(cwd, absolutePath)));
+const findMarkdownFiles = (patterns: string[], cwd: string) =>
+  Effect.tryPromise({
+    try: async () => {
+      const files = new Set<string>();
+      for (const pattern of patterns) {
+        for await (const match of glob(pattern, {
+          cwd,
+          exclude: (path) => IGNORED_DIRECTORIES.has(basename(path)),
+        })) {
+          const absolutePath = resolve(cwd, match);
+          if (isMarkdownFile(absolutePath) && statSync(absolutePath).isFile()) {
+            files.add(toPosixPath(relative(cwd, absolutePath)));
+          }
+        }
       }
-    }
-  }
-  return [...files].toSorted();
-};
+      return [...files].toSorted();
+    },
+    catch: (cause) => new LocalFilesError({ cause }),
+  });
 
 type LinkKind = "local" | "external" | "skip";
 
@@ -214,7 +237,7 @@ export const checkLocalLink = (
   return lineResult ?? { ok: true, status: 200, note: "Hash not checked (not a markdown file)" };
 };
 
-export type CollectedLinks = {
+type CollectedLinks = {
   files: string[];
   /** Relative links and anchors, checked on the filesystem */
   local: Link[];
@@ -226,9 +249,9 @@ export type CollectedLinks = {
 
 /**
  * Finds markdown files matching `patterns` (relative to `cwd`) and extracts their links, grouped by kind.
- * @throws {Error} if no markdown file matches the patterns (probably a typo, checking nothing would pass silently)
+ * Fails with `NoMarkdownFilesError` if nothing matches.
  */
-export const collectLinksFromFiles = async ({
+export const collectLinksFromFiles = ({
   patterns,
   cwd,
   sampleRate,
@@ -236,36 +259,40 @@ export const collectLinksFromFiles = async ({
   patterns: string[];
   cwd: string;
   sampleRate?: number;
-}): Promise<CollectedLinks> => {
-  const allFiles = await findMarkdownFiles(patterns, cwd);
-  if (allFiles.length === 0) {
-    throw new Error(`No markdown files match ${patterns.map((p) => `"${p}"`).join(", ")}.`);
-  }
-  const files = sampleItems({
-    items: allFiles,
-    key: (file) => file,
-    rate: sampleRate,
-    label: "files",
-  });
-  const collected: CollectedLinks = { files, local: [], external: [], skipped: [] };
-  for (const file of files) {
-    const markdown = readFileSync(resolve(cwd, file), "utf8");
-    for (const { href, text, line } of extractMarkdownLinks(markdown)) {
-      const kind = getLinkKind(href);
-      const link: Link = {
-        page: file,
-        // Protocol-relative links (`//example.com`) are checked over https
-        href: kind === "external" && href.startsWith("//") ? `https:${href}` : href,
-        text,
-        ...(line ? { line } : {}),
-      };
-      if (kind === "local") collected.local.push(link);
-      else if (kind === "external") collected.external.push(link);
-      else collected.skipped.push(link);
+}) =>
+  Effect.gen(function* () {
+    const allFiles = yield* findMarkdownFiles(patterns, cwd);
+    if (allFiles.length === 0) {
+      return yield* new NoMarkdownFilesError({ patterns });
     }
-  }
-  return collected;
-};
+    const files = sampleItems({
+      items: allFiles,
+      key: (file) => file,
+      rate: sampleRate,
+      label: "files",
+    });
+    const collected: CollectedLinks = { files, local: [], external: [], skipped: [] };
+    for (const file of files) {
+      const markdown = yield* Effect.try({
+        try: () => readFileSync(resolve(cwd, file), "utf8"),
+        catch: (cause) => new LocalFilesError({ cause }),
+      });
+      for (const { href, text, line } of extractMarkdownLinks(markdown)) {
+        const kind = getLinkKind(href);
+        const link: Link = {
+          page: file,
+          // Protocol-relative links (`//example.com`) are checked over https
+          href: kind === "external" && href.startsWith("//") ? `https:${href}` : href,
+          text,
+          ...(line ? { line } : {}),
+        };
+        if (kind === "local") collected.local.push(link);
+        else if (kind === "external") collected.external.push(link);
+        else collected.skipped.push(link);
+      }
+    }
+    return collected;
+  });
 
 type CheckLocalFilesArgs = {
   /** Glob patterns or file paths, relative to `cwd` */
@@ -281,28 +308,26 @@ type CheckLocalFilesArgs = {
  * absolute links with the usual `checkLinks` pipeline (fetch, GitHub API, Playwright).
  * Must run inside `runCommand` (`src/cli.ts`), which builds the report.
  */
-export const checkLocalFiles = async ({
-  patterns,
-  cwd,
-  sampleRate,
-}: CheckLocalFilesArgs): Promise<LinkWithResult[]> => {
-  const root = isAbsolute(cwd) ? cwd : resolve(cwd);
-  const collected = await timePhase("Extract links", () =>
-    collectLinksFromFiles({ patterns, cwd: root, sampleRate }),
-  );
-  console.log(
-    `Found ${collected.local.length + collected.external.length} links in ${collected.files.length} files ` +
-      `(${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped).`,
-  );
+export const checkLocalFiles = ({ patterns, cwd, sampleRate }: CheckLocalFilesArgs) =>
+  Effect.gen(function* () {
+    const root = isAbsolute(cwd) ? cwd : resolve(cwd);
+    const collected = yield* timePhase(
+      "Extract links",
+      collectLinksFromFiles({ patterns, cwd: root, sampleRate }),
+    );
+    console.log(
+      `Found ${collected.local.length + collected.external.length} links in ${collected.files.length} files ` +
+        `(${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped).`,
+    );
 
-  const anchorCache = new Map<string, Set<string>>();
-  const localResults: LinkWithResult[] = collected.local.map((link) => ({
-    ...link,
-    result: checkLocalLink(resolve(root, link.page), link.href, { root, anchorCache }),
-  }));
+    const anchorCache = new Map<string, Set<string>>();
+    const localResults: LinkWithResult[] = collected.local.map((link) => ({
+      ...link,
+      result: checkLocalLink(resolve(root, link.page), link.href, { root, anchorCache }),
+    }));
 
-  const externalLinks = filterOutIrrelevantLinks(collected.external);
-  const externalResults =
-    externalLinks.length > 0 ? await checkLinks({ links: externalLinks }) : [];
-  return [...localResults, ...externalResults];
-};
+    const externalLinks = filterOutIrrelevantLinks(collected.external);
+    const externalResults =
+      externalLinks.length > 0 ? yield* checkLinks({ links: externalLinks }) : [];
+    return [...localResults, ...externalResults];
+  });

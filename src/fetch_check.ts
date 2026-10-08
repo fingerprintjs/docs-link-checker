@@ -20,7 +20,7 @@ import type { LinkCheckResult } from "./types";
 /**
  * Result of fetching a page (URL without hash): either a final failure, or the status and the anchors of the page.
  */
-export type FetchedPage =
+type FetchedPage =
   | { ok: true; status: number; getAnchors?: () => AnchorIndex }
   | { ok: false; result: LinkCheckResult };
 

@@ -1,7 +1,8 @@
-import { afterAll, describe, expect, it } from "vitest";
-// TODO(effect): convert
-import { closeRunBrowser, getRunContext, runEffect, withRun } from "./effect_compat";
-import { checkLinkWithFetch } from "./fetch_check";
+import { Effect } from "effect";
+import { describe, expect, it } from "vitest";
+import { withApp } from "./app_layer";
+import { checkLinkWithFetch as checkLinkWithFetchEffect } from "./fetch_check";
+import type { GitHubServices } from "./github/github_client";
 import { checkLinks } from "./link";
 import {
   checkUrlsOnPageWithPlaywright,
@@ -9,12 +10,16 @@ import {
   HASH_WAIT_TIMEOUT,
   PAGE_OPERATION_TIMEOUT,
 } from "./playwright_check";
+import { Metrics, type RunServices } from "./run";
+
+/** Runs an Effect in its own run (own cache, limiter and browser, closed at the end) */
+const run = <A, E>(effect: Effect.Effect<A, E, RunServices | GitHubServices>) =>
+  Effect.runPromise(effect.pipe(withApp()));
+
+const checkLinkWithFetch = (url: string) => run(checkLinkWithFetchEffect(url));
 
 const checkLinkWithPlaywright = async (url: string) =>
-  (await runEffect(checkUrlsOnPageWithPlaywright([url]))).get(url)!; // TODO(effect): convert
-
-// Checks outside of a run share one browser, close it when done
-afterAll(closeRunBrowser);
+  (await run(checkUrlsOnPageWithPlaywright([url]))).get(url)!;
 
 // Retries of a navigation answered with 502/503/504 (GitHub under load): up to 2 retries, each waiting at most 10s
 // (see http.ts), plus the navigation
@@ -144,10 +149,13 @@ describe("checkLinks() GitHub code line links", () => {
         text: "link",
       }));
 
-      const { results, metrics } = await withRun({}, async () => {
-        const checked = await checkLinks({ links });
-        return { results: checked, metrics: { ...getRunContext()!.metrics.counters } };
-      });
+      const { results, metrics } = await run(
+        Effect.gen(function* () {
+          const checked = yield* checkLinks({ links });
+          const { counters } = yield* Effect.flatMap(Metrics, (m) => m.snapshot);
+          return { results: checked, metrics: counters };
+        }),
+      );
 
       const resultFor = (hash: string) => results.find((r) => r.href === `${file}${hash}`)?.result;
       expect(resultFor("#L3")).toEqual({ ok: true, status: 200 });

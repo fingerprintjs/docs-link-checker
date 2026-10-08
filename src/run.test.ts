@@ -1,13 +1,5 @@
 import { Effect, Either } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// TODO(effect): convert
-import {
-  getHostLimiter as getPromiseHostLimiter,
-  getRunContext,
-  incrementMetric as incrementPromiseMetric,
-  runCached as runCachedPromise,
-  withRun as withPromiseRun,
-} from "./effect_compat";
 import { HostLimiter } from "./limiter";
 import { incrementMetric, runCached, type RunServices, timePhase, withRun } from "./run";
 
@@ -152,30 +144,5 @@ describe("runCached()", () => {
     );
 
     expect(results).toEqual(Array(3).fill(Either.left("nope")));
-  });
-});
-
-// TODO(effect): remove with `effect_compat.ts`
-describe("Promise run (effect_compat)", () => {
-  it("nested runs join the outer run", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    await withPromiseRun({}, async () => {
-      const outer = getRunContext();
-      await withPromiseRun({}, async () => {
-        expect(getRunContext()).toBeDefined();
-        expect(getPromiseHostLimiter()).toBe(getPromiseHostLimiter());
-      });
-      expect(getRunContext()).toBeDefined();
-      expect(outer).toBeDefined();
-    });
-    expect(getRunContext()).toBeUndefined();
-  });
-
-  it("metrics and caching are no-ops outside of a run", async () => {
-    incrementPromiseMetric("totalLinks");
-    const fn = vi.fn(async () => 1);
-    await runCachedPromise("key", fn);
-    await runCachedPromise("key", fn);
-    expect(fn).toHaveBeenCalledTimes(2);
   });
 });

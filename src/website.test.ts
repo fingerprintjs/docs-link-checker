@@ -1,6 +1,11 @@
 import { createServer, type Server } from "node:http";
+import { Effect } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkWebsite, createPrefixFilter } from "./website";
+import { withApp } from "./app_layer";
+import { checkWebsite as checkWebsiteEffect, createPrefixFilter } from "./website";
+
+const checkWebsite = (args: Parameters<typeof checkWebsiteEffect>[0]) =>
+  Effect.runPromise(checkWebsiteEffect(args).pipe(withApp()));
 
 const PAGE_COUNT = 20;
 

@@ -1,6 +1,6 @@
 /**
  * Speed benchmark: checks the links of `bench/corpus.json`, optionally A/B against another checkout.
- * CI: `.github/workflows/benchmark.yaml`.
+ * See the "Benchmark" section of README.md.
  *
  *   pnpm bench                     benchmark the current tree
  *   pnpm bench --base <dir>        A/B against another checkout (e.g. a `git worktree` of main)
@@ -26,10 +26,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-// TODO(effect): convert
-import { getRunContext, withRun } from "../src/effect_compat";
+import { Effect } from "effect";
+import { withApp } from "../src/app_layer";
 import { checkLinks } from "../src/link";
-import type { RunMetrics } from "../src/run";
+import { Metrics, type RunMetrics } from "../src/run";
 import corpus from "./corpus.json";
 
 // `outcomes`: href -> "ok" or the error kind
@@ -58,21 +58,20 @@ const isRound = (value: unknown): value is Round =>
 const runRound = async (outFile: string) => {
   const start = performance.now();
   const outcomes: Record<string, string> = {};
-  const metrics = await withRun({}, async () => {
-    const results = await checkLinks({ links: corpus });
-    const context = getRunContext();
-    if (!context) {
-      throw new Error("No run context inside withRun");
-    }
-    // Counted like the other counters, so the report shows if a speed change altered results
-    for (const { href, result } of results) {
-      const outcome = result.ok ? "ok" : result.error;
-      outcomes[href] = outcome;
-      const name = `result: ${outcome}`;
-      context.metrics.counters[name] = (context.metrics.counters[name] ?? 0) + 1;
-    }
-    return context.metrics;
-  });
+  const metrics = await Effect.runPromise(
+    Effect.gen(function* () {
+      const results = yield* checkLinks({ links: corpus });
+      const snapshot = yield* Effect.flatMap(Metrics, (m) => m.snapshot);
+      // Counted like the other counters, so the report shows if a speed change altered results
+      for (const { href, result } of results) {
+        const outcome = result.ok ? "ok" : result.error;
+        outcomes[href] = outcome;
+        const name = `result: ${outcome}`;
+        snapshot.counters[name] = (snapshot.counters[name] ?? 0) + 1;
+      }
+      return snapshot;
+    }).pipe(withApp()),
+  );
   const round: Round = { totalMs: performance.now() - start, metrics, outcomes };
   writeFileSync(outFile, JSON.stringify(round));
 };

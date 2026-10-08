@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
+import { Effect, Fiber } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// TODO(effect): convert
-import { getHostLimiter, getRunContext, runEffect, withRun } from "./effect_compat";
+import { withApp } from "./app_layer";
+import type { GitHubServices } from "./github/github_client";
+import { HostLimiter } from "./limiter";
+import { Metrics, type RunConfig, type RunServices } from "./run";
 import type { LinkCheckResult } from "./types";
 
 /**
@@ -43,10 +46,10 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
 }));
 
 vi.mock("./github/gh_check_link", async () => {
-  const { Effect } = await import("effect");
+  const effect = await import("effect");
   return {
-    // TODO(effect): convert, the mock returns an Effect of the Promise mock
-    checkLinkWithGithubApi: (url: string) => Effect.promise(() => checkLinkWithGithubApiMock(url)),
+    checkLinkWithGithubApi: (url: string) =>
+      effect.Effect.promise(() => checkLinkWithGithubApiMock(url)),
   };
 });
 
@@ -133,12 +136,16 @@ vi.mock("playwright", () => ({
 }));
 
 import { checkLinkWithFetch as checkLinkWithFetchEffect } from "./fetch_check";
-import { checkLinks, interleaveByHost } from "./link";
+import { checkLinks as checkLinksEffect, interleaveByHost } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 
-// TODO(effect): convert. A run of its own per call (nested in `withRun` it joins that run), so tests do not share cached pages
-const checkLinkWithFetch = (url: string) =>
-  withRun({}, () => runEffect(checkLinkWithFetchEffect(url)));
+/** Runs an Effect as a run of its own, so tests do not share cached pages, host pauses or the browser */
+const run = <A, E>(effect: Effect.Effect<A, E, RunServices | GitHubServices>, config?: RunConfig) =>
+  Effect.runPromise(effect.pipe(withApp(config)));
+
+const checkLinkWithFetch = (url: string) => run(checkLinkWithFetchEffect(url));
+const checkLinks = (args: Parameters<typeof checkLinksEffect>[0], config?: RunConfig) =>
+  run(checkLinksEffect(args), config);
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -155,12 +162,12 @@ const stubFetch = (handler: FetchHandler) => {
 const link = (href: string, page = "https://example.com/page") => ({ href, page, text: "link" });
 
 const checkLinkWithPlaywright = async (url: string) =>
-  (await runEffect(checkUrlsOnPageWithPlaywright([url]))).get(url)!; // TODO(effect): convert
+  (await run(checkUrlsOnPageWithPlaywright([url]))).get(url)!;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Runs `check` in its own run (host pauses of server errors don't leak into other tests) with fake timers.
+ * Runs `check` (a run of its own, see `run`) with fake timers.
  * A missing anchor takes its whole wait, like in a real browser.
  * Returns the result and how long it took (simulated time).
  */
@@ -170,7 +177,7 @@ const withFakeTimers = async <T>(check: () => Promise<T>) => {
     playwrightState.waitForTakesTimeout = true;
     const start = Date.now();
     let finishedAt = Number.NaN;
-    const promise = withRun({}, check).then((r) => {
+    const promise = check().then((r) => {
       finishedAt = Date.now();
       return r;
     });
@@ -849,10 +856,15 @@ describe("server errors (502, 503, 504)", () => {
   });
 
   it("Playwright: waits for a host pause (e.g. set by a fetch server error) before navigating", async () => {
-    const { result, took } = await withFakeTimers(async () => {
-      getHostLimiter().pause("https://busy.example.com/", 3000);
-      return checkLinkWithPlaywright("https://busy.example.com/page");
-    });
+    const { result, took } = await withFakeTimers(() =>
+      run(
+        Effect.gen(function* () {
+          const url = "https://busy.example.com/page";
+          yield* (yield* HostLimiter).pause(url, 3000);
+          return (yield* checkUrlsOnPageWithPlaywright([url])).get(url)!;
+        }),
+      ),
+    );
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(took).toBe(3000);
@@ -868,23 +880,31 @@ describe("server errors (502, 503, 504)", () => {
     vi.useFakeTimers();
     let result: { checked: LinkCheckResult; firstWait: number; finalWait: number; took: number };
     try {
-      result = await withRun({}, async () => {
-        const limiter = getHostLimiter();
-        const start = Date.now();
-        const checked = checkLinkWithPlaywright(url).then((r) => ({ r, took: Date.now() - start }));
-        await vi.advanceTimersByTimeAsync(1);
-        // How long a request to each host waits now: only the final URL's host is paused (not the navigated URL's)
-        const waitFor = async (target: string) => {
-          const waitStart = Date.now();
-          await limiter.waitUntilResumed(target);
-          return Date.now() - waitStart;
-        };
-        const firstWait = await waitFor(url);
-        const finalWait = waitFor(final);
-        await vi.advanceTimersByTimeAsync(10_000);
-        const { r, took } = await checked;
-        return { checked: r, took, firstWait, finalWait: await finalWait };
-      });
+      result = await run(
+        Effect.gen(function* () {
+          const limiter = yield* HostLimiter;
+          const start = Date.now();
+          const checked = yield* Effect.fork(
+            Effect.map(checkUrlsOnPageWithPlaywright([url]), (results) => ({
+              r: results.get(url)!,
+              took: Date.now() - start,
+            })),
+          );
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1));
+          // How long a request to each host waits now: only the final URL's host is paused (not the navigated URL's)
+          const waitFor = (target: string) =>
+            Effect.gen(function* () {
+              const waitStart = Date.now();
+              yield* limiter.waitUntilResumed(target);
+              return Date.now() - waitStart;
+            });
+          const firstWait = yield* waitFor(url);
+          const finalWait = yield* Effect.fork(waitFor(final));
+          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10_000));
+          const { r, took } = yield* Fiber.join(checked);
+          return { checked: r, took, firstWait, finalWait: yield* Fiber.join(finalWait) };
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -913,8 +933,7 @@ describe("checkLinks() per-host limit", () => {
       ...Array.from({ length: 5 }, (_, i) => `https://quiet.example.com/page-${i}`),
     ].map((href) => link(href));
 
-    // checkLinks() joins the run, so the host concurrency comes from the run config
-    const results = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
+    const results = await checkLinks({ links }, { hostConcurrency: 3 });
 
     expect(results).toHaveLength(35);
     expect(results.every((r) => r.result.ok)).toBe(true);
@@ -925,10 +944,12 @@ describe("checkLinks() per-host limit", () => {
 
 describe("checkLinks() metrics", () => {
   const countersOf = (links: ReturnType<typeof link>[]) =>
-    withRun({}, async () => {
-      await checkLinks({ links });
-      return getRunContext()!.metrics.counters;
-    });
+    run(
+      Effect.gen(function* () {
+        yield* checkLinksEffect({ links });
+        return (yield* Effect.flatMap(Metrics, (metrics) => metrics.snapshot)).counters;
+      }),
+    );
 
   it("counts total links, unique URLs, unique pages and page fetches", async () => {
     stubFetch(() => new Response('<a id="a"></a><a id="b"></a>', { status: 200 }));

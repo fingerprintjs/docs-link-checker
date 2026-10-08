@@ -23,6 +23,7 @@
 - `src/github/gh_get_links.ts`. `github-org`
 - `src/local_files.ts`. `files`
 - `src/link.ts`. Shared check pipeline
+- `src/run.ts`, `src/app_layer.ts`. Services of a run (limiter, cache, browser, metrics, GitHub client). See [EFFECT_NOTES.md](EFFECT_NOTES.md)
 - `src/fetch_check.ts`, `src/playwright_check.ts`. One link
 - `src/github/`. GitHub URL and blob checks
 - `src/baseline.ts`. Ignore file

@@ -1,7 +1,5 @@
 import { Effect, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// TODO(effect): convert, used for `checkLinks`
-import { closeRunBrowser } from "./effect_compat";
 
 /**
  * Offline tests for the shared browser (`browser.ts`) with a fake Playwright.
@@ -112,14 +110,18 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
+import { withApp } from "./app_layer";
 import { PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
-import { checkLinks } from "./link";
+import type { GitHubServices } from "./github/github_client";
+import { checkLinks as checkLinksEffect } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { type RunServices, withRun } from "./run";
+import type { RunServices } from "./run";
 
 /** Runs the effect as its own run (own browser, closed at the end) */
-const inRun = <A, E>(effect: Effect.Effect<A, E, RunServices>) =>
-  Effect.runPromise(effect.pipe(withRun()));
+const inRun = <A, E>(effect: Effect.Effect<A, E, RunServices | GitHubServices>) =>
+  Effect.runPromise(effect.pipe(withApp()));
+
+const checkLinks = (args: Parameters<typeof checkLinksEffect>[0]) => inRun(checkLinksEffect(args));
 
 const launchBrowser = withPage(() => Effect.void, { timeout: 1000 });
 
@@ -128,8 +130,7 @@ const checkLinkWithPlaywright = (url: string) =>
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
-beforeEach(async () => {
-  await closeRunBrowser();
+beforeEach(() => {
   Object.assign(state, {
     launches: 0,
     closes: 0,
@@ -150,8 +151,7 @@ beforeEach(async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-afterEach(async () => {
-  await closeRunBrowser();
+afterEach(() => {
   vi.restoreAllMocks();
 });
 

@@ -104,28 +104,6 @@ export const processInParallel = <T, A, E, R>({
     return { results, errors };
   }).pipe(Effect.scoped);
 
-type ParallelProcessArgs<T, R> = {
-  items: T[];
-  processFn: (item: T) => Promise<R>;
-  concurrencyLimit?: number;
-};
-
-// TODO(effect): remove once callers use `processInParallel`
-/** Promise version of `processInParallel`, a rejecting `processFn` is an error of its item */
-export const parallelProcess = <T, R>({
-  items,
-  processFn,
-  concurrencyLimit,
-}: ParallelProcessArgs<T, R>) =>
-  Effect.runPromise(
-    processInParallel({
-      items,
-      concurrencyLimit,
-      processFn: (item) =>
-        Effect.tryPromise({ try: () => processFn(item), catch: (error) => error }),
-    }),
-  );
-
 /**
  * Parses the `LINK_CHECK_SAMPLE_RATE` environment variable (float between 0 and 1, default 1).
  * @throws {Error} if the value is not a number between 0 and 1

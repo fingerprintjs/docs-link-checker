@@ -5,7 +5,7 @@ import { getLinksToFix, type LinkCheckReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
 /** A GitHub Actions file (job summary, outputs) could not be written, or an output value is invalid */
-export class GithubActionsError extends Data.TaggedError("GithubActionsError")<{
+class GithubActionsError extends Data.TaggedError("GithubActionsError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}

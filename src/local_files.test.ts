@@ -1,16 +1,29 @@
 import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import { checkLocalFiles, checkLocalLink, collectLinksFromFiles } from "./local_files";
+import { withApp } from "./app_layer";
+import {
+  checkLocalFiles as checkLocalFilesEffect,
+  checkLocalLink,
+  collectLinksFromFiles as collectLinksFromFilesEffect,
+} from "./local_files";
 import type { LinkWithResult } from "./types";
 
 // Avoids network access, the external link only needs to come back with a result
-vi.mock("./link", () => ({
-  checkLinks: vi.fn(async ({ links }: { links: Array<{ href: string }> }) =>
-    links.map((link) => ({ ...link, result: { ok: true, status: 200 } })),
-  ),
-}));
+vi.mock("./link", async () => {
+  const effect = await import("effect");
+  return {
+    checkLinks: ({ links }: { links: Array<{ href: string }> }) =>
+      effect.Effect.succeed(links.map((link) => ({ ...link, result: { ok: true, status: 200 } }))),
+  };
+});
+
+const collectLinksFromFiles = (...args: Parameters<typeof collectLinksFromFilesEffect>) =>
+  Effect.runPromise(collectLinksFromFilesEffect(...args));
+const checkLocalFiles = (...args: Parameters<typeof checkLocalFilesEffect>) =>
+  Effect.runPromise(checkLocalFilesEffect(...args).pipe(withApp()));
 
 const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");
 const check = (file: string, href: string) =>

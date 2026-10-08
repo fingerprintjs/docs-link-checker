@@ -1,9 +1,9 @@
-// TODO(effect): convert
-import { runEffect, timePhase } from "./effect_compat";
+import { Effect } from "effect";
 import { checkLinks } from "./link";
 import { getLinksFromPages } from "./page";
+import { timePhase } from "./run";
 import { getWebsitePages } from "./sitemap";
-import type { Link, LinkWithResult } from "./types";
+import type { Link } from "./types";
 import { sampleItems } from "./utils";
 
 export type CheckWebsiteArgs = {
@@ -23,23 +23,18 @@ export const createPrefixFilter =
  * Checks links on all pages of a website (from its sitemap).
  * Must run inside `runCommand` (`src/cli.ts`), which builds the report.
  */
-export const checkWebsite = async ({
-  websiteUrl,
-  linkFilter,
-  sampleRate,
-}: CheckWebsiteArgs): Promise<LinkWithResult[]> => {
-  const allPages = await timePhase("Read sitemap", () => runEffect(getWebsitePages(websiteUrl)));
-  const pages = sampleItems({
-    items: allPages,
-    key: (page) => page,
-    rate: sampleRate,
-    label: "pages",
+export const checkWebsite = ({ websiteUrl, linkFilter, sampleRate }: CheckWebsiteArgs) =>
+  Effect.gen(function* () {
+    const allPages = yield* timePhase("Read sitemap", getWebsitePages(websiteUrl));
+    const pages = sampleItems({
+      items: allPages,
+      key: (page) => page,
+      rate: sampleRate,
+      label: "pages",
+    });
+
+    const { links } = yield* timePhase("Extract links", getLinksFromPages({ pages, linkFilter }));
+    console.log(`Fetched ${links.length} links.`);
+
+    return yield* checkLinks({ links });
   });
-
-  const { links } = await timePhase("Extract links", () =>
-    runEffect(getLinksFromPages({ pages, linkFilter })),
-  );
-  console.log(`Fetched ${links.length} links.`);
-
-  return checkLinks({ links });
-};

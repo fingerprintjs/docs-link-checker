@@ -54,7 +54,7 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
 }
 
 /** A page answered with a status other than 2xx */
-export class PageStatusError extends Data.TaggedError("PageStatusError")<{
+class PageStatusError extends Data.TaggedError("PageStatusError")<{
   readonly url: string;
   readonly status: number;
 }> {

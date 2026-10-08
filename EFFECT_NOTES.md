@@ -1,78 +1,57 @@
-# Effect rewrite notes
+# Effect architecture
 
-`effect` 3.x (`pnpm add effect@^3`, 4.x is not used). Docs: https://effect.website/docs/
-Rewrite is done in phases, this file lists the state of the converted core and the temporary shims.
+`effect` 3.x (`pnpm add effect@^3`). `@effect/vitest` is not used (only 4.x supports vitest 5).
+Conventions: https://effect.website/docs/
 
-## Core API (phase 1)
+## Running
 
-- `withRun(config)(effect)` (`src/run.ts`): provides `RunLayer`, closes the browser, then logs the run metrics (also on failure).
-  Call once at the entry point, a nested `withRun` starts a separate run.
-- Services (`Context.Tag` classes), all part of `RunServices`:
-  - `HostLimiter` (`limiter.ts`): `run(url, effect)` (per-host semaphore, interruption frees the slot), `pause`, `waitUntilResumed`, `limitPerHost`. Time from `Clock`.
-  - `Metrics` (`run.ts`): `incrementMetric(name, by)`, `timePhase(name, effect)`, snapshot. Summary format is unchanged.
-  - `RunCache` (`run.ts`): `runCached(key, effect, { cacheError, onHit, onMiss })`, concurrent callers share one run, failures are evicted unless `cacheError`.
-  - `BrowserSlot` (`run.ts`): lazy shared Playwright browser (`get`, `discard`). Installs Chromium once if missing. Closed with the run.
-- `fetchWithHostLimit(url, options, read)` (`http.ts`): Effect, `read` returns an Effect.
-  Timeout interrupts the request (aborts `fetch`), covers `fetch` and `read` of each hop.
-- `http.ts` helpers: `classifyStatus`, `getUserAgent`, `serverErrorResult` (pure), `planServerErrorRetry` (Effect: logs and counts the retry, needs `Metrics`), `readText`.
-- Errors (`utils/errors.ts`, `Data.TaggedError`): `FetchError`, `TimeoutError`, `TooManyRedirects`, `BrowserLaunchError`.
-  `FetchError` and `BrowserLaunchError` use the message of the cause.
+- One Promise boundary: `runCli` (`src/cli.ts`) runs each command once with `Effect.runPromise`.
+  Commander option parsing stays Promise-based. Other entry points: `bench/bench.ts`, `checks/gh_rate_limit.ts`.
+- `withApp(config)` (`src/app_layer.ts`) = `GitHubClient.layer` + `withRun(config)`. Use it once per entry point.
+  It lives apart from `run.ts` because `github_client.ts` imports `Metrics` from `run.ts` (import cycle).
+- `withRun(config)` (`src/run.ts`) provides `RunLayer`, closes the browser, then logs the run metrics (also on failure).
+  A nested `withRun` starts a separate run.
+- Code inside a run only declares the services it needs in `R`. No global state, nothing is cached outside a run.
 
-## Conventions
+## Services (`Context.Tag` classes with a static `layer`)
 
-- `Effect.gen` + `yield*`, handle errors by tag (`Effect.catchTag`) or `Effect.either`.
-- Timeouts with `Effect.timeout*` (real interruption), never `Promise.race`.
-- Retry loops are recursive generators (delay depends on the response, a `Schedule` cannot see it).
-- Promise boundaries only at the CLI entry and in tests: `Effect.runPromise(effect.pipe(withRun(config)))`.
-- Fake timers (`vi.useFakeTimers`) work with the live `Clock`, advance them while the effect runs.
+- `HostLimiter` (`limiter.ts`): per-host semaphore and host pauses (`run`, `pause`, `waitUntilResumed`). Uses `Clock`.
+- `Metrics` (`run.ts`): `incrementMetric`, `timePhase`, `snapshot`.
+- `RunCache` (`run.ts`): `runCached(key, effect, opts)`. Concurrent callers share one execution, failures are evicted
+  unless `cacheError(e)`. Keys are namespaced by the callers. Fetched pages (`fetch_check.ts`) and GitHub 404s live here.
+- `BrowserSlot` (`run.ts`): lazy shared Playwright browser (`get`, `discard`), closed with the run. `withPage` (`browser.ts`)
+  opens a scoped page, max `PLAYWRIGHT_CONCURRENCY_LIMIT` at once, one retry after a browser crash.
+- `GitHubClient` (`github/github_client.ts`): `githubRequest((octokit) => promise)`. Octokit is created on first use
+  (a missing `GH_TOKEN` is a `GitHubApiError`, not a crash).
+- `RunServices` = `HostLimiter | Metrics | RunCache | BrowserSlot`, `GitHubServices` = `GitHubClient | Metrics | RunCache`.
 
-## Temporary shims (remove when callers are Effects)
+## Errors
 
-- `src/effect_compat.ts`: Promise API of the core (`withRun`, `getRunContext`, `getHostLimiter`, `closeRunBrowser`, `incrementMetric`, `timePhase`, `runCached`, `fetchWithHostLimit`, `planServerErrorRetry`, `withTimeout`, `runEffect`).
-  Uses AsyncLocalStorage inside `withRun`, a default run outside of it. Starts effects synchronously (`immediate`), failures are rethrown as the original error.
-  Every use is marked `// TODO(effect): convert`: `browser.ts`, `link.ts`, `fetch_check.ts`, `playwright_check.ts`, `page.ts`, `sitemap.ts`, `website.ts`, `local_files.ts`, `cli.ts`, `bench/bench.ts` and tests.
+- `Data.TaggedError`s: `FetchError`, `TimeoutError`, `TooManyRedirects`, `BrowserLaunchError` (`utils/errors.ts`),
+  `PageError`, `GitHubApiError`, `BaselineError`, `GithubActionsError`, `LocalFilesError`, `NoMarkdownFilesError`, ...
+- `message` and `toString` of wrappers are the cause's, so reports stay the same.
+- Link check failures are results (`LinkCheckResult`), the error channel of checks is `never`.
+  A failing first-pass or Playwright check becomes an "unexpected error" result in `checkLinks`.
+- Handle by tag (`Effect.catchTag`) or `Effect.either`. No thrown errors inside effects.
+  The CLI prints any other failure (including defects) as `Error: <stack>` and exits with 1.
 
-## Browser (phase 2)
+## Style
 
-- `browser.ts`: `withPage(use, { userAgent?, timeout })` returns an Effect (`BrowserSlot` required). The page is a scoped resource
-  (`acquireRelease` for the context, `Effect.scoped`), so it is closed on success, failure and interruption.
-  Max `PLAYWRIGHT_CONCURRENCY_LIMIT` pages at once (process-wide `Effect.unsafeMakeSemaphore`).
-  Crash: if `use` or opening the page fails and the browser is disconnected, `BrowserSlot.discard` + one retry.
-- `PageError` (`Data.TaggedError`, message and `toString` of the Playwright error) and `tryPage(fn)` wrap Playwright calls.
-- `checkUrlsOnPageWithPlaywright(urls)` returns an Effect failing only with `BrowserLaunchError` / `PageError` (crash).
-  Timeouts are real interruptions: response body read `Effect.timeout`, hung `page.evaluate` `Effect.timeoutFail` -> `TimeoutError`.
-  502/503/504: `planServerErrorRetry` + `HostLimiter.pause`, wait with `waitUntilResumed` outside of the page slot. Time from `Clock`.
-- Remaining shims: `link.ts` and `link.test.ts` / `link.integration.test.ts` call it through `runEffect` (`TODO(effect): convert`).
-  `browser.test.ts` still uses `closeRunBrowser` from `effect_compat` for the `checkLinks` tests.
+- `Effect.gen` + `yield*`. Timeouts with `Effect.timeout*` (real cancellation), never `Promise.race`.
+- Retry loops are recursive generators (the delay depends on the response, so no `Schedule`).
+- `processInParallel` (`utils.ts`): `Effect.forEach` with a concurrency limit, `{ results, errors }` in item order.
+  Typed failures of one item do not stop the others, a defect does.
+- Pure code stays plain: `hash.ts`, `markdown.ts`, `line_anchor.ts`, `glob.ts`, report rendering and saving (`report/`),
+  `getSampleRate` / `sampleItems` (throw on invalid options, called while parsing CLI options), `checkLocalLink` (sync fs lookups).
+- `baseline.ts` validates with Effect `Schema` (messages use Effect's wording).
 
-## Page and fetch (phase 2)
+## Testing
 
-- `checkLinkWithFetch(url, pagesWithHash?)` (`fetch_check.ts`): `Effect<LinkCheckResult, never, HostLimiter | Metrics | RunCache>`.
-  Failures are results. Each page is fetched once per run via `runCached` (key `fetch-page:<needBody>:<url without hash>`), `PageFetchCache` is gone.
-  `pagesWithHash`: pages linked with a hash somewhere, their body is read for links without a hash too.
-- `processInParallel({ items, processFn: item => Effect, concurrencyLimit })` (`utils.ts`): `{ results, errors }` in item order, failures (typed errors) do not stop other items,
-  progress log via a scoped fiber. A defect (thrown inside an Effect) is not caught, it ends the call.
-  `parallelProcess` (Promise) is a shim on top of it. `ConcurrentError<T, E>` moved from `limiter.ts` to `utils.ts`.
-- `getWebsitePages(url)` (`sitemap.ts`): fails with `FetchError | TimeoutError | TooManyRedirects | SitemapStatusError`, nested sitemaps are fetched concurrently.
-- `getLinksFromPages({ pages, linkFilter })` (`page.ts`): never fails, failed pages are in `errors` (`PageStatusError` or the fetch errors).
-- `baseline.ts`: zod replaced by Effect `Schema`. `loadBaseline` and `writeBaseline` are Effects failing with `BaselineError` (`Data.TaggedError`).
-  Validation messages changed (Schema wording, e.g. `ignore[0].url: is unexpected`), the path format and the first-issue-only rule stay.
-- `github_actions.ts`: `writeJobSummary` and `writeGithubOutputs` are Effects (async append) failing with `GithubActionsError`.
-- Pure helpers unchanged: `hash.ts`, `markdown.ts`, `line_anchor.ts`, `glob.ts`. `zod` and `p-limit` removed.
-- Behavior change: the page cache lives for the run (`RunCache`), not for one `checkLinks` call.
-  Outside `withRun` (tests) callers must provide a fresh `RunLayer()` per check, otherwise cached pages leak between tests.
-- Remaining shims: `parallelProcess` (callers: `link.ts`, `github/gh_get_links.ts`), `runEffect` in `link.ts`, `website.ts`, `cli.ts`
-  (`loadBaseline`, `writeBaseline`, `writeJobSummary`, `writeGithubOutputs`) and `link.test.ts`.
-
-## GitHub
-
-- `GitHubClient` (`github/github_client.ts`, `Context.Tag`): `request(call)` runs an Octokit call as `Effect.tryPromise`, fails with `GitHubApiError` (`Data.TaggedError`, `status`, `cause`, `toString` = text of the cause).
-  `githubRequest(call)` is the shortcut. `GitHubClient.layer` needs `Metrics`, the Octokit client is created on first request per run (no `GH_TOKEN` is a `GitHubApiError` without status, not a crash). The request-counting hook counts `githubApiRequests`.
-  `GitHubServices = GitHubClient | Metrics | RunCache`.
-- `gh_api.ts`: `cachedRequest(key, call)` (uses `runCached`, caches only 404/410, counts `githubCacheHits`), `getRepoCached`, `isNotFoundApiError`, `getApiErrorResult` (take a `GitHubApiError`).
-- All checks (`checkLinkWithGithubApi`, `checks/gh_simple.ts`, `checks/gh_content.ts`) are `Effect<LinkCheckResult, never, GitHubServices (| HostLimiter)>`: `GitHubApiError` is mapped to a result inside, like before.
-- `gh_get_links.ts`: `getReadmesFromOrg` fails with `ListOrgReposError`, `getReadmeLinks` skips READMEs that fail with `ReadmeDownloadError` (via `processInParallel`). `checkReadmesInGithubOrg` is an Effect.
-- Tests: `github/test_utils.ts` `runWithFakeOctokit(effect, () => fakeOctokit)` (full `RunLayer` + fake client), `runWithGitHub` for integration tests.
-- `checks/gh_rate_limit.ts` (CI script) provides `GitHubClient.layer` and runs with `Effect.runPromise`.
-- `effect_compat.runEffect` also provides `GitHubClient` (one per store), `getMyOctokit` and `tryCatch.ts` are gone.
-- Remaining shims: `checkReadmesInGithubOrg` calls the Promise `checkLinks` via `Effect.promise` (TODO(effect): convert), `link.ts` and `cli.ts` call the GitHub Effects with `runEffect`, mocks of them in `link.test.ts` and `cli.test.ts` wrap Promise mocks in Effects.
+- Run an Effect: `Effect.runPromise(effect.pipe(withApp()))` (`withRun()` when no GitHub client is needed).
+  Use a fresh run per check, so cached pages and host pauses do not leak between tests.
+- GitHub unit tests: `runWithFakeOctokit(effect, () => fakeOctokit)`. Integration tests: `runWithGitHub(effect)`
+  (`src/github/test_utils.ts`).
+- Fake timers (`vi.useFakeTimers`) work with the live `Clock`: advance them while the effect runs
+  (`vi.advanceTimersByTimeAsync`). Several steps in one run (limiter pauses, metrics): one `Effect.gen`.
+- Playwright is mocked with `vi.mock("playwright")` (`BrowserSlot` calls `chromium.launch`).
+- Mocked modules that export Effects return `Effect.succeed(...)` / `Effect.promise(...)`.
