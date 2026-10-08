@@ -1,6 +1,6 @@
 /**
  * Speed benchmark: checks the links of `bench/corpus.json`, optionally A/B against another checkout.
- * See the "Benchmark" section of README.md.
+ * CI: `.github/workflows/benchmark.yaml`.
  *
  *   pnpm bench                     benchmark the current tree
  *   pnpm bench --base <dir>        A/B against another checkout (e.g. a `git worktree` of main)

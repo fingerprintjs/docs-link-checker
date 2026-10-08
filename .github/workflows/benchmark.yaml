@@ -1,6 +1,6 @@
 name: Benchmark
 
-# Speed benchmark of the PR vs its base branch, see the "Benchmark" section of README.md.
+# Speed benchmark of the PR vs its base branch. How it works: `bench/bench.ts`.
 # Only reports (job summary + sticky PR comment), a slowdown never fails the PR.
 on:
   pull_request:
