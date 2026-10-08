@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   crashNextContext: false,
   gotoDelayMs: 10,
   routes: 0,
+  // Route handler of the latest context, as registered by `withPage`
+  routeHandler: null as null | ((route: unknown) => Promise<void>),
   // Make the next navigation fail: "crash" closes the browser, "error" is a navigation error (e.g. DNS)
   nextGotoFailure: null as "crash" | "error" | null,
   failLaunch: false,
@@ -44,8 +46,9 @@ vi.mock("playwright", () => {
           throw new Error("Target page, context or browser has been closed");
         }
         return {
-          route: async () => {
+          route: async (_pattern: string, handler: (route: unknown) => Promise<void>) => {
             state.routes++;
+            state.routeHandler = handler;
           },
           close: async () => {
             state.openPages--;
@@ -89,10 +92,12 @@ vi.mock("playwright", () => {
   return { chromium: { launch: vi.fn(launch) } };
 });
 
-import { getBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
+import { PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { closeRunBrowser, withRun } from "./run";
+
+const launchBrowser = () => withPage(async () => {}, { timeout: 1000 });
 
 const checkLinkWithPlaywright = async (url: string) =>
   (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
@@ -110,6 +115,7 @@ beforeEach(async () => {
     crashNextContext: false,
     gotoDelayMs: 10,
     routes: 0,
+    routeHandler: null,
     nextGotoFailure: null,
     failLaunch: false,
   });
@@ -181,7 +187,7 @@ describe("shared browser", () => {
   });
 
   it("relaunches a crashed browser once and retries the check", async () => {
-    await getBrowser();
+    await launchBrowser();
     state.crashNextContext = true;
 
     const result = await checkLinkWithPlaywright("https://example.com/after-crash");
@@ -193,9 +199,12 @@ describe("shared browser", () => {
 
   it("does not retry errors that are not crashes", async () => {
     await expect(
-      withPage(async () => {
-        throw new Error("boom");
-      }),
+      withPage(
+        async () => {
+          throw new Error("boom");
+        },
+        { timeout: 1000 },
+      ),
     ).rejects.toThrow("boom");
     expect(state.launches).toBe(1);
     // The context is closed even when the check throws
@@ -203,7 +212,7 @@ describe("shared browser", () => {
   });
 
   it("relaunches the browser when it crashes during navigation and retries the check", async () => {
-    await getBrowser();
+    await launchBrowser();
     state.nextGotoFailure = "crash";
 
     const result = await checkLinkWithPlaywright("https://example.com/crash");
@@ -283,5 +292,132 @@ describe("browser belongs to the run", () => {
 
     await closeRunBrowser();
     expect(state.closes).toBe(2);
+  });
+});
+
+describe("request blocking", () => {
+  type FakeRequest = {
+    resourceType: string;
+    url: string;
+    // Top-level navigation (the link being checked) or an iframe navigation
+    navigation?: "main" | "iframe";
+  };
+
+  // Runs requests through the route handler `withPage` registered, returns the URLs that were aborted
+  const run = async (requests: FakeRequest[], failResponse = false) => {
+    const aborted: string[] = [];
+    await withPage(
+      async () => {
+        for (const { resourceType, url, navigation } of requests) {
+          await state.routeHandler?.({
+            request: () => ({
+              resourceType: () => resourceType,
+              url: () => url,
+              isNavigationRequest: () => navigation !== undefined,
+              frame: () => ({ parentFrame: () => (navigation === "iframe" ? {} : null) }),
+            }),
+            abort: async () => {
+              aborted.push(url);
+              if (failResponse) throw new Error("Target closed");
+            },
+            continue: async () => {
+              if (failResponse) throw new Error("Target closed");
+            },
+          });
+        }
+      },
+      { timeout: 1000 },
+    );
+    return aborted;
+  };
+
+  const main = (url: string): FakeRequest => ({
+    resourceType: "document",
+    url,
+    navigation: "main",
+  });
+  const sub = (resourceType: string, url: string): FakeRequest => ({ resourceType, url });
+
+  it("blocks images, media and fonts, keeps scripts, styles and data requests", async () => {
+    const heavy = ["image", "media", "font"].map((type) =>
+      sub(type, `https://example.com/${type}`),
+    );
+    const light = ["script", "stylesheet", "xhr", "fetch"].map((type) =>
+      sub(type, `https://example.com/${type}`),
+    );
+
+    const aborted = await run([main("https://example.com/"), ...heavy, ...light]);
+
+    expect(aborted).toEqual(heavy.map((request) => request.url));
+  });
+
+  it("blocks analytics hosts and their subdomains, not look-alike hosts", async () => {
+    const blocked = [
+      "https://www.googletagmanager.com/gtm.js",
+      "https://stats.g.doubleclick.net/r/collect",
+      "https://api.segment.io/v1/t",
+      "https://script.hotjar.com/modules.js",
+    ];
+    const allowed = [
+      "https://notgoogletagmanager.com/x.js",
+      "https://example.com/googletagmanager.com.js",
+    ];
+
+    const aborted = await run([
+      main("https://example.com/"),
+      ...[...blocked, ...allowed].map((url) => sub("script", url)),
+    ]);
+
+    expect(aborted).toEqual(blocked);
+  });
+
+  it("never blocks the checked link itself by type, but blocks analytics iframes", async () => {
+    const iframe = "https://www.googletagmanager.com/ns.html";
+
+    const aborted = await run([
+      { resourceType: "image", url: "https://example.com/logo.png", navigation: "main" },
+      { resourceType: "document", url: iframe, navigation: "iframe" },
+    ]);
+
+    expect(aborted).toEqual([iframe]);
+  });
+
+  it("does not block a vendor's own hosts when the checked page is hosted by it", async () => {
+    const aborted = await run([
+      main("https://segment.com/docs/"),
+      sub("script", "https://cdn.segment.com/app.js"),
+      sub("script", "https://www.googletagmanager.com/gtm.js"),
+      sub("image", "https://segment.com/logo.png"),
+    ]);
+
+    expect(aborted).toEqual([
+      "https://www.googletagmanager.com/gtm.js",
+      "https://segment.com/logo.png",
+    ]);
+  });
+
+  it("tracks the checked page per page and follows redirects of the main navigation", async () => {
+    const script = sub("script", "https://cdn.segment.com/analytics.js");
+
+    // A previous segment.com page does not leak into the next page
+    await run([main("https://segment.com/")]);
+    expect(await run([main("https://example.com/"), script])).toEqual([script.url]);
+
+    // A redirect to the vendor makes it the checked page
+    expect(
+      await run([main("https://example.com/"), main("https://segment.com/docs"), script]),
+    ).toEqual([]);
+  });
+
+  it("does not throw on invalid request URLs", async () => {
+    expect(await run([sub("script", "not a url")])).toEqual([]);
+  });
+
+  it("ignores errors when the page is already closed", async () => {
+    const requests = [
+      sub("font", "https://example.com/a.woff2"),
+      sub("script", "https://example.com/a.js"),
+    ];
+    await expect(run(requests, true)).resolves.toEqual(["https://example.com/a.woff2"]);
   });
 });

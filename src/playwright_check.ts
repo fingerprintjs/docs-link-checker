@@ -1,10 +1,5 @@
 import type { Page, Response as PlaywrightResponse } from "playwright";
-import {
-  HASH_FALLBACK_WAIT_TIMEOUT,
-  HASH_WAIT_TIMEOUT,
-  PAGE_OPERATION_TIMEOUT,
-  withPage,
-} from "./browser";
+import { withPage } from "./browser";
 import { isGithubCodeLineLink } from "./github/gh_url";
 import { getHashSelectors } from "./hash";
 import {
@@ -19,6 +14,16 @@ import { withTimeout } from "./limiter";
 import { getServerErrorResult, getSpecialFragmentNote, shouldSpoofUserAgent } from "./link_common";
 import { getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
+
+// Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own
+export const PAGE_OPERATION_TIMEOUT = 30000;
+// How long a hash is waited for after the page loaded (client-side rendered anchors)
+export const HASH_WAIT_TIMEOUT = 3000;
+// A hash still missing after HASH_WAIT_TIMEOUT is waited for longer, together with the other hashes of its page.
+// This is the overall budget of the page, counted from the first check (HASH_WAIT_TIMEOUT included): a missing
+// anchor takes all of it.
+// E.g. Mintlify docs expand collapsed sections and add their ids several seconds after hydration.
+export const HASH_FALLBACK_WAIT_TIMEOUT = 15000;
 
 /** Waits up to `timeout` for an element matching `selector` to be in the DOM */
 async function waitForSelectorAttached(page: Page, selector: string, timeout: number) {
@@ -294,6 +299,7 @@ async function navigateAndCheck(
     },
     {
       userAgent: shouldSpoofUserAgent(firstUrl) ? USER_AGENT : undefined,
+      timeout: PAGE_OPERATION_TIMEOUT,
     },
   );
 }
