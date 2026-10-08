@@ -1,6 +1,5 @@
 import { resolve } from "node:path";
-import type { FileSystem } from "@effect/platform";
-import type { PlatformError } from "@effect/platform/Error";
+import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import type { ActionsEnv } from "./config";
 import { getLinksToFix, type LinkCheckReport } from "./report/report";
@@ -98,15 +97,20 @@ export const renderJobSummary = (
 
 /**
  * Appends the job summary to `summaryFile` (`ActionsEnv.stepSummary`).
- * STUB: implemented by the CLI group.
  * @returns `true` if the summary was written
  */
-export const writeJobSummary: (
+export const writeJobSummary = Effect.fn("writeJobSummary")(function* (
   report: LinkCheckReport,
   options: SummaryOptions,
   summaryFile: string | undefined,
-) => Effect.Effect<boolean, PlatformError, FileSystem.FileSystem> = () =>
-  Effect.die("not implemented");
+) {
+  if (!summaryFile) {
+    return false;
+  }
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.writeFileString(summaryFile, renderJobSummary(report, options), { flag: "a" });
+  return true;
+});
 
 // https://github.com/actions/toolkit/blob/main/packages/core/src/command.ts
 const escapeCommandData = (value: string) =>
@@ -158,14 +162,27 @@ export const getFileAnnotations = (report: LinkCheckReport): string[] => {
 
 /**
  * Writes `name=value` outputs to `outputFile` (`ActionsEnv.output`), if set.
- * A multi-line value is a programmer error (`Effect.dieMessage`).
- * STUB: implemented by the CLI group.
+ * A multi-line value is a programmer error (the format of the file would break), so it dies.
+ * @returns `true` if the outputs were written
  */
-export const writeGithubOutputs: (
+export const writeGithubOutputs = Effect.fn("writeGithubOutputs")(function* (
   outputs: Record<string, string | number>,
   outputFile: string | undefined,
-) => Effect.Effect<boolean, PlatformError, FileSystem.FileSystem> = () =>
-  Effect.die("not implemented");
+) {
+  if (!outputFile) {
+    return false;
+  }
+  const entries = Object.entries(outputs).map(([name, value]) => [name, String(value)] as const);
+  for (const [name, value] of entries) {
+    if (/[\r\n]/.test(value)) {
+      return yield* Effect.dieMessage(`Output ${name} must be a single line`);
+    }
+  }
+  const fs = yield* FileSystem.FileSystem;
+  const text = entries.map(([name, value]) => `${name}=${value}\n`).join("");
+  yield* fs.writeFileString(outputFile, text, { flag: "a" });
+  return true;
+});
 
 const REPOSITORY_NAME = /^[\w.-]+\/[\w.-]+$/;
 const COMMIT_SHA = /^[\da-f]{40}(?:[\da-f]{24})?$/;

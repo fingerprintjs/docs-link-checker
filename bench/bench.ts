@@ -6,12 +6,12 @@
  *   pnpm bench --base <dir>        A/B against another checkout (e.g. a `git worktree` of main)
  *   pnpm bench --rounds <n>        rounds per side (default: 2 with --base, 1 without)
  *
- * Every round runs in its own process (`--round`, internal), so base and head never share module-level state.
+ * Every round (`round.ts`) runs in its own process, so base and head never share state.
  * With `--base`, the base and head round of a pair run concurrently: rounds mostly wait on the network and
  * 15s anchor timeouts (little CPU contention), and both sides see the same network conditions at the same
  * moment. Halves the CI time too.
- * Only imports from `../src` and Node built-ins: for a base round this file and the corpus are copied to
- * `<dir>/.bench/` and run there, so `../src` resolves to the base's code.
+ * For a base round `round.ts` and the corpus are copied to `<dir>/.bench/` and run there, so `../src` resolves
+ * to the base's code, whatever its API (see `round.ts`).
  */
 import { spawn } from "node:child_process";
 import {
@@ -26,18 +26,18 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { Effect } from "effect";
-import { runLive } from "../src/app";
-import { checkLinks } from "../src/link";
-import { Metrics } from "../src/metrics";
-import corpus from "./corpus.json";
+import { Schema } from "effect";
+import type { Round } from "./round";
 
-// `outcomes`: href -> "ok" or the error kind
-type RunMetrics = {
-  counters: Record<string, number>;
-  phases: Array<{ name: string; ms: number }>;
-};
-type Round = { totalMs: number; metrics: RunMetrics; outcomes: Record<string, string> };
+// Same shape as `Round` in `round.ts`, which runs in checkouts without this dependency set
+const RoundSchema: Schema.Schema<Round> = Schema.Struct({
+  totalMs: Schema.Number,
+  metrics: Schema.Struct({
+    counters: Schema.Record({ key: Schema.String, value: Schema.Number }),
+    phases: Schema.Array(Schema.Struct({ name: Schema.String, ms: Schema.Number })),
+  }),
+  outcomes: Schema.Record({ key: Schema.String, value: Schema.String }),
+});
 type Stat = { median: number; min: number; max: number };
 type Verdict = "better" | "worse" | "same";
 
@@ -52,40 +52,11 @@ const REPORT_FILE = "results/bench/benchmark.md";
 const TIME_RELATIVE = 0.15;
 const TIME_ABSOLUTE_MS = 5000;
 
-const isRound = (value: unknown): value is Round =>
-  typeof value === "object" &&
-  value !== null &&
-  "totalMs" in value &&
-  "metrics" in value &&
-  "outcomes" in value;
-
-const runRound = async (outFile: string) => {
-  const start = performance.now();
-  const outcomes: Record<string, string> = {};
-  const metrics = await runLive(
-    Effect.gen(function* () {
-      const results = yield* checkLinks({ links: corpus });
-      const { counters, phases } = yield* (yield* Metrics).snapshot;
-      const all: RunMetrics = { counters: { ...counters }, phases: [...phases] };
-      // Counted like the other counters, so the report shows if a speed change altered results
-      for (const { href, result } of results) {
-        const outcome = result.ok ? "ok" : result.error;
-        outcomes[href] = outcome;
-        const name = `result: ${outcome}`;
-        all.counters[name] = (all.counters[name] ?? 0) + 1;
-      }
-      return all;
-    }),
-  );
-  const round: Round = { totalMs: performance.now() - start, metrics, outcomes };
-  writeFileSync(outFile, JSON.stringify(round));
-};
-
-/** Copies this script and the corpus into the checkout, so `../src` resolves to its code */
+/** Copies the round script and the corpus into the checkout, so `../src` resolves to its code */
 const installBench = (dir: string) => {
   const benchDir = join(resolve(dir), ".bench");
   mkdirSync(benchDir, { recursive: true });
-  copyFileSync(import.meta.filename, join(benchDir, "bench.ts"));
+  copyFileSync(join(import.meta.dirname, "round.ts"), join(benchDir, "round.ts"));
   copyFileSync(join(import.meta.dirname, "corpus.json"), join(benchDir, "corpus.json"));
 };
 
@@ -93,9 +64,9 @@ const installBench = (dir: string) => {
 const spawnRound = async (dir: string | undefined, outFile: string): Promise<Round> => {
   // Absolute because `cwd` changes to the checkout
   const cwd = dir ? resolve(dir) : resolve(import.meta.dirname, "..");
-  const script = dir ? join(cwd, ".bench", "bench.ts") : import.meta.filename;
+  const script = dir ? join(cwd, ".bench", "round.ts") : join(import.meta.dirname, "round.ts");
   // Stdout is noise when rounds run at the same time, stderr (errors) stays visible
-  const child = spawn(join(cwd, "node_modules", ".bin", "tsx"), [script, "--round", outFile], {
+  const child = spawn(join(cwd, "node_modules", ".bin", "tsx"), [script, outFile], {
     cwd,
     stdio: ["ignore", "ignore", "inherit"],
   });
@@ -105,11 +76,7 @@ const spawnRound = async (dir: string | undefined, outFile: string): Promise<Rou
       code === 0 ? done() : fail(new Error(`Benchmark round failed (exit code ${code})`)),
     );
   });
-  const round: unknown = JSON.parse(readFileSync(outFile, "utf8"));
-  if (!isRound(round)) {
-    throw new Error(`${outFile} is not a valid round result`);
-  }
-  return round;
+  return Schema.decodeUnknownSync(Schema.parseJson(RoundSchema))(readFileSync(outFile, "utf8"));
 };
 
 const stat = (values: number[]): Stat => {
@@ -211,23 +178,12 @@ const reportOf = (head: Round[], base: Round[] | undefined): string => {
 };
 
 const main = async () => {
-  const { values, positionals } = parseArgs({
+  const { values } = parseArgs({
     options: {
       base: { type: "string" },
       rounds: { type: "string" },
-      round: { type: "boolean" },
     },
-    allowPositionals: true,
   });
-  const [outFile] = positionals;
-  if (values.round) {
-    if (!outFile) {
-      throw new Error("Usage: bench.ts --round <outFile>");
-    }
-    await runRound(outFile);
-    return;
-  }
-
   const rounds = Number(values.rounds ?? (values.base ? 2 : 1));
   if (!Number.isInteger(rounds) || rounds < 1) {
     throw new Error(`Invalid --rounds "${values.rounds}", expected a positive integer.`);

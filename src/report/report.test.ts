@@ -1,8 +1,15 @@
+import { join } from "node:path";
+import { FileSystem } from "@effect/platform";
+import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
+import { it } from "@effect/vitest";
 import * as cheerio from "cheerio";
-import { describe, expect, it } from "vitest";
+import { Effect } from "effect";
+import { describe, expect } from "vitest";
 import { createBaseline } from "../baseline";
+import { LogLayer } from "../logger";
+import { makeTestConsole } from "../test/test_console";
 import type { LinkWithResult } from "../types";
-import { getJSONReport, renderReportToHTML } from "./report";
+import { getJSONReport, renderReportToHTML, saveReport } from "./report";
 
 const EVIL_HREF = `https://example.com/it's"quoted"?q=<script>alert(1)</script>`;
 
@@ -266,4 +273,30 @@ describe("renderReportToHTML() for local files", () => {
       "https://example.com/x",
     ]);
   });
+});
+
+describe("saveReport()", () => {
+  it.effect("creates the output directory and writes the JSON and HTML reports", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = join(yield* fs.makeTempDirectoryScoped(), "nested", "results");
+      const report = getJSONReport({ links, siteName: "My Site" });
+      const testConsole = makeTestConsole();
+
+      const paths = yield* saveReport(report, dir).pipe(
+        Effect.provide(LogLayer({ json: false })),
+        Effect.withConsole(testConsole.console),
+      );
+
+      expect(paths).toEqual({ json: join(dir, "my-site.json"), html: join(dir, "my-site.html") });
+      expect(JSON.parse(yield* fs.readFileString(paths.json))).toEqual(
+        JSON.parse(JSON.stringify(report)),
+      );
+      expect(yield* fs.readFileString(paths.html)).toBe(renderReportToHTML(report));
+      expect(testConsole.stdout).toEqual([
+        `Saved JSON report to ${paths.json}`,
+        `Saved HTML report to ${paths.html}`,
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeFileSystem.layer)),
+  );
 });

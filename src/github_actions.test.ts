@@ -1,7 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { join } from "node:path";
+import { FileSystem } from "@effect/platform";
+import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
+import { it } from "@effect/vitest";
+import { Effect, Exit } from "effect";
+import { describe, expect } from "vitest";
 import { createBaseline } from "./baseline";
 import type { ActionsEnv } from "./config";
-import { getFileAnnotations, getGithubBlobBaseUrl, renderJobSummary } from "./github_actions";
+import {
+  getFileAnnotations,
+  getGithubBlobBaseUrl,
+  renderJobSummary,
+  writeGithubOutputs,
+  writeJobSummary,
+} from "./github_actions";
 import { getJSONReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
@@ -80,10 +91,29 @@ describe("renderJobSummary()", () => {
   });
 });
 
-// TODO(STEP 2, CLI group): port these tests
+/** Runs `use` with the path of a new file with `content` in a temp dir */
+const withTempFile = <A, E>(
+  content: string,
+  use: (path: string, fs: FileSystem.FileSystem) => Effect.Effect<A, E, FileSystem.FileSystem>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = join(yield* fs.makeTempDirectoryScoped(), "file");
+    yield* fs.writeFileString(path, content);
+    return yield* use(path, fs);
+  }).pipe(Effect.scoped, Effect.provide(NodeFileSystem.layer));
+
 describe("writeJobSummary()", () => {
-  it.todo("appends to GITHUB_STEP_SUMMARY only when it is set");
-  it.todo("never falls back to the real GITHUB_STEP_SUMMARY / GITHUB_OUTPUT (like in CI)");
+  it.effect("appends to the summary file only when it is set", () =>
+    withTempFile("previous step\n", (path, fs) =>
+      Effect.gen(function* () {
+        expect(yield* writeJobSummary(report([broken("x.md")]), {}, path)).toBe(true);
+        expect((yield* fs.readFileString(path)).startsWith("previous step\n## ❌")).toBe(true);
+        expect(yield* writeJobSummary(report([]), {}, "")).toBe(false);
+        expect(yield* writeJobSummary(report([]), {}, undefined)).toBe(false);
+      }),
+    ),
+  );
 });
 
 describe("getFileAnnotations()", () => {
@@ -133,9 +163,32 @@ describe("getFileAnnotations() escaping", () => {
   });
 });
 
-// TODO(STEP 2, CLI group): port these tests
 describe("writeGithubOutputs()", () => {
-  it.todo("appends outputs to GITHUB_OUTPUT only when it is set");
+  it.effect("appends outputs to the output file only when it is set", () =>
+    withTempFile("", (path, fs) =>
+      Effect.gen(function* () {
+        const outputs = { "links-to-fix": 3, "report-path": "results/x.json" };
+        expect(yield* writeGithubOutputs(outputs, path)).toBe(true);
+        expect(yield* writeGithubOutputs({ more: 1 }, path)).toBe(true);
+        expect(yield* fs.readFileString(path)).toBe(
+          "links-to-fix=3\nreport-path=results/x.json\nmore=1\n",
+        );
+        expect(yield* writeGithubOutputs(outputs, undefined)).toBe(false);
+        expect(yield* writeGithubOutputs(outputs, "")).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("dies on a multi-line value and writes nothing", () =>
+    withTempFile("", (path, fs) =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(writeGithubOutputs({ ok: 1, a: "x\ny" }, path));
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(String(exit)).toContain("Output a must be a single line");
+        expect(yield* fs.readFileString(path)).toBe("");
+      }),
+    ),
+  );
 });
 
 describe("getGithubBlobBaseUrl()", () => {
