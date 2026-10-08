@@ -1,5 +1,4 @@
-// TODO(effect): convert
-import { fetchWithHostLimit, incrementMetric } from "./effect_compat";
+import { Effect } from "effect";
 import {
   type AnchorIndex,
   buildAnchorIndex,
@@ -8,7 +7,14 @@ import {
   isHashInAnchorIndex,
   stripHash,
 } from "./hash";
-import { classifyStatus, getUserAgent, serverErrorResult } from "./http";
+import {
+  classifyStatus,
+  fetchWithHostLimit,
+  getUserAgent,
+  readText,
+  serverErrorResult,
+} from "./http";
+import { Metrics, runCached } from "./run";
 import type { LinkCheckResult } from "./types";
 
 /**
@@ -34,101 +40,72 @@ const lazyAnchorIndex = (html: string) => {
 /**
  * Fetches a page with `GET`, also when only its status matters: some servers refuse `HEAD` or answer it differently
  * (support.google.com and chatgpt.com return 404 to HEAD and 200 to GET), and a failed HEAD needed a second request.
- * Limited per host, honours `Retry-After` on 429 (pauses the whole host), retries 502, 503 and 504. Never throws.
+ * Limited per host, honours `Retry-After` on 429 (pauses the whole host), retries 502, 503 and 504.
+ * Failures become results (`ok: false`), it does not fail.
  */
-const fetchPage = async (
-  url: string,
-  { needBody }: { needBody: boolean },
-): Promise<FetchedPage> => {
+const fetchPage = (url: string, { needBody }: { needBody: boolean }) => {
   const headers = new Headers();
   const userAgent = getUserAgent(url);
   if (userAgent) {
     headers.set("User-Agent", userAgent);
   }
 
-  try {
-    // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
-    // unread bodies are cancelled (see `fetchWithHostLimit`).
-    const response = await fetchWithHostLimit(url, { headers }, async (res) =>
-      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
-      // An error page body is kept for the error detail.
-      needBody || classifyStatus(res.status) !== "okay" ? res.text() : "",
-    );
-
-    // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
-    const retryAfter = response.headers.get("Retry-After");
-    if (response.status === 429 && retryAfter) {
-      return {
-        ok: false,
-        result: {
+  // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
+  // unread bodies are cancelled (see `fetchWithHostLimit`).
+  return fetchWithHostLimit(url, { headers }, (res) =>
+    // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
+    // An error page body is kept for the error detail.
+    needBody || classifyStatus(res.status) !== "okay" ? readText(res) : Effect.succeed(""),
+  ).pipe(
+    Effect.map((response): FetchedPage => {
+      // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
+      const retryAfter = response.headers.get("Retry-After");
+      if (response.status === 429 && retryAfter) {
+        return {
           ok: false,
-          error: "unexpected error",
-          status: response.status,
-          // Raw header without a unit: it can be seconds or an HTTP date
-          errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
-        },
-      };
-    }
+          result: {
+            ok: false,
+            error: "unexpected error",
+            status: response.status,
+            // Raw header without a unit: it can be seconds or an HTTP date
+            errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
+          },
+        };
+      }
 
-    // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
-    const statusClass = classifyStatus(response.status);
-    if (statusClass === "server-error") {
-      return { ok: false, result: serverErrorResult(response.status, response.statusText) };
-    }
+      // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
+      const statusClass = classifyStatus(response.status);
+      if (statusClass === "server-error") {
+        return { ok: false, result: serverErrorResult(response.status, response.statusText) };
+      }
 
-    // 401 and 403 are broken here on purpose: they are re-checked with Playwright, which reports "could not check"
-    if (statusClass !== "okay") {
-      return {
-        ok: false,
-        result: {
+      // 401 and 403 are broken here on purpose: they are re-checked with Playwright, which reports "could not check"
+      if (statusClass !== "okay") {
+        return {
           ok: false,
-          error: "broken link",
-          status: response.status,
-          errorDetail: `${response.statusText} ${response.data}`,
-        },
-      };
-    }
+          result: {
+            ok: false,
+            error: "broken link",
+            status: response.status,
+            errorDetail: `${response.statusText} ${response.data}`,
+          },
+        };
+      }
 
-    return {
-      ok: true,
-      status: response.status,
-      getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      result: {
+      return {
+        ok: true,
+        status: response.status,
+        getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
+      };
+    }),
+    Effect.catchAll((error) =>
+      Effect.succeed<FetchedPage>({
         ok: false,
-        error: "broken link",
-        errorDetail: String(error),
-      },
-    };
-  }
+        result: { ok: false, error: "broken link", errorDetail: String(error) },
+      }),
+    ),
+  );
 };
-
-/**
- * Page fetches of a single `checkLinks` call, keyed by URL without hash: each page is fetched once,
- * no matter how many links (with different hashes) point to it.
- */
-export class PageFetchCache {
-  private readonly pages = new Map<string, Promise<FetchedPage>>();
-
-  /**
-   * @param pagesWithHash pages (URLs without hash) that are linked with a hash somewhere. Their body is read, also
-   * for links without a hash, so the page is not fetched twice.
-   */
-  constructor(private readonly pagesWithHash: ReadonlySet<string> = new Set()) {}
-
-  get(pageUrl: string, needBody: boolean): Promise<FetchedPage> {
-    let page = this.pages.get(pageUrl);
-    if (!page) {
-      incrementMetric("uniquePagesFetched");
-      page = fetchPage(pageUrl, { needBody: needBody || this.pagesWithHash.has(pageUrl) });
-      this.pages.set(pageUrl, page);
-    }
-    return page;
-  }
-}
 
 /** Result for a URL (possibly with a hash) based on its fetched page */
 const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
@@ -152,19 +129,24 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
 };
 
 /**
- * Check a link with fetch, assuming page is server-side rendered
- * @param url link URL
- * @param pageCache share page fetches between links (links to the same page with different hashes fetch it once)
- * @returns LinkCheckResult. Expects a valid http(s) URL, `checkLinks` reports other URLs as invalid before getting here.
+ * Check a link with fetch, assuming page is server-side rendered. Each page (URL without hash) is fetched once per
+ * run (`RunCache`), no matter how many links (with different hashes) point to it.
+ * @param url link URL. Expects a valid http(s) URL, `checkLinks` reports other URLs as invalid before getting here.
+ * @param pagesWithHash pages (URLs without hash) that are linked with a hash somewhere. Their body is read, also for
+ * links without a hash, so the page is not fetched twice.
+ * @returns LinkCheckResult, failures are results too
  */
-export const checkLinkWithFetch = async (
-  url: string,
-  pageCache?: PageFetchCache,
-): Promise<LinkCheckResult> => {
-  const needBody = hasHash(url);
-  const pageUrl = stripHash(url);
-  const page = pageCache
-    ? await pageCache.get(pageUrl, needBody)
-    : await fetchPage(pageUrl, { needBody });
-  return getResultFromPage(page, url);
-};
+export const checkLinkWithFetch = (url: string, pagesWithHash: ReadonlySet<string> = new Set()) =>
+  Effect.gen(function* () {
+    const pageUrl = stripHash(url);
+    const needBody = hasHash(url) || pagesWithHash.has(pageUrl);
+    const metrics = yield* Metrics;
+    const page = yield* runCached(
+      `fetch-page:${needBody}:${pageUrl}`,
+      fetchPage(pageUrl, { needBody }),
+      {
+        onMiss: metrics.increment("uniquePagesFetched"),
+      },
+    );
+    return getResultFromPage(page, url);
+  });

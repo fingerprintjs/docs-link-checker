@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getContent, getBlob, listMatchingRefs } = vi.hoisted(() => ({
@@ -8,17 +9,16 @@ const { getContent, getBlob, listMatchingRefs } = vi.hoisted(() => ({
   listMatchingRefs: vi.fn(),
 }));
 
-vi.mock("../github_client", () => ({
-  getMyOctokit: () => ({
-    repos: { getContent },
-    git: { getBlob, listMatchingRefs },
-    // All pages of a list endpoint: the mocks return a single page
-    paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
-      (await fn(params)).data,
-  }),
-}));
+const octokit = {
+  repos: { getContent },
+  git: { getBlob, listMatchingRefs },
+  // All pages of a list endpoint: the mocks return a single page
+  paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
+    (await fn(params)).data,
+};
 
 import { checkLinkWithGithubApi } from "../gh_check_link";
+import { runWithFakeOctokit } from "../test_utils";
 
 const readme = readFileSync(
   join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"),
@@ -32,7 +32,10 @@ const file = (text: string | Buffer) => ({
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
 
 const checkBlob = (refAndPath: string, hash = "") =>
-  checkLinkWithGithubApi(`https://github.com/owner/repo/blob/${refAndPath}${hash}`);
+  runWithFakeOctokit(
+    checkLinkWithGithubApi(`https://github.com/owner/repo/blob/${refAndPath}${hash}`),
+    () => octokit,
+  );
 
 beforeEach(() => {
   getBlob.mockReset();
@@ -202,12 +205,17 @@ describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
       mockRefs(["heads/a/b/c/d/e", "heads/a/b/x", "tags/a/b"]);
       mockFileAt("a/b/c/d/e", "src/f.ts", "one\n");
 
-      // TODO(effect): convert
-      const { withRun } = await import("../../effect_compat");
-      await withRun({}, async () => {
-        expect(await checkBlob("a/b/c/d/e/src/f.ts", "#L1")).toEqual({ ok: true, status: 200 });
-        expect(await checkBlob("a/b/c/d/e/src/f.ts")).toEqual({ ok: true, status: 200 });
-      });
+      // Same run: the listings are cached
+      const url = (hash: string) =>
+        checkLinkWithGithubApi(`https://github.com/owner/repo/blob/a/b/c/d/e/src/f.ts${hash}`);
+      const results = await runWithFakeOctokit(
+        Effect.all([url("#L1"), url("")], { concurrency: 1 }),
+        () => octokit,
+      );
+      expect(results).toEqual([
+        { ok: true, status: 200 },
+        { ok: true, status: 200 },
+      ]);
 
       // One listing of branches and one of tags for the repository and first segment, cached for the run
       expect(

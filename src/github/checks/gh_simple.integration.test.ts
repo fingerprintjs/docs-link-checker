@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { runWithGitHub } from "../test_utils";
 import {
-  checkGitHubCommitLink,
-  checkGitHubDiscussionLink,
-  checkGitHubReleaseLink,
-  checkIfOwnerExists,
+  checkGitHubCommitLink as checkGitHubCommitLinkEffect,
+  checkGitHubDiscussionLink as checkGitHubDiscussionLinkEffect,
+  checkGitHubReleaseLink as checkGitHubReleaseLinkEffect,
+  checkIfOwnerExists as checkIfOwnerExistsEffect,
 } from "./gh_simple";
+
+const checkIfOwnerExists = (...args: Parameters<typeof checkIfOwnerExistsEffect>) =>
+  runWithGitHub(checkIfOwnerExistsEffect(...args));
+const checkGitHubCommitLink = (...args: Parameters<typeof checkGitHubCommitLinkEffect>) =>
+  runWithGitHub(checkGitHubCommitLinkEffect(...args));
+const checkGitHubDiscussionLink = (...args: Parameters<typeof checkGitHubDiscussionLinkEffect>) =>
+  runWithGitHub(checkGitHubDiscussionLinkEffect(...args));
+const checkGitHubReleaseLink = (...args: Parameters<typeof checkGitHubReleaseLinkEffect>) =>
+  runWithGitHub(checkGitHubReleaseLinkEffect(...args));
 
 // Cases that gh_check_link.integration.test.ts does not cover: responses of the real API that unit tests can only
 // fake (missing repositories, commits, `latest` release)

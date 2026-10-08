@@ -1,7 +1,7 @@
 import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./browser";
 // TODO(effect): convert
-import { incrementMetric, timePhase, withRun, withTimeout } from "./effect_compat";
-import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
+import { incrementMetric, runEffect, timePhase, withRun, withTimeout } from "./effect_compat";
+import { checkLinkWithFetch } from "./fetch_check";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
 import { hasHash, stripHash } from "./hash";
@@ -83,7 +83,7 @@ const shouldRecheckWithPlaywright = (result: LinkCheckResult, method: CheckMetho
 
 const checkLinkFirstPass = async (
   href: string,
-  pageCache: PageFetchCache,
+  pagesWithHash: ReadonlySet<string>,
 ): Promise<{ result: LinkCheckResult; method: CheckMethod }> => {
   const method = getInitialCheckMethod(href);
   switch (method) {
@@ -98,11 +98,14 @@ const checkLinkFirstPass = async (
       };
     case "fetch":
       // Every request has its own timeout (FETCH_TIMEOUT)
-      return { result: await checkLinkWithFetch(href, pageCache), method };
+      return {
+        result: await runEffect(checkLinkWithFetch(href, pagesWithHash)), // TODO(effect): convert
+        method,
+      };
     case "github-api":
       return {
         result: await withTimeout(
-          checkLinkWithGithubApi(href),
+          runEffect(checkLinkWithGithubApi(href)), // TODO(effect): convert
           TASK_TIMEOUT,
           `GitHub API check timed out after ${TASK_TIMEOUT}ms`,
         ),
@@ -193,7 +196,6 @@ const checkLinksInRun = async ({
       .filter((href) => hasHash(href) && getInitialCheckMethod(href) === "fetch")
       .map(stripHash),
   );
-  const pageCache = new PageFetchCache(pagesWithHash);
 
   // Filled in by the two passes below, one entry per unique href
   const results = new Map<string, LinkCheckResult>();
@@ -205,7 +207,7 @@ const checkLinksInRun = async ({
       concurrencyLimit: fetchConcurrencyLimit,
       // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
       processFn: async ({ href }) => {
-        const { result, method } = await checkLinkFirstPass(href, pageCache);
+        const { result, method } = await checkLinkFirstPass(href, pagesWithHash);
         // Failure possibly caused by the fetch method, add to the Playwright queue instead of the final results
         if (shouldRecheckWithPlaywright(result, method)) {
           toRecheck.push(href);
@@ -235,7 +237,7 @@ const checkLinksInRun = async ({
       // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT,
       // HASH_FALLBACK_WAIT_TIMEOUT).
       processFn: async (hrefs) => {
-        const resultsByHref = await checkUrlsOnPageWithPlaywright(hrefs);
+        const resultsByHref = await runEffect(checkUrlsOnPageWithPlaywright(hrefs)); // TODO(effect): convert
         // A result for every URL of the page
         for (const [href, result] of resultsByHref) {
           results.set(href, result);

@@ -1,10 +1,8 @@
-import { afterAll, describe, expect, it } from "vitest";
-// TODO(effect): convert
-import { closeRunBrowser } from "../effect_compat";
-import { checkLinkWithGithubApi } from "./gh_check_link";
+import { describe, expect, it } from "vitest";
+import { checkLinkWithGithubApi as checkLinkWithGithubApiEffect } from "./gh_check_link";
+import { runWithGitHub } from "./test_utils";
 
-// Checks outside of a run share one browser, close it when done
-afterAll(closeRunBrowser);
+const checkLinkWithGithubApi = (url: string) => runWithGitHub(checkLinkWithGithubApiEffect(url));
 
 // Live end-to-end smoke test per link type. Routing, URL parsing and error mapping are covered by the unit tests.
 const REPO = "https://github.com/fingerprintjs/fingerprintjs";

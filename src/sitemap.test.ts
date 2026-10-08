@@ -1,5 +1,10 @@
+import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getWebsitePages, MAX_SITEMAP_DEPTH } from "./sitemap";
+import { withRun } from "./run";
+import { getWebsitePages as getWebsitePagesEffect, MAX_SITEMAP_DEPTH } from "./sitemap";
+
+const getWebsitePages = (url: string) =>
+  Effect.runPromise(getWebsitePagesEffect(url).pipe(withRun()));
 
 const sitemapIndex = (locs: string[]) =>
   `<?xml version="1.0" encoding="UTF-8"?>

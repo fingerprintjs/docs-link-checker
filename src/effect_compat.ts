@@ -4,7 +4,8 @@
 // - Inside `withRun` the services of the run are kept in AsyncLocalStorage, outside of it a default run is used.
 // - Failures are rethrown as the original error (not as a `FiberFailure`), like the Promise code expects.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Cause, type Context, Effect, Exit, ManagedRuntime } from "effect";
+import { Cause, Context, Effect, Exit, ManagedRuntime } from "effect";
+import { GitHubClient } from "./github/github_client";
 import {
   fetchWithHostLimit as fetchWithHostLimitEffect,
   type LimitedRequestOptions,
@@ -24,7 +25,7 @@ import {
   withRun as withRunEffect,
 } from "./run";
 
-type Services = Context.Context<RunServices>;
+type Services = Context.Context<RunServices | GitHubClient>;
 
 /** Host limiter with the API of the old class: Promises and a synchronous `pause` */
 type PromiseHostLimiter = {
@@ -46,10 +47,12 @@ const toPromise = async <A, E>(effect: Effect.Effect<A, E>): Promise<A> => {
   return exit.value;
 };
 
-const makeStore = (services: Services): Store => {
-  const limiter = Effect.runSync(Effect.provide(HostLimiter, services));
+const makeStore = (runServices: Context.Context<RunServices>): Store => {
+  const limiter = Effect.runSync(Effect.provide(HostLimiter, runServices));
+  // One GitHub client per run, like a `GitHubClient.layer` provided to the run
+  const github = Effect.runSync(Effect.provide(GitHubClient.effect, runServices));
   return {
-    services,
+    services: Context.add(runServices, GitHubClient, github),
     hostLimiter: {
       limitPerHost: limiter.limitPerHost,
       run: (url, fn) => toPromise(limiter.run(url, Effect.promise(fn))),
@@ -77,8 +80,9 @@ const getDefaultStore = (): Store => {
 const getStore = (): Store => storage.getStore() ?? getDefaultStore();
 
 /** Runs an Effect of the core with the services of the current run (or the default one) */
-export const runEffect = <A, E>(effect: Effect.Effect<A, E, RunServices>): Promise<A> =>
-  toPromise(Effect.provide(effect, getStore().services));
+export const runEffect = <A, E>(
+  effect: Effect.Effect<A, E, RunServices | GitHubClient>,
+): Promise<A> => toPromise(Effect.provide(effect, getStore().services));
 
 /**
  * Runs `fn` as a run (see `withRun` in `run.ts`). Nested calls join the outer run.

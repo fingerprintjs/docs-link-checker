@@ -1,7 +1,24 @@
-import { appendFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { Data, Effect } from "effect";
 import { getLinksToFix, type LinkCheckReport } from "./report/report";
 import type { LinkWithResult } from "./types";
+
+/** A GitHub Actions file (job summary, outputs) could not be written, or an output value is invalid */
+export class GithubActionsError extends Data.TaggedError("GithubActionsError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+const append = (file: string, text: string) =>
+  Effect.tryPromise({
+    try: () => appendFile(file, text),
+    catch: (cause) =>
+      new GithubActionsError({
+        message: `Could not write ${file}: ${cause instanceof Error ? cause.message : String(cause)}`,
+        cause,
+      }),
+  });
 
 /** How many links to fix are listed in the job summary table */
 const SUMMARY_TABLE_LIMIT = 50;
@@ -103,13 +120,10 @@ export const writeJobSummary = (
   report: LinkCheckReport,
   options: SummaryOptions,
   summaryFile: string | undefined,
-): boolean => {
-  if (!summaryFile) {
-    return false;
-  }
-  appendFileSync(summaryFile, renderJobSummary(report, options));
-  return true;
-};
+) =>
+  summaryFile
+    ? Effect.as(append(summaryFile, renderJobSummary(report, options)), true)
+    : Effect.succeed(false);
 
 // https://github.com/actions/toolkit/blob/main/packages/core/src/command.ts
 const escapeCommandData = (value: string) =>
@@ -161,25 +175,25 @@ export const getFileAnnotations = (report: LinkCheckReport): string[] => {
 
 /**
  * Writes `name=value` outputs to `outputFile` (the value of `GITHUB_OUTPUT`, pass `env.GITHUB_OUTPUT`), if set.
- * No default for the same reason as `writeJobSummary`.
+ * No default for the same reason as `writeJobSummary`. Fails if a value has more than one line.
  */
 export const writeGithubOutputs = (
   outputs: Record<string, string | number>,
   outputFile: string | undefined,
-): boolean => {
-  if (!outputFile) {
-    return false;
-  }
-  const lines = Object.entries(outputs).map(([name, value]) => {
-    const text = String(value);
-    if (/[\r\n]/.test(text)) {
-      throw new Error(`Output ${name} must be a single line`);
+) =>
+  Effect.gen(function* () {
+    if (!outputFile) {
+      return false;
     }
-    return `${name}=${text}\n`;
+    const lines = yield* Effect.forEach(Object.entries(outputs), ([name, value]) => {
+      const text = String(value);
+      return /[\r\n]/.test(text)
+        ? Effect.fail(new GithubActionsError({ message: `Output ${name} must be a single line` }))
+        : Effect.succeed(`${name}=${text}\n`);
+    });
+    yield* append(outputFile, lines.join(""));
+    return true;
   });
-  appendFileSync(outputFile, lines.join(""));
-  return true;
-};
 
 const REPOSITORY_NAME = /^[\w.-]+\/[\w.-]+$/;
 const COMMIT_SHA = /^[\da-f]{40}(?:[\da-f]{24})?$/;

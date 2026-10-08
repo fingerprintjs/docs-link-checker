@@ -1,21 +1,19 @@
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
+import { Metrics } from "../run";
+import { GitHubClient, githubRequest } from "./github_client";
 
-/** Fresh modules: the client is cached per module instance, `../run` must be the instance the client imports */
-const loadModules = async () => {
-  vi.resetModules();
-  const [{ getMyOctokit }, { getRunContext, withRun }] = await Promise.all([
-    import("./github_client"),
-    // TODO(effect): convert
-    import("../effect_compat"),
-  ]);
-  return { getMyOctokit, getRunContext, withRun };
-};
+const run = <A, E>(effect: Effect.Effect<A, E, GitHubClient | Metrics>) =>
+  Effect.runPromise(effect.pipe(Effect.provide(GitHubClient.layer), Effect.provide(Metrics.layer)));
 
-describe("getMyOctokit()", () => {
-  it("can be imported without GH_TOKEN, throws a clear error on first use", async () => {
-    const { getMyOctokit } = await loadModules();
+describe("GitHubClient", () => {
+  it("can be built without GH_TOKEN, a request fails with a clear error", async () => {
     vi.stubEnv("GH_TOKEN", "");
-    expect(() => getMyOctokit()).toThrow("GH_TOKEN is not set");
+    const error = await run(
+      Effect.flip(githubRequest((octokit) => octokit.rest.repos.get({ owner: "o", repo: "r" }))),
+    );
+    expect(error).toMatchObject({ _tag: "GitHubApiError", status: undefined });
+    expect(error.message).toContain("GH_TOKEN is not set");
   });
 
   it("importing GitHub link checks does not require GH_TOKEN", async () => {
@@ -23,6 +21,18 @@ describe("getMyOctokit()", () => {
     vi.resetModules();
     await expect(import("./gh_check_link")).resolves.toBeDefined();
     await expect(import("./gh_get_links")).resolves.toBeDefined();
+  });
+
+  it("keeps the HTTP status of a failed request", async () => {
+    vi.stubEnv("GH_TOKEN", "test-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ message: "Not Found" }), { status: 404 })),
+    );
+    const error = await run(
+      Effect.flip(githubRequest((octokit) => octokit.rest.repos.get({ owner: "o", repo: "r" }))),
+    );
+    expect(error.status).toBe(404);
   });
 });
 
@@ -34,9 +44,7 @@ const jsonResponse = (body: unknown) =>
 
 describe("GitHub API request metrics", () => {
   it("counts every request sent by the shared client, whatever the operation", async () => {
-    const { getMyOctokit, getRunContext, withRun } = await loadModules();
     vi.stubEnv("GH_TOKEN", "test-token");
-    vi.spyOn(console, "log").mockImplementation(() => {});
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("/graphql")) return jsonResponse({ data: { viewer: { login: "me" } } });
@@ -44,15 +52,18 @@ describe("GitHub API request metrics", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const counters = await withRun({}, async () => {
-      const octokit = getMyOctokit();
-      await octokit.rest.repos.get({ owner: "o", repo: "r" });
-      await octokit.rest.issues.get({ owner: "o", repo: "r", issue_number: 1 });
-      await octokit.rest.pulls.get({ owner: "o", repo: "r", pull_number: 1 });
-      await octokit.rest.repos.getReleaseByTag({ owner: "o", repo: "r", tag: "v1" });
-      await octokit.graphql("query { viewer { login } }");
-      return getRunContext()!.metrics.counters;
-    });
+    const counters = await run(
+      Effect.gen(function* () {
+        yield* githubRequest(async (octokit) => {
+          await octokit.rest.repos.get({ owner: "o", repo: "r" });
+          await octokit.rest.issues.get({ owner: "o", repo: "r", issue_number: 1 });
+          await octokit.rest.pulls.get({ owner: "o", repo: "r", pull_number: 1 });
+          await octokit.rest.repos.getReleaseByTag({ owner: "o", repo: "r", tag: "v1" });
+          await octokit.graphql("query { viewer { login } }");
+        });
+        return (yield* (yield* Metrics).snapshot).counters;
+      }),
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(counters.githubApiRequests).toBe(5);

@@ -1,5 +1,6 @@
+import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { getSampleRate, parallelProcess, sampleItems } from "./utils";
+import { getSampleRate, parallelProcess, processInParallel, sampleItems } from "./utils";
 
 let logSpy: MockInstance<typeof console.log>;
 let errorSpy: MockInstance<typeof console.error>;
@@ -77,6 +78,47 @@ describe("parallelProcess() error logging", () => {
     });
     const output = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
     expect(output).toContain(`${expected}: Something exploded`);
+  });
+});
+
+describe("processInParallel()", () => {
+  it("runs at most `concurrencyLimit` items at once and keeps item order", async () => {
+    let active = 0;
+    let maxActive = 0;
+
+    const { results, errors } = await Effect.runPromise(
+      processInParallel({
+        items: [1, 2, 3, 4, 5, 6],
+        concurrencyLimit: 2,
+        processFn: (item) =>
+          Effect.gen(function* () {
+            active++;
+            maxActive = Math.max(maxActive, active);
+            // Earlier items take longer, order must not depend on completion order
+            yield* Effect.sleep(10 * (7 - item));
+            active--;
+            return item * 10;
+          }),
+      }),
+    );
+
+    expect(maxActive).toBe(2);
+    expect(results).toEqual([10, 20, 30, 40, 50, 60]);
+    expect(errors).toEqual([]);
+  });
+
+  it("collects failures with their item and still processes the other items", async () => {
+    const { results, errors } = await Effect.runPromise(
+      processInParallel({
+        items: ["a", "bad", "c"],
+        processFn: (item) =>
+          item === "bad" ? Effect.fail(new Error("Something exploded")) : Effect.succeed(item),
+      }),
+    );
+
+    expect(results).toEqual(["a", "c"]);
+    expect(errors).toEqual([{ item: "bad", error: new Error("Something exploded") }]);
+    expect(errorSpy.mock.calls.flat().join(" ")).toContain("bad: Something exploded");
   });
 });
 

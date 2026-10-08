@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { z } from "zod";
+import { readFile, writeFile } from "node:fs/promises";
+import { Data, Effect, Option, ParseResult, Schema } from "effect";
 import { createGlobMatcher, MAX_GLOB_LENGTH } from "./glob";
 import type { LinkWithResult } from "./types";
 import { getErrorMessage } from "./utils/errors";
@@ -49,56 +49,81 @@ export type Baseline = {
   findEntries: (link: { href: string; page: string }) => BaselineEntry[];
 };
 
-export class BaselineError extends Error {
-  override name = "BaselineError";
-}
+export class BaselineError extends Data.TaggedError("BaselineError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
-const nonEmpty = z.string().min(1);
-const glob = nonEmpty.max(MAX_GLOB_LENGTH);
+const NonEmpty = Schema.NonEmptyString;
+const Glob = NonEmpty.pipe(Schema.maxLength(MAX_GLOB_LENGTH));
 
-const entrySchema = z.preprocess(
-  // A plain string is a shorthand for `{ "pattern": ... }`
-  (item) => (typeof item === "string" ? { pattern: item } : item),
-  z
-    .strictObject(
-      {
-        href: nonEmpty.optional(),
-        pattern: glob.optional(),
-        page: glob.optional(),
-        reason: nonEmpty.optional(),
-      },
-      {
-        error: (issue) =>
-          issue.code === "unrecognized_keys" && issue.keys.includes("regex")
-            ? `"regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`
-            : undefined,
-      },
-    )
-    .refine((entry) => (entry.href === undefined) !== (entry.pattern === undefined), {
-      error: `expected exactly one of "href" or "pattern"`,
+const EntrySchema = Schema.Struct({
+  href: Schema.optional(NonEmpty),
+  pattern: Schema.optional(Glob),
+  page: Schema.optional(Glob),
+  reason: Schema.optional(NonEmpty),
+  // Never valid: a clear message instead of "unexpected key"
+  regex: Schema.optional(
+    Schema.Never.annotations({
+      message: () =>
+        `"regex" is not supported (regular expressions could make the check hang), use a "pattern" glob with * and ** instead`,
     }),
-);
+  ),
+})
+  // Short name in messages instead of a dump of the whole schema
+  .annotations({ identifier: "BaselineEntry" })
+  .pipe(
+    Schema.filter(
+      (entry) =>
+        (entry.href === undefined) !== (entry.pattern === undefined) ||
+        `expected exactly one of "href" or "pattern"`,
+    ),
+  );
 
-const baselineSchema = z.preprocess(
-  (data) => (Array.isArray(data) ? { ignore: data } : data),
-  z.strictObject({ $schema: z.unknown().optional(), ignore: z.array(entrySchema) }),
-);
+const BaselineSchema = Schema.Struct({
+  $schema: Schema.optional(Schema.Unknown),
+  ignore: Schema.Array(EntrySchema),
+}).annotations({ identifier: "BaselineFile" });
+
+/** A bare array is `{ ignore }`, a plain string entry is a shorthand for `{ "pattern": ... }` */
+const normalize = (data: unknown): unknown => {
+  const file = Array.isArray(data) ? { ignore: data } : data;
+  if (typeof file === "object" && file !== null && "ignore" in file && Array.isArray(file.ignore)) {
+    return {
+      ...file,
+      ignore: file.ignore.map((item: unknown) =>
+        typeof item === "string" ? { pattern: item } : item,
+      ),
+    };
+  }
+  return file;
+};
+
+/** `ignore[0].href` */
+const formatPath = (path: ReadonlyArray<PropertyKey>) =>
+  path.reduce<string>(
+    (text, key) =>
+      typeof key === "number" ? `${text}[${key}]` : `${text}${text ? "." : ""}${String(key)}`,
+    "",
+  );
 
 /**
  * Validates the parsed JSON of a baseline file. Accepts `{ "ignore": [...] }` or a bare array of entries.
- * @throws {BaselineError} with a message pointing to the invalid entry
+ * Fails with a `BaselineError` pointing to the invalid entry.
  */
-const validateBaseline = (data: unknown): BaselineFile => {
-  const result = baselineSchema.safeParse(data);
-  if (!result.success) {
-    // Only the first issue, like a fail-fast check: later ones are often side effects of it
-    const [issue] = result.error.issues;
-    throw new BaselineError(
-      `${z.core.toDotPath(issue?.path ?? []) || "baseline"}: ${issue?.message}`,
-    );
-  }
-  return { ignore: result.data.ignore };
-};
+export const validateBaseline = (data: unknown): Effect.Effect<BaselineFile, BaselineError> =>
+  Schema.decodeUnknown(BaselineSchema, { onExcessProperty: "error", errors: "first" })(
+    normalize(data),
+  ).pipe(
+    Effect.map(({ ignore }) => ({ ignore: ignore.map(({ regex: _regex, ...entry }) => entry) })),
+    Effect.mapError((error) => {
+      // Only the first issue, like a fail-fast check: later ones are often side effects of it
+      const [issue] = ParseResult.ArrayFormatter.formatErrorSync(error);
+      return new BaselineError({
+        message: `${formatPath(issue?.path ?? []) || "baseline"}: ${issue?.message}`,
+      });
+    }),
+  );
 
 /** Builds a matcher for validated baseline entries */
 export const createBaseline = (entries: BaselineEntry[]): Baseline => {
@@ -127,26 +152,38 @@ export const createBaseline = (entries: BaselineEntry[]): Baseline => {
 
 export const EMPTY_BASELINE = createBaseline([]);
 
+const isNotFound = (error: unknown) =>
+  error instanceof Error && "code" in error && error.code === "ENOENT";
+
 /**
  * Reads and validates a baseline file.
  * @param allowMissing return an empty baseline if the file does not exist (used with `--update-baseline`)
- * @throws {BaselineError} if the file is missing, not valid JSON, or not a valid baseline
+ * Fails with a `BaselineError` if the file is missing, not valid JSON, or not a valid baseline
  */
-export const loadBaseline = (path: string, { allowMissing = false } = {}): Baseline => {
-  if (!existsSync(path)) {
-    if (allowMissing) {
-      return EMPTY_BASELINE;
-    }
-    throw new BaselineError(`Baseline file not found: ${path}`);
-  }
-  try {
-    const data: unknown = JSON.parse(readFileSync(path, "utf8"));
-    return createBaseline(validateBaseline(data).ignore);
-  } catch (error) {
-    throw new BaselineError(`Invalid baseline file ${path}: ${getErrorMessage(error)}`, {
-      cause: error,
+export const loadBaseline = (path: string, { allowMissing = false } = {}) => {
+  const invalid = (cause: unknown) =>
+    new BaselineError({
+      message: `Invalid baseline file ${path}: ${getErrorMessage(cause)}`,
+      cause,
     });
-  }
+  return Effect.gen(function* () {
+    const text = yield* Effect.tryPromise({
+      try: () => readFile(path, "utf8"),
+      catch: (error) => error,
+    }).pipe(
+      Effect.map(Option.some),
+      Effect.catchIf(isNotFound, () => Effect.succeedNone),
+      Effect.mapError(invalid),
+    );
+    if (Option.isNone(text)) {
+      return allowMissing
+        ? EMPTY_BASELINE
+        : yield* new BaselineError({ message: `Baseline file not found: ${path}` });
+    }
+    const data = yield* Effect.try({ try: (): unknown => JSON.parse(text.value), catch: invalid });
+    const file = yield* validateBaseline(data).pipe(Effect.mapError(invalid));
+    return createBaseline(file.ignore);
+  });
 };
 
 type UpdateBaselineArgs = {
@@ -205,6 +242,12 @@ export const updateBaseline = ({
   return { ignore: [...kept, ...newEntries] };
 };
 
-export const writeBaseline = (path: string, file: BaselineFile) => {
-  writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`);
-};
+export const writeBaseline = (path: string, file: BaselineFile) =>
+  Effect.tryPromise({
+    try: () => writeFile(path, `${JSON.stringify(file, null, 2)}\n`),
+    catch: (cause) =>
+      new BaselineError({
+        message: `Could not write baseline file ${path}: ${getErrorMessage(cause)}`,
+        cause,
+      }),
+  });

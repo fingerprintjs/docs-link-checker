@@ -1,9 +1,8 @@
 import * as cheerio from "cheerio";
-// TODO(effect): convert
-import { fetchWithHostLimit } from "./effect_compat";
-import { USER_AGENT } from "./http";
+import { Data, Effect } from "effect";
+import { fetchWithHostLimit, readText, USER_AGENT } from "./http";
 import type { Link } from "./types";
-import { parallelProcess } from "./utils";
+import { processInParallel } from "./utils";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
 const isHttpUrl = (href: string) => {
@@ -54,72 +53,81 @@ export function filterOutIrrelevantLinks(links: Link[]): Link[] {
   );
 }
 
-/**
- * Parses links from a single page. Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL.
- * @throws {Error} if the page can't be fetched, so it shows up in the extraction errors instead of silently having no links
- */
-async function parseLinksFromPage(pageUrl: string): Promise<Link[]> {
-  // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
-  const response = await fetchWithHostLimit(
-    pageUrl,
-    { headers: { "User-Agent": USER_AGENT } },
-    async (res) => (res.ok ? res.text() : ""),
-  );
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Could not fetch ${pageUrl}, status: ${response.status}`);
+/** A page answered with a status other than 2xx */
+export class PageStatusError extends Data.TaggedError("PageStatusError")<{
+  readonly url: string;
+  readonly status: number;
+}> {
+  override get message() {
+    return `Could not fetch ${this.url}, status: ${this.status}`;
   }
-  const pageContent = response.data;
-
-  // Parse links from page HTML
-  const $ = cheerio.load(pageContent, { baseURI: pageUrl });
-  const links = $("a");
-  const result: Link[] = [];
-  links.each((_index, value) => {
-    const href = value.attribs.href;
-    if (href) {
-      // Resolves both absolute and relative links (relative to pageUrl)
-      result.push({ href: new URL(href, pageUrl).href, text: $(value).text(), page: pageUrl });
-    }
-  });
-
-  return filterOutIrrelevantLinks(result);
 }
 
 /**
- * Parses links from multiple pages
+ * Parses links from a single page. Relative links are resolved against `pageUrl` (the sitemap URL), not the redirected URL.
+ * Fails if the page can't be fetched, so it shows up in the extraction errors instead of silently having no links.
+ */
+const parseLinksFromPage = (pageUrl: string) =>
+  Effect.gen(function* () {
+    // Limited per host (like link checks), with a request timeout. A 429 with Retry-After pauses the host and is retried.
+    const response = yield* fetchWithHostLimit(
+      pageUrl,
+      { headers: { "User-Agent": USER_AGENT } },
+      (res) => (res.ok ? readText(res) : Effect.succeed("")),
+    );
+    if (response.status < 200 || response.status >= 300) {
+      return yield* new PageStatusError({ url: pageUrl, status: response.status });
+    }
+
+    // Parse links from page HTML
+    const $ = cheerio.load(response.data, { baseURI: pageUrl });
+    const result: Link[] = [];
+    $("a").each((_index, value) => {
+      const href = value.attribs.href;
+      if (href) {
+        // Resolves both absolute and relative links (relative to pageUrl)
+        result.push({ href: new URL(href, pageUrl).href, text: $(value).text(), page: pageUrl });
+      }
+    });
+
+    return filterOutIrrelevantLinks(result);
+  });
+
+/**
+ * Parses links from multiple pages. Pages that fail are returned in `errors`, the others are still processed.
  * @param pages
  * @param linkFilter Filter function to apply to links
- * @returns
  */
-export const getLinksFromPages = async ({
+export const getLinksFromPages = ({
   pages,
   linkFilter,
 }: {
   pages: string[];
   linkFilter?: (link: Link) => boolean;
-}) => {
-  console.log(`Retrieving links from ${pages.length} pages...`);
-  // Parse links from pages
-  const { results, errors } = await parallelProcess({
-    items: pages,
-    processFn: async (page: string) => parseLinksFromPage(page),
+}) =>
+  Effect.gen(function* () {
+    console.log(`Retrieving links from ${pages.length} pages...`);
+    // Parse links from pages
+    const { results, errors } = yield* processInParallel({
+      items: pages,
+      processFn: parseLinksFromPage,
+    });
+
+    // Flatten and filter results if a link filter is provided
+    const flatResults = results.flat();
+    console.log(`Extracted ${flatResults.length} links.`);
+    const links = linkFilter ? flatResults.filter(linkFilter) : flatResults;
+    if (linkFilter) {
+      console.log(
+        `Filtered away ${flatResults.length - links.length} links using the provided links filter. Continuing with ${
+          links.length
+        } links...`,
+      );
+    }
+
+    if (errors.length > 0) {
+      console.log(`Retrieving links failed for ${errors.length} pages.`);
+    }
+
+    return { links, errors };
   });
-
-  // Flatten and filter results if a link filter is provided
-  const flatResults = results.flat();
-  console.log(`Extracted ${flatResults.length} links.`);
-  const links = linkFilter ? flatResults.filter(linkFilter) : flatResults;
-  if (linkFilter) {
-    console.log(
-      `Filtered away ${flatResults.length - links.length} links using the provided links filter. Continuing with ${
-        links.length
-      } links...`,
-    );
-  }
-
-  if (errors.length > 0) {
-    console.log(`Retrieving links failed for ${errors.length} pages.`);
-  }
-
-  return { links, errors };
-};

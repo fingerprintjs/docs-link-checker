@@ -1,6 +1,7 @@
+import { Effect, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// TODO(effect): convert
-import { closeRunBrowser, withRun } from "./effect_compat";
+// TODO(effect): convert, used for `checkLinks`
+import { closeRunBrowser } from "./effect_compat";
 
 /**
  * Offline tests for the shared browser (`browser.ts`) with a fake Playwright.
@@ -114,11 +115,16 @@ vi.mock("node:child_process", () => ({
 import { PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
+import { type RunServices, withRun } from "./run";
 
-const launchBrowser = () => withPage(async () => {}, { timeout: 1000 });
+/** Runs the effect as its own run (own browser, closed at the end) */
+const inRun = <A, E>(effect: Effect.Effect<A, E, RunServices>) =>
+  Effect.runPromise(effect.pipe(withRun()));
 
-const checkLinkWithPlaywright = async (url: string) =>
-  (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
+const launchBrowser = withPage(() => Effect.void, { timeout: 1000 });
+
+const checkLinkWithPlaywright = (url: string) =>
+  Effect.map(checkUrlsOnPageWithPlaywright([url]), (results) => results.get(url)!);
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
@@ -180,8 +186,11 @@ describe("shared browser", () => {
 
   it("shares a single launch between concurrent callers and limits open pages", async () => {
     state.gotoDelayMs = 20;
-    const results = await Promise.all(
-      Array.from({ length: 12 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`)),
+    const results = await inRun(
+      Effect.all(
+        Array.from({ length: 12 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`)),
+        { concurrency: "unbounded" },
+      ),
     );
 
     expect(results.every((result) => result.ok)).toBe(true);
@@ -190,10 +199,13 @@ describe("shared browser", () => {
   });
 
   it("relaunches a crashed browser once and retries the check", async () => {
-    await launchBrowser();
-    state.crashNextContext = true;
-
-    const result = await checkLinkWithPlaywright("https://example.com/after-crash");
+    const result = await inRun(
+      Effect.gen(function* () {
+        yield* launchBrowser;
+        state.crashNextContext = true;
+        return yield* checkLinkWithPlaywright("https://example.com/after-crash");
+      }),
+    );
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(state.launches).toBe(2);
@@ -201,24 +213,23 @@ describe("shared browser", () => {
   });
 
   it("does not retry errors that are not crashes", async () => {
-    await expect(
-      withPage(
-        async () => {
-          throw new Error("boom");
-        },
-        { timeout: 1000 },
-      ),
-    ).rejects.toThrow("boom");
+    const error = await inRun(
+      Effect.flip(withPage(() => Effect.fail(new Error("boom")), { timeout: 1000 })),
+    );
+    expect(error.message).toBe("boom");
     expect(state.launches).toBe(1);
     // The context is closed even when the check throws
     expect(state.openPages).toBe(0);
   });
 
   it("relaunches the browser when it crashes during navigation and retries the check", async () => {
-    await launchBrowser();
-    state.nextGotoFailure = "crash";
-
-    const result = await checkLinkWithPlaywright("https://example.com/crash");
+    const result = await inRun(
+      Effect.gen(function* () {
+        yield* launchBrowser;
+        state.nextGotoFailure = "crash";
+        return yield* checkLinkWithPlaywright("https://example.com/crash");
+      }),
+    );
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(state.launches).toBe(2);
@@ -227,7 +238,7 @@ describe("shared browser", () => {
   it("reports navigation errors as broken links (no relaunch)", async () => {
     state.nextGotoFailure = "error";
 
-    const result = await checkLinkWithPlaywright("https://does-not-exist.example.com");
+    const result = await inRun(checkLinkWithPlaywright("https://does-not-exist.example.com"));
 
     expect(result).toMatchObject({ ok: false, error: "broken link" });
     expect(!result.ok && result.errorDetail).toContain("ERR_NAME_NOT_RESOLVED");
@@ -264,7 +275,7 @@ describe("shared browser", () => {
   it("installs Chromium when the browser executable is missing and retries the launch", async () => {
     state.failLaunch = "missing";
 
-    const result = await checkLinkWithPlaywright("https://example.com/after-install");
+    const result = await inRun(checkLinkWithPlaywright("https://example.com/after-install"));
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(state.installs).toBe(1);
@@ -298,8 +309,8 @@ describe("browser belongs to the run", () => {
     state.gotoGates["https://example.com/second"] = new Promise((resolve) => {
       releaseSecond = resolve;
     });
-    const first = withRun({}, () => checkLinkWithPlaywright("https://example.com/first"));
-    const second = withRun({}, () => checkLinkWithPlaywright("https://example.com/second"));
+    const first = inRun(checkLinkWithPlaywright("https://example.com/first"));
+    const second = inRun(checkLinkWithPlaywright("https://example.com/second"));
 
     expect(await first).toEqual({ ok: true, status: 200 });
     expect(state.closes).toBe(1);
@@ -311,24 +322,29 @@ describe("browser belongs to the run", () => {
     expect(state.closes).toBe(2);
   });
 
-  it("closes the run's browser even when the run fails, standalone checks are unaffected", async () => {
+  it("closes the run's browser even when the run fails", async () => {
     await expect(
-      withRun({}, async () => {
-        await checkLinkWithPlaywright("https://example.com/a");
-        throw new Error("run failed");
-      }),
+      inRun(
+        Effect.zipRight(
+          checkLinkWithPlaywright("https://example.com/a"),
+          Effect.fail(new Error("run failed")),
+        ),
+      ),
     ).rejects.toThrow("run failed");
     expect(state.launches).toBe(1);
     expect(state.closes).toBe(1);
+  });
 
-    // A standalone check (outside of any run) uses its own (default context) browser
-    const result = await checkLinkWithPlaywright("https://example.com/standalone");
-    expect(result).toEqual({ ok: true, status: 200 });
-    expect(state.launches).toBe(2);
+  it("closes the page when the check is interrupted by a timeout", async () => {
+    state.gotoGates["https://example.com/hangs"] = new Promise(() => {});
+
+    const result = await inRun(
+      Effect.timeout(checkLinkWithPlaywright("https://example.com/hangs"), 200).pipe(Effect.option),
+    );
+
+    expect(result).toEqual(Option.none());
+    expect(state.openPages).toBe(0);
     expect(state.closes).toBe(1);
-
-    await closeRunBrowser();
-    expect(state.closes).toBe(2);
   });
 });
 
@@ -343,27 +359,30 @@ describe("request blocking", () => {
   // Runs requests through the route handler `withPage` registered, returns the URLs that were aborted
   const run = async (requests: FakeRequest[], failResponse = false) => {
     const aborted: string[] = [];
-    await withPage(
-      async () => {
-        for (const { resourceType, url, navigation } of requests) {
-          await state.routeHandler?.({
-            request: () => ({
-              resourceType: () => resourceType,
-              url: () => url,
-              isNavigationRequest: () => navigation !== undefined,
-              frame: () => ({ parentFrame: () => (navigation === "iframe" ? {} : null) }),
-            }),
-            abort: async () => {
-              aborted.push(url);
-              if (failResponse) throw new Error("Target closed");
-            },
-            continue: async () => {
-              if (failResponse) throw new Error("Target closed");
-            },
-          });
-        }
-      },
-      { timeout: 1000 },
+    await inRun(
+      withPage(
+        () =>
+          Effect.promise(async () => {
+            for (const { resourceType, url, navigation } of requests) {
+              await state.routeHandler?.({
+                request: () => ({
+                  resourceType: () => resourceType,
+                  url: () => url,
+                  isNavigationRequest: () => navigation !== undefined,
+                  frame: () => ({ parentFrame: () => (navigation === "iframe" ? {} : null) }),
+                }),
+                abort: async () => {
+                  aborted.push(url);
+                  if (failResponse) throw new Error("Target closed");
+                },
+                continue: async () => {
+                  if (failResponse) throw new Error("Target closed");
+                },
+              });
+            }
+          }),
+        { timeout: 1000 },
+      ),
     );
     return aborted;
   };

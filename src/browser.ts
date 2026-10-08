@@ -1,8 +1,9 @@
-import { Effect } from "effect";
-import pLimit from "p-limit";
+// Pages of the shared browser of the run as scoped resources (closed when the scope ends), with blocking of heavy
+// resources and a relaunch after a browser crash. https://effect.website/docs/resource-management/scope/
+import { Data, Effect } from "effect";
 import type { Browser, Page, Request, Route } from "playwright";
-import { runEffect } from "./effect_compat";
 import { BrowserSlot } from "./run";
+import { type BrowserLaunchError, getErrorMessage } from "./utils/errors";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
@@ -106,11 +107,26 @@ const createResourceBlocker = () => {
   };
 };
 
-const pageSlots = pLimit(PLAYWRIGHT_CONCURRENCY_LIMIT);
+/** A Playwright call failed (navigation error, closed page, crashed browser...) */
+export class PageError extends Data.TaggedError("PageError")<{
+  readonly cause: unknown;
+}> {
+  override get message() {
+    return getErrorMessage(this.cause);
+  }
 
-// TODO(effect): convert, use `BrowserSlot` directly
-const getBrowser = (): Promise<Browser> =>
-  runEffect(Effect.flatMap(BrowserSlot, (slot) => slot.get));
+  // Reports show the same text as the original Playwright error ("Error: page.goto: ...")
+  override toString() {
+    return String(this.cause);
+  }
+}
+
+/** Runs a Playwright call, its failure is a `PageError` */
+export const tryPage = <A>(fn: () => Promise<A>) =>
+  Effect.tryPromise({ try: fn, catch: (cause) => new PageError({ cause }) });
+
+// Global, not per run: a process has one set of CPU cores for pages
+const pageSlots = Effect.unsafeMakeSemaphore(PLAYWRIGHT_CONCURRENCY_LIMIT);
 
 type WithPageOptions = {
   userAgent?: string;
@@ -118,53 +134,58 @@ type WithPageOptions = {
   timeout: number;
 };
 
-const runWithNewPage = async <T>(
-  browser: Browser,
-  fn: (page: Page) => Promise<T>,
-  { userAgent, timeout }: WithPageOptions,
-) => {
-  const context = await browser.newContext({ userAgent });
-  try {
+/** A page in its own browser context, closed when the scope ends */
+const acquirePage = (browser: Browser, { userAgent, timeout }: WithPageOptions) =>
+  Effect.gen(function* () {
+    const context = yield* Effect.acquireRelease(
+      tryPage(() => browser.newContext({ userAgent })),
+      (opened) => Effect.promise(() => opened.close().catch(() => {})),
+    );
     // One blocker per context: it tracks the URL of this context's page
     const blocker = createResourceBlocker();
-    await context.route("**/*", (route) => blocker(route));
-    const page = await context.newPage();
+    yield* tryPage(() => context.route("**/*", (route) => blocker(route)));
+    const page = yield* tryPage(() => context.newPage());
     // Response bodies have no Playwright timeout, callers bound them (see `readResponseText` in playwright_check.ts)
     page.setDefaultTimeout(timeout);
     page.setDefaultNavigationTimeout(timeout);
-    return await fn(page);
-  } finally {
-    await context.close().catch(() => {});
-  }
-};
+    return page;
+  });
 
 /**
- * Runs `fn` with a fresh page (in its own browser context) of the shared browser.
- * At most `PLAYWRIGHT_CONCURRENCY_LIMIT` pages are open at the same time.
- * Heavy resources (images, media, fonts, analytics) are blocked.
- * If the browser crashed, it is relaunched and `fn` is retried once.
+ * Runs `use` with a fresh page (in its own browser context) of the shared browser of the run.
+ * - At most `PLAYWRIGHT_CONCURRENCY_LIMIT` pages are open at the same time.
+ * - Heavy resources (images, media, fonts, analytics) are blocked.
+ * - The context is closed when `use` ends, fails or is interrupted.
+ * - If the browser crashed (`use` or opening the page failed and the browser is disconnected), it is relaunched and
+ *   `use` is run once more.
  */
-export const withPage = async <T>(
-  fn: (page: Page) => Promise<T>,
+export const withPage = <A, E, R>(
+  use: (page: Page) => Effect.Effect<A, E, R>,
   options: WithPageOptions,
-): Promise<T> => pageSlots(() => withSharedBrowserPage(fn, options));
+): Effect.Effect<A, E | PageError | BrowserLaunchError, R | BrowserSlot> =>
+  pageSlots.withPermits(1)(attempt(use, options, true));
 
-const withSharedBrowserPage = async <T>(
-  fn: (page: Page) => Promise<T>,
+const attempt = <A, E, R>(
+  use: (page: Page) => Effect.Effect<A, E, R>,
   options: WithPageOptions,
-): Promise<T> => {
-  for (let attempt = 0; ; attempt++) {
-    const browser = await getBrowser();
-    try {
-      return await runWithNewPage(browser, fn, options);
-    } catch (error) {
-      if (attempt === 0 && !browser.isConnected()) {
-        console.warn(`Browser disconnected (${String(error)}), relaunching and retrying once...`);
-        // Closes it and makes the next `getBrowser` launch a new one
-        await runEffect(Effect.flatMap(BrowserSlot, (slot) => slot.discard(browser)));
-        continue;
-      }
-      throw error;
-    }
-  }
-};
+  canRetry: boolean,
+): Effect.Effect<A, E | PageError | BrowserLaunchError, R | BrowserSlot> =>
+  Effect.gen(function* () {
+    const slot = yield* BrowserSlot;
+    const browser = yield* slot.get;
+    return yield* Effect.scoped(Effect.flatMap(acquirePage(browser, options), use)).pipe(
+      Effect.catchAll((error) =>
+        canRetry && !browser.isConnected()
+          ? Effect.zipRight(
+              Effect.sync(() =>
+                console.warn(
+                  `Browser disconnected (${String(error)}), relaunching and retrying once...`,
+                ),
+              ),
+              // Closes it and makes the next `get` launch a new one
+              Effect.zipRight(slot.discard(browser), attempt(use, options, false)),
+            )
+          : Effect.fail(error),
+      ),
+    );
+  });

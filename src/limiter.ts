@@ -1,9 +1,6 @@
 // Per-host request limits, see https://effect.website/docs/concurrency/semaphore/
 import { Clock, Context, Effect, Layer } from "effect";
 
-/** An item whose processing threw, with what was thrown */
-export type ConcurrentError<T> = { item: T; error: unknown };
-
 /** Default per-host concurrency (`--host-concurrency` / `LINK_CHECK_HOST_CONCURRENCY`) */
 export const DEFAULT_HOST_CONCURRENCY = 8;
 

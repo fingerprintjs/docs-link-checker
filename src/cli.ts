@@ -11,7 +11,8 @@ import {
   writeBaseline,
 } from "./baseline";
 // TODO(effect): convert
-import { withRun } from "./effect_compat";
+// TODO(effect): convert
+import { runEffect, withRun } from "./effect_compat";
 import { checkReadmesInGithubOrg, getGithubOrgSiteName } from "./github/gh_get_links";
 import {
   describeResult,
@@ -323,7 +324,7 @@ const checkCommandLinks = async (
       };
     case "github-org":
       return {
-        results: await checkReadmesInGithubOrg(command.org, { sampleRate }),
+        results: await runEffect(checkReadmesInGithubOrg(command.org, { sampleRate })), // TODO(effect): convert
         siteName: getGithubOrgSiteName(command.org),
       };
     case "files":
@@ -396,9 +397,11 @@ const runDryRun = async (
       `${collected.files.length} files, ${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped links.\n`,
     );
   }
-  writeGithubOutputs(
-    { "local-links": collected.local.length, "external-links": collected.external.length },
-    env.GITHUB_OUTPUT,
+  await runEffect(
+    writeGithubOutputs(
+      { "local-links": collected.local.length, "external-links": collected.external.length },
+      env.GITHUB_OUTPUT,
+    ),
   );
 };
 
@@ -430,7 +433,9 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
   let baseline = EMPTY_BASELINE;
   if (baselinePath) {
     try {
-      baseline = loadBaseline(baselinePath, { allowMissing: options.updateBaseline });
+      baseline = await runEffect(
+        loadBaseline(baselinePath, { allowMissing: options.updateBaseline }),
+      );
     } catch (error) {
       if (error instanceof BaselineError) {
         stderr(`Error: ${error.message}\n`);
@@ -459,14 +464,16 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
       annotationOut(`${line}\n`);
     }
   }
-  writeJobSummary(report, { reportPaths }, env.GITHUB_STEP_SUMMARY);
-  writeGithubOutputs(
-    {
-      "links-to-fix": linksToFix,
-      "report-path": reportPaths.json,
-      "report-html-path": reportPaths.html,
-    },
-    env.GITHUB_OUTPUT,
+  await runEffect(writeJobSummary(report, { reportPaths }, env.GITHUB_STEP_SUMMARY));
+  await runEffect(
+    writeGithubOutputs(
+      {
+        "links-to-fix": linksToFix,
+        "report-path": reportPaths.json,
+        "report-html-path": reportPaths.html,
+      },
+      env.GITHUB_OUTPUT,
+    ),
   );
 
   if (options.updateBaseline && baselinePath) {
@@ -477,7 +484,7 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
       // entries are only removed when asked for
       prune: options.pruneBaseline,
     });
-    writeBaseline(baselinePath, file);
+    await runEffect(writeBaseline(baselinePath, file));
     console.log(
       `Updated baseline ${options.baseline}: ${file.ignore.length} entries (was ${baseline.entries.length}).`,
     );

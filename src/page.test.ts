@@ -1,7 +1,7 @@
+import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// TODO(effect): convert
-import { withRun } from "./effect_compat";
-import { getLinksFromPages, filterOutIrrelevantLinks } from "./page";
+import { filterOutIrrelevantLinks, getLinksFromPages } from "./page";
+import { withRun } from "./run";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -69,24 +69,25 @@ describe("filterOutIrrelevantLinks()", () => {
 describe("getLinksFromPages()", () => {
   const html = '<a href="https://example.com/target">Target</a>';
 
-  it("reports a page that still fails after the retries as an extraction error (not silently empty)", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL) =>
-          String(input).endsWith("/limited")
-            ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
-            : new Response(html, { status: 200 }),
-        ),
-      );
+  it("reports a page that still fails after the retries as an extraction error (not silently empty)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) =>
+        String(input).endsWith("/limited")
+          ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
+          : new Response(html, { status: 200 }),
+      ),
+    );
 
-      const { links, errors } = await getLinksFromPages({
+    const { links, errors } = await Effect.runPromise(
+      getLinksFromPages({
         pages: ["https://docs.example.com/limited", "https://docs.example.com/ok"],
-      });
+      }).pipe(withRun({ hostConcurrency: 2 })),
+    );
 
-      expect(links).toHaveLength(1);
-      expect(errors).toHaveLength(1);
-      expect(errors[0]!.item).toBe("https://docs.example.com/limited");
-      expect(String(errors[0]!.error)).toContain("status: 429");
-    }));
+    expect(links).toHaveLength(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.item).toBe("https://docs.example.com/limited");
+    expect(String(errors[0]!.error)).toContain("status: 429");
+  });
 });

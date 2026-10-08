@@ -1,7 +1,5 @@
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// TODO(effect): convert
-import { getHostLimiter, withRun as withPromiseRun } from "./effect_compat";
 import { checkLinkWithFetch } from "./fetch_check";
 import { fetchWithHostLimit, planServerErrorRetry, readText } from "./http";
 import { HostLimiter } from "./limiter";
@@ -351,15 +349,14 @@ describe("fetchWithHostLimit() redirects", () => {
     expect(fetchMock).toHaveBeenCalledTimes(11);
   });
 
-  it("reports too many redirects as a broken link in link checks", () =>
-    withPromiseRun({ hostConcurrency: 2 }, async () => {
-      stubFetch((url) => redirect(`${url}x`, 302));
+  it("reports too many redirects as a broken link in link checks", async () => {
+    stubFetch((url) => redirect(`${url}x`, 302));
 
-      const result = await checkLinkWithFetch("https://loop.example.com/");
+    const result = await runInRun(checkLinkWithFetch("https://loop.example.com/"));
 
-      expect(result).toMatchObject({ ok: false, error: "broken link" });
-      expect(!result.ok && result.errorDetail).toContain("Too many redirects");
-    }));
+    expect(result).toMatchObject({ ok: false, error: "broken link" });
+    expect(!result.ok && result.errorDetail).toContain("Too many redirects");
+  });
 
   it("cancels the body of every redirect response while holding the slot of its host", async () => {
     const result = await runInRun(
@@ -399,15 +396,6 @@ describe("fetchWithHostLimit() redirects", () => {
   });
 });
 
-/** Same as `trackedResponse`, for code that still uses the Promise API (see `effect_compat.ts`) */
-const trackedPromiseResponse = (status: number, url: string, headers?: HeadersInit) =>
-  trackedResponse(
-    (probeUrl, onStart) => void getHostLimiter().run(probeUrl, async () => onStart()),
-    status,
-    url,
-    headers,
-  );
-
 describe("unread response bodies are cancelled before the host slot is released", () => {
   it("fetchWithHostLimit cancels a body the reader did not consume", async () => {
     const url = "https://example.com/big-file";
@@ -432,16 +420,27 @@ describe("unread response bodies are cancelled before the host slot is released"
     expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
   });
 
-  it("link checks cancel the GET body when it is not needed", () =>
-    withPromiseRun({ hostConcurrency: 1 }, async () => {
-      const url = "https://example.com/big-file";
-      const get = trackedPromiseResponse(200, url);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => get.response),
-      );
+  it("link checks cancel the GET body when it is not needed", async () => {
+    const url = "https://example.com/big-file";
+    const { result, tracking } = await runInRun(
+      Effect.gen(function* () {
+        const limiter = yield* HostLimiter;
+        const tracked = trackedResponse(
+          (probeUrl, onStart) => void Effect.runFork(limiter.run(probeUrl, Effect.sync(onStart))),
+          200,
+          url,
+        );
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => tracked.response),
+        );
+        const checked = yield* checkLinkWithFetch(url);
+        return { result: checked, tracking: tracked.tracking };
+      }),
+      1,
+    );
 
-      expect(await checkLinkWithFetch(url)).toEqual({ ok: true, status: 200 });
-      expect(get.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
-    }));
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });
+  });
 });

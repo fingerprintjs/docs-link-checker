@@ -1,5 +1,5 @@
 // TODO(effect): convert
-import { timePhase } from "./effect_compat";
+import { runEffect, timePhase } from "./effect_compat";
 import { checkLinks } from "./link";
 import { getLinksFromPages } from "./page";
 import { getWebsitePages } from "./sitemap";
@@ -28,7 +28,7 @@ export const checkWebsite = async ({
   linkFilter,
   sampleRate,
 }: CheckWebsiteArgs): Promise<LinkWithResult[]> => {
-  const allPages = await timePhase("Read sitemap", () => getWebsitePages(websiteUrl));
+  const allPages = await timePhase("Read sitemap", () => runEffect(getWebsitePages(websiteUrl)));
   const pages = sampleItems({
     items: allPages,
     key: (page) => page,
@@ -37,7 +37,7 @@ export const checkWebsite = async ({
   });
 
   const { links } = await timePhase("Extract links", () =>
-    getLinksFromPages({ pages, linkFilter }),
+    runEffect(getLinksFromPages({ pages, linkFilter })),
   );
   console.log(`Fetched ${links.length} links.`);
 

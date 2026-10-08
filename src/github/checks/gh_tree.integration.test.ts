@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { checkGitHubTreeLink } from "./gh_content";
+import { runWithGitHub } from "../test_utils";
+import { checkGitHubTreeLink as checkGitHubTreeLinkEffect } from "./gh_content";
+
+const checkGitHubTreeLink = (...args: Parameters<typeof checkGitHubTreeLinkEffect>) =>
+  runWithGitHub(checkGitHubTreeLinkEffect(...args));
 
 // Commit SHAs of a huge repository, the other `tree` links are checked in gh_check_link.integration.test.ts
 const CHROMIUM_SHA = "3e914531a360b766bfd8468f59259b3ab29118d7";

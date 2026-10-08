@@ -1,10 +1,11 @@
+import { Effect, Either } from "effect";
 import { decodeHash } from "../../hash";
 import { checkLineAnchor, countLines } from "../../line_anchor";
 import { getMarkdownAnchors, hasMatchingAnchor } from "../../markdown";
 import type { LinkCheckResult } from "../../types";
-import { tryCatch } from "../../utils/tryCatch";
 import { cachedRequest, getApiErrorResult, isNotFoundApiError } from "../gh_api";
 import { isGithubCodeLineLink } from "../gh_url";
+import type { GitHubServices } from "../github_client";
 
 /**
  * Checks of the `blob/<ref>/<path>` (file, and its hash) and `tree/<ref>/<path>` (branch, commit, directory) parts
@@ -22,45 +23,32 @@ const getContent = (owner: string, repo: string, ref: string, path: string) =>
  * (`feature` or `feature/...`, not `feature-2`), one cached listing of branches and one of tags per repository and
  * first segment. A missing repository has no refs.
  */
-const getRefCandidates = async (owner: string, repo: string, first: string): Promise<string[]> => {
-  const listings = await Promise.all(
-    (["heads", "tags"] as const).map(async (kind) => {
+const getRefCandidates = (owner: string, repo: string, first: string) =>
+  Effect.forEach(
+    ["heads", "tags"] as const,
+    (kind) =>
       // `GET /repos/{owner}/{repo}/git/matching-refs/{ref}` (all pages): refs whose name starts with the prefix
-      const { data, error } = await tryCatch(
-        cachedRequest(
-          ["matching-refs", owner.toLowerCase(), repo.toLowerCase(), `${kind}/${first}`],
-          (octokit) =>
-            octokit.paginate(octokit.git.listMatchingRefs, {
-              owner,
-              repo,
-              ref: `${kind}/${first}`,
-            }),
-        ),
-      );
-      if (error) {
-        if (isNotFoundApiError(error)) {
-          return [];
-        }
-        throw error;
-      }
-      const prefix = `refs/${kind}/`;
-      return data.flatMap(({ ref }) => (ref.startsWith(prefix) ? [ref.slice(prefix.length)] : []));
-    }),
+      cachedRequest(
+        ["matching-refs", owner.toLowerCase(), repo.toLowerCase(), `${kind}/${first}`],
+        (octokit) =>
+          octokit.paginate(octokit.git.listMatchingRefs, { owner, repo, ref: `${kind}/${first}` }),
+      ).pipe(
+        Effect.map((data) => {
+          const prefix = `refs/${kind}/`;
+          return data.flatMap(({ ref }) =>
+            ref.startsWith(prefix) ? [ref.slice(prefix.length)] : [],
+          );
+        }),
+        Effect.catchIf(isNotFoundApiError, () => Effect.succeed([] as string[])),
+      ),
+    { concurrency: "unbounded" },
+  ).pipe(
+    Effect.map((listings) =>
+      [...new Set(listings.flat())].filter(
+        (name) => name === first || name.startsWith(`${first}/`),
+      ),
+    ),
   );
-  return [...new Set(listings.flat())].filter(
-    (name) => name === first || name.startsWith(`${first}/`),
-  );
-};
-
-type RefPathContent =
-  | {
-      found: true;
-      ref: string;
-      path: string;
-      /** Contents API response, `undefined` if the URL is only a ref (proven by the ref listing) */
-      response: Awaited<ReturnType<typeof getContent>> | undefined;
-    }
-  | { found: false; error: unknown };
 
 /**
  * Contents API response of the `<ref>/<path>` part of a blob or tree URL (`blob/<ref>/<path>`). Branch and tag names
@@ -72,58 +60,58 @@ type RefPathContent =
  * @param segments decoded path segments after `blob` or `tree`
  * @param requirePath `true` for blobs (a file), `false` for trees (`tree/feature/x` is the root of `feature/x`)
  */
-const getRefPathContent = async (
+const getRefPathContent = (
   owner: string,
   repo: string,
   segments: string[],
   { requirePath }: { requirePath: boolean },
-): Promise<RefPathContent> => {
-  const [first = "", ...rest] = segments;
-  const path = rest.join("/");
-  const firstTry = await tryCatch(getContent(owner, repo, first, path));
-  if (firstTry.data) {
-    return { found: true, ref: first, path, response: firstTry.data };
-  }
-  if (!isNotFoundApiError(firstTry.error) || segments.length < 2) {
-    return { found: false, error: firstTry.error };
-  }
+) =>
+  Effect.gen(function* () {
+    const [first = "", ...rest] = segments;
+    const path = rest.join("/");
+    const firstTry = yield* Effect.either(getContent(owner, repo, first, path));
+    if (Either.isRight(firstTry)) {
+      return { found: true, ref: first, path, response: firstTry.right } as const;
+    }
+    const firstError = firstTry.left;
+    if (!isNotFoundApiError(firstError) || segments.length < 2) {
+      return { found: false, error: firstError } as const;
+    }
 
-  const { data: candidates, error: listError } = await tryCatch(
-    getRefCandidates(owner, repo, first),
-  );
-  if (listError) {
-    return { found: false, error: listError };
-  }
-  const maxRefSegments = segments.length - (requirePath ? 1 : 0);
-  const candidateRefs = new Set(candidates);
-  // The URL prefixes that are listed refs, longest first: a branch `a/b` and a tag `a/b/c` can both exist
-  const refSegmentCounts: number[] = [];
-  for (let count = maxRefSegments; count >= 2; count--) {
-    if (candidateRefs.has(segments.slice(0, count).join("/"))) {
-      refSegmentCounts.push(count);
+    const candidates = yield* Effect.either(getRefCandidates(owner, repo, first));
+    if (Either.isLeft(candidates)) {
+      return { found: false, error: candidates.left } as const;
     }
-  }
+    const maxRefSegments = segments.length - (requirePath ? 1 : 0);
+    const candidateRefs = new Set(candidates.right);
+    // The URL prefixes that are listed refs, longest first: a branch `a/b` and a tag `a/b/c` can both exist
+    const refSegmentCounts: number[] = [];
+    for (let count = maxRefSegments; count >= 2; count--) {
+      if (candidateRefs.has(segments.slice(0, count).join("/"))) {
+        refSegmentCounts.push(count);
+      }
+    }
 
-  for (const count of refSegmentCounts) {
-    const ref = segments.slice(0, count).join("/");
-    const refPath = segments.slice(count).join("/");
-    if (!refPath) {
-      // The listing proves the ref exists
-      return { found: true, ref, path: refPath, response: undefined };
+    for (const count of refSegmentCounts) {
+      const ref = segments.slice(0, count).join("/");
+      const refPath = segments.slice(count).join("/");
+      if (!refPath) {
+        // The listing proves the ref exists, no contents response needed
+        return { found: true, ref, path: refPath, response: undefined } as const;
+      }
+      const result = yield* Effect.either(getContent(owner, repo, ref, refPath));
+      if (Either.isRight(result)) {
+        return { found: true, ref, path: refPath, response: result.right } as const;
+      }
+      if (!isNotFoundApiError(result.left)) {
+        return { found: false, error: result.left } as const;
+      }
     }
-    const { data, error } = await tryCatch(getContent(owner, repo, ref, refPath));
-    if (data) {
-      return { found: true, ref, path: refPath, response: data };
-    }
-    if (!isNotFoundApiError(error)) {
-      return { found: false, error };
-    }
-  }
-  return { found: false, error: firstTry.error };
-};
+    return { found: false, error: firstError } as const;
+  });
 
 // Decoded text per file response: the response is cached for the run, so each file is decoded once for all its hashes
-const textByFile = new WeakMap<object, Promise<FileText>>();
+const textByFile = new WeakMap<object, FileText>();
 // Anchors per file text
 const anchorsByText = new WeakMap<FileText, Set<string>>();
 
@@ -137,28 +125,28 @@ type FileData = { content: string; encoding?: string; sha: string; size?: number
  * Text of a file. Files over 1 MB have no content in the contents API (`encoding: "none"`), they are read with
  * `GET /repos/{owner}/{repo}/git/blobs/{sha}` (up to 100 MB). A blob never changes, cached per sha.
  */
-const getFileText = (owner: string, repo: string, file: FileData): Promise<FileText> => {
-  let text = textByFile.get(file);
-  if (!text) {
-    text = (async () => {
-      const isLarge = file.encoding === "none" || (file.content === "" && (file.size ?? 0) > 0);
-      const base64 = isLarge
-        ? (
-            await cachedRequest(
-              ["blob", owner.toLowerCase(), repo.toLowerCase(), file.sha],
-              (octokit) => octokit.git.getBlob({ owner, repo, file_sha: file.sha }),
-            )
-          ).data.content
-        : file.content;
-      const buffer = Buffer.from(base64, "base64");
-      return { text: buffer.toString("utf8"), binary: buffer.includes(0) };
-    })();
+const getFileText = (owner: string, repo: string, file: FileData) =>
+  Effect.gen(function* () {
+    const known = textByFile.get(file);
+    if (known) {
+      return known;
+    }
+    const isLarge = file.encoding === "none" || (file.content === "" && (file.size ?? 0) > 0);
+    const base64 = isLarge
+      ? (yield* cachedRequest(
+          ["blob", owner.toLowerCase(), repo.toLowerCase(), file.sha],
+          (octokit) => octokit.git.getBlob({ owner, repo, file_sha: file.sha }),
+        )).data.content
+      : file.content;
+    const buffer = Buffer.from(base64, "base64");
+    // Decoded text is shared by hashes of the file checked at the same time (see `getTextAnchors`)
+    const text = textByFile.get(file) ?? {
+      text: buffer.toString("utf8"),
+      binary: buffer.includes(0),
+    };
     textByFile.set(file, text);
-    // A failed request is not kept, the next hash asks again (the API responses are cached for the run anyway)
-    text.catch(() => textByFile.delete(file));
-  }
-  return text;
-};
+    return text;
+  });
 
 const getTextAnchors = (fileText: FileText): Set<string> => {
   let anchors = anchorsByText.get(fileText);
@@ -187,54 +175,64 @@ const hasHeadingAnchor = (fileText: FileText, hash: string) =>
  * @param pathParts - The path parts of the URL
  * @returns - A LinkCheckResult object
  */
-export const checkGitHubBlobLink = async (
+export const checkGitHubBlobLink = (
   fullUrl: URL,
   owner: string,
   repo: string,
   pathParts: string[],
-): Promise<LinkCheckResult> => {
-  // Remove the # character, decode percent-encoding and make it lowercase
-  const hash = decodeHash(fullUrl.hash).toLowerCase();
+): Effect.Effect<LinkCheckResult, never, GitHubServices> =>
+  Effect.gen(function* () {
+    // Remove the # character, decode percent-encoding and make it lowercase
+    const hash = decodeHash(fullUrl.hash).toLowerCase();
 
-  const content = await getRefPathContent(owner, repo, pathParts.slice(1), { requirePath: true });
-  if (!content.found) {
-    return getApiErrorResult(content.error, "File not found in repository");
-  }
+    const content = yield* getRefPathContent(owner, repo, pathParts.slice(1), {
+      requirePath: true,
+    });
+    if (!content.found) {
+      return getApiErrorResult(content.error, "File not found in repository");
+    }
 
-  // If there's no hash, we're done - the file exists
-  if (!hash) {
-    return { ok: true, status: 200 };
-  }
+    // If there's no hash, we're done - the file exists
+    if (!hash) {
+      return { ok: true, status: 200 };
+    }
 
-  // For hash checking, we need to get the file content
-  const fileData = content.response?.data;
-  if (!fileData || !("content" in fileData)) {
-    return {
-      ok: false,
-      error: "hash not found",
-      status: 200,
-      errorDetail: "File has no content",
-    };
-  }
+    // For hash checking, we need to get the file content
+    const fileData = content.response?.data;
+    if (!fileData || !("content" in fileData)) {
+      return {
+        ok: false,
+        error: "hash not found",
+        status: 200,
+        errorDetail: "File has no content",
+      };
+    }
 
-  const { data: fileText, error } = await tryCatch(getFileText(owner, repo, fileData));
-  if (error) {
-    return getApiErrorResult(error, "File content not found in repository");
-  }
+    const fileText = yield* Effect.either(getFileText(owner, repo, fileData));
+    if (Either.isLeft(fileText)) {
+      return getApiErrorResult(fileText.left, "File content not found in repository");
+    }
+    return checkHash(fullUrl, hash, content.path, fileText.right);
+  });
 
+/** The hash of a blob against its text: a code line or a heading */
+const checkHash = (
+  fullUrl: URL,
+  hash: string,
+  path: string,
+  fileText: FileText,
+): LinkCheckResult => {
   // `#L12`, `#L12-L15`, `#L12C3-L15C1` (case-sensitive, `#l12` is not a line anchor), see `parseLineAnchor`
   const lineResult = isGithubCodeLineLink(fullUrl.href)
     ? checkLineAnchor(
         decodeHash(fullUrl.hash),
         fileText.binary ? 0 : countLines(fileText.text),
-        fileText.binary ? `${content.path} (binary file)` : content.path,
+        fileText.binary ? `${path} (binary file)` : path,
       )
     : undefined;
   if (lineResult) {
     // Rendered markdown (without `?plain=1`): a heading like `## L12` matches too
-    return !lineResult.ok &&
-      isRenderedMarkdown(content.path, fullUrl) &&
-      hasHeadingAnchor(fileText, hash)
+    return !lineResult.ok && isRenderedMarkdown(path, fullUrl) && hasHeadingAnchor(fileText, hash)
       ? { ok: true, status: 200 }
       : lineResult;
   }
@@ -259,22 +257,25 @@ export const checkGitHubBlobLink = async (
  * @param pathParts - The path parts of the URL
  * @returns - A LinkCheckResult object
  */
-export const checkGitHubTreeLink = async (
+export const checkGitHubTreeLink = (
   owner: string,
   repo: string,
   pathParts: string[],
-): Promise<LinkCheckResult> => {
-  // The ref can contain slashes: `tree/feature/x/src` (see `getRefPathContent`)
-  const [, ref = "", ...restOfPath] = pathParts;
-  const path = restOfPath.join("/");
-  const content = await getRefPathContent(owner, repo, pathParts.slice(1), { requirePath: false });
-  if (content.found) {
-    return { ok: true, status: 200 };
-  }
-  return getApiErrorResult(
-    content.error,
-    path
-      ? `Path ${path} not found in branch, tag or commit ${ref}`
-      : `No branch, tag or commit ${ref} found in repository ${owner}/${repo}`,
-  );
-};
+): Effect.Effect<LinkCheckResult, never, GitHubServices> =>
+  Effect.gen(function* () {
+    // The ref can contain slashes: `tree/feature/x/src` (see `getRefPathContent`)
+    const [, ref = "", ...restOfPath] = pathParts;
+    const path = restOfPath.join("/");
+    const content = yield* getRefPathContent(owner, repo, pathParts.slice(1), {
+      requirePath: false,
+    });
+    if (content.found) {
+      return { ok: true, status: 200 };
+    }
+    return getApiErrorResult(
+      content.error,
+      path
+        ? `Path ${path} not found in branch, tag or commit ${ref}`
+        : `No branch, tag or commit ${ref} found in repository ${owner}/${repo}`,
+    );
+  });

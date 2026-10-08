@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Effect } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatFileProblems, runCli } from "./cli";
 import { getJSONReport } from "./report/report";
@@ -10,7 +11,12 @@ import { getJSONReport } from "./report/report";
 const mocks = vi.hoisted(() => ({ checkReadmesInGithubOrg: vi.fn() }));
 vi.mock("./github/gh_get_links", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./github/gh_get_links")>()),
-  checkReadmesInGithubOrg: mocks.checkReadmesInGithubOrg,
+  // TODO(effect): convert, the mock returns an Effect of the Promise mock
+  checkReadmesInGithubOrg: (...args: unknown[]) =>
+    Effect.tryPromise({
+      try: () => mocks.checkReadmesInGithubOrg(...args),
+      catch: (error) => error,
+    }),
 }));
 
 // Local site for the `site` command: a sitemap with one page linking to a working and two missing URLs
@@ -379,9 +385,7 @@ describe("runCli()", () => {
     const baselinePath = join(tempDir(), "baseline.json");
     writeFileSync(baselinePath, JSON.stringify({ ignore: [{ url: "x" }] }));
     expect(await runCli(["files", "docs/*.md", "--baseline", baselinePath], io())).toBe(2);
-    expect(stderr).toContain(
-      `Invalid baseline file ${baselinePath}: ignore[0]: Unrecognized key: "url"`,
-    );
+    expect(stderr).toContain(`Invalid baseline file ${baselinePath}: ignore[0].url: is unexpected`);
   });
 
   it("site: checks the sitemap pages, --include (repeatable) filters links, reports links to fix, applies the baseline", async () => {

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 // TODO(effect): convert
-import { closeRunBrowser, getRunContext, withRun } from "./effect_compat";
+import { closeRunBrowser, getRunContext, runEffect, withRun } from "./effect_compat";
 import { checkLinkWithFetch } from "./fetch_check";
 import { checkLinks } from "./link";
 import {
@@ -11,7 +11,7 @@ import {
 } from "./playwright_check";
 
 const checkLinkWithPlaywright = async (url: string) =>
-  (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
+  (await runEffect(checkUrlsOnPageWithPlaywright([url]))).get(url)!; // TODO(effect): convert
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeRunBrowser);

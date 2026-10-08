@@ -1,13 +1,7 @@
+import { Effect } from "effect";
 import type { LinkCheckResult } from "../../types";
-import { tryCatch } from "../../utils/tryCatch";
-import {
-  cachedRequest,
-  getApiErrorResult,
-  getApiErrorStatus,
-  getRepoCached,
-  isNotFoundApiError,
-} from "../gh_api";
-import { getMyOctokit } from "../github_client";
+import { cachedRequest, getApiErrorResult, getRepoCached, isNotFoundApiError } from "../gh_api";
+import { type GitHubApiError, githubRequest } from "../github_client";
 
 /**
  * GitHub resource checks that are each just "does this API request succeed": a repository, a user/organization,
@@ -25,20 +19,27 @@ const brokenLink = (errorDetail: string, status?: number): LinkCheckResult => ({
   ...(status !== undefined ? { status } : {}),
 });
 
-/** Checks that `request` resolves (the resource exists); `notFoundDetail` is used for a definitive "not found" */
-const checkExists = async (
-  request: Promise<unknown>,
+/**
+ * Checks that `request` succeeds (the resource exists), `toResult` can judge the response further.
+ * `notFoundDetail` is used for a definitive "not found".
+ */
+const checkExists = <A, R>(
+  request: Effect.Effect<A, GitHubApiError, R>,
   notFoundDetail: string,
-): Promise<LinkCheckResult> => {
-  const { error } = await tryCatch(request);
-  return error ? getApiErrorResult(error, notFoundDetail) : OK;
-};
+  toResult: (response: A) => LinkCheckResult = () => OK,
+) =>
+  request.pipe(
+    Effect.map(toResult),
+    Effect.catchTag("GitHubApiError", (error) =>
+      Effect.succeed(getApiErrorResult(error, notFoundDetail)),
+    ),
+  );
 
-export const checkIfRepositoryExists = (owner: string, repo: string): Promise<LinkCheckResult> =>
+export const checkIfRepositoryExists = (owner: string, repo: string) =>
   checkExists(getRepoCached(owner, repo), `Repository ${owner}/${repo} not found`);
 
 /** `GET /users/{owner}` works for both a user and an organization (`https://github.com/owner`) */
-export const checkIfOwnerExists = (owner: string): Promise<LinkCheckResult> =>
+export const checkIfOwnerExists = (owner: string) =>
   checkExists(
     // Users and organizations, names are case-insensitive
     cachedRequest(["user", owner.toLowerCase()], (octokit) =>
@@ -47,79 +48,67 @@ export const checkIfOwnerExists = (owner: string): Promise<LinkCheckResult> =>
     `User or organization ${owner} not found`,
   );
 
-export const checkGitHubCommitLink = async (
-  owner: string,
-  repo: string,
-  pathParts: string[],
-): Promise<LinkCheckResult> => {
+export const checkGitHubCommitLink = (owner: string, repo: string, pathParts: string[]) => {
   const [, commit = ""] = pathParts;
-  const { error } = await tryCatch(getMyOctokit().repos.getCommit({ owner, repo, ref: commit }));
-  if (!error) {
-    return OK;
-  }
-  // Unknown SHA: GitHub answers 422 "No commit found for SHA", not 404. Only true for this endpoint, so 422 is not
-  // treated as "not found" globally (see `isNotFoundApiError`).
-  if (getApiErrorStatus(error) === 422) {
-    return brokenLink("Commit not found", 422);
-  }
-  return getApiErrorResult(error, "Commit not found");
+  return githubRequest((octokit) => octokit.repos.getCommit({ owner, repo, ref: commit })).pipe(
+    Effect.as(OK),
+    Effect.catchTag("GitHubApiError", (error) =>
+      Effect.succeed(
+        // Unknown SHA: GitHub answers 422 "No commit found for SHA", not 404. Only true for this endpoint, so 422 is
+        // not treated as "not found" globally (see `isNotFoundApiError`).
+        error.status === 422
+          ? brokenLink("Commit not found", 422)
+          : getApiErrorResult(error, "Commit not found"),
+      ),
+    ),
+  );
 };
 
-export const checkGitHubPullRequestLink = (
-  owner: string,
-  repo: string,
-  pathParts: string[],
-): Promise<LinkCheckResult> => {
+export const checkGitHubPullRequestLink = (owner: string, repo: string, pathParts: string[]) => {
   const [, prNumberPart = ""] = pathParts;
   const prNumber = parseInt(prNumberPart, 10);
   if (Number.isNaN(prNumber)) {
-    return Promise.resolve(brokenLink("Invalid pull request number", 404));
+    return Effect.succeed(brokenLink("Invalid pull request number", 404));
   }
   return checkExists(
-    getMyOctokit().pulls.get({ owner, repo, pull_number: prNumber }),
+    githubRequest((octokit) => octokit.pulls.get({ owner, repo, pull_number: prNumber })),
     `Pull request #${prNumberPart} not found in repository ${owner}/${repo}`,
   );
 };
 
-export const checkGitHubIssueLink = (
-  owner: string,
-  repo: string,
-  pathParts: string[],
-): Promise<LinkCheckResult> => {
+export const checkGitHubIssueLink = (owner: string, repo: string, pathParts: string[]) => {
   const [, issueNumberPart = ""] = pathParts;
   if (issueNumberPart === "new") {
-    return Promise.resolve(OK);
+    return Effect.succeed(OK);
   }
   const issueNumber = parseInt(issueNumberPart, 10);
   if (Number.isNaN(issueNumber)) {
-    return Promise.resolve(brokenLink(`Invalid issue number format: ${issueNumberPart}`));
+    return Effect.succeed(brokenLink(`Invalid issue number format: ${issueNumberPart}`));
   }
   // 410: the issue was deleted
   return checkExists(
-    getMyOctokit().issues.get({ owner, repo, issue_number: issueNumber }),
+    githubRequest((octokit) => octokit.issues.get({ owner, repo, issue_number: issueNumber })),
     `Issue #${issueNumber} not found in repository ${owner}/${repo}`,
   );
 };
 
 /** `true` for a GraphQL "Could not resolve to a Repository/Discussion" (NOT_FOUND) error */
-const isGraphqlNotFound = (error: unknown): boolean => {
-  const { errors, message } = (error ?? {}) as {
-    errors?: { type?: string }[];
-    message?: string;
-  };
+const isGraphqlNotFound = ({ cause }: GitHubApiError): boolean => {
+  const { errors, message } = (cause ?? {}) as { errors?: { type?: string }[]; message?: string };
   return (
     errors?.some((e) => e.type === "NOT_FOUND") === true ||
     /Could not resolve to a (Discussion|Repository)/.test(message ?? "")
   );
 };
 
-export const checkGitHubDiscussionLink = async (
+export const checkGitHubDiscussionLink = (
   owner: string,
   repo: string,
   discussionNumber: number,
-): Promise<LinkCheckResult> => {
-  const { data, error } = await tryCatch(
-    getMyOctokit().graphql(
+) => {
+  const notFoundDetail = `Discussion #${discussionNumber} not found in repository ${owner}/${repo}`;
+  return githubRequest((octokit) =>
+    octokit.graphql(
       `query ($owner: String!, $repo: String!, $number: Int!) {
         repository(owner: $owner, name: $repo) {
           discussion(number: $number) {
@@ -129,69 +118,60 @@ export const checkGitHubDiscussionLink = async (
       }`,
       { owner, repo, number: discussionNumber },
     ),
+  ).pipe(
+    Effect.as(OK),
+    Effect.catchTag("GitHubApiError", (error) =>
+      Effect.succeed(
+        // GraphQL answers a missing discussion or repository with a NOT_FOUND error in a 200 response
+        isNotFoundApiError(error) || isGraphqlNotFound(error)
+          ? brokenLink(notFoundDetail, 404)
+          : getApiErrorResult(error, notFoundDetail),
+      ),
+    ),
   );
-  if (data) {
-    return OK;
-  }
-  const notFoundDetail = `Discussion #${discussionNumber} not found in repository ${owner}/${repo}`;
-  // GraphQL answers a missing discussion or repository with a NOT_FOUND error in a 200 response
-  if (isNotFoundApiError(error) || isGraphqlNotFound(error)) {
-    return brokenLink(notFoundDetail, 404);
-  }
-  return getApiErrorResult(error, notFoundDetail);
 };
 
-export const checkGitHubReleaseLink = async (
-  owner: string,
-  repo: string,
-  pathParts: string[],
-): Promise<LinkCheckResult> => {
-  const octokit = getMyOctokit();
+export const checkGitHubReleaseLink = (owner: string, repo: string, pathParts: string[]) => {
   const [, kind = "", ...rest] = pathParts;
 
   // `/releases/download/{tag}/{asset}`: the release and its asset exist
   if (kind === "download") {
     const [tag = "", assetName = ""] = rest;
-    const { data: release, error } = await tryCatch(
-      octokit.repos.getReleaseByTag({ owner, repo, tag }),
+    return checkExists(
+      githubRequest((octokit) => octokit.repos.getReleaseByTag({ owner, repo, tag })),
+      `Release tag ${tag} not found in repository ${owner}/${repo}`,
+      (release) =>
+        release.data.assets.some((asset) => asset.name === assetName)
+          ? OK
+          : brokenLink(
+              `Asset ${assetName} not found in release ${tag} of repository ${owner}/${repo}`,
+              404,
+            ),
     );
-    if (error) {
-      return getApiErrorResult(
-        error,
-        `Release tag ${tag} not found in repository ${owner}/${repo}`,
-      );
-    }
-    return release.data.assets.some((asset) => asset.name === assetName)
-      ? OK
-      : brokenLink(
-          `Asset ${assetName} not found in release ${tag} of repository ${owner}/${repo}`,
-          404,
-        );
   }
   // `/releases/latest`: the repository has at least one release
   if (kind === "latest") {
-    const { data: releases, error } = await tryCatch(
-      octokit.repos.listReleases({ owner, repo, per_page: 1 }),
+    return checkExists(
+      githubRequest((octokit) => octokit.repos.listReleases({ owner, repo, per_page: 1 })),
+      `Repository ${owner}/${repo} not found`,
+      (releases) =>
+        releases.data.length === 0 ? brokenLink("No releases found in repository", 404) : OK,
     );
-    if (error) {
-      return getApiErrorResult(error, `Repository ${owner}/${repo} not found`);
-    }
-    return releases.data.length === 0 ? brokenLink("No releases found in repository", 404) : OK;
   }
   if (kind === "tag") {
     // Tags can contain slashes (`@fingerprint/vue@2.0.0`), written encoded (`%2F`) or not
     const tag = rest.join("/");
     return checkExists(
-      octokit.repos.getReleaseByTag({ owner, repo, tag }),
+      githubRequest((octokit) => octokit.repos.getReleaseByTag({ owner, repo, tag })),
       `Release tag ${tag} not found in repository ${owner}/${repo}`,
     );
   }
   const releaseId = parseInt(kind, 10);
   if (!Number.isNaN(releaseId)) {
     return checkExists(
-      octokit.repos.getRelease({ owner, repo, release_id: releaseId }),
+      githubRequest((octokit) => octokit.repos.getRelease({ owner, repo, release_id: releaseId })),
       `Release #${releaseId} not found in repository ${owner}/${repo}`,
     );
   }
-  return brokenLink("Invalid release URL format", 404);
+  return Effect.succeed(brokenLink("Invalid release URL format", 404));
 };

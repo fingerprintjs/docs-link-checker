@@ -1,5 +1,4 @@
-import pLimit from "p-limit";
-import type { ConcurrentError } from "./limiter";
+import { Clock, Console, Effect, Either, Ref } from "effect";
 import { getErrorMessage } from "./utils/errors";
 
 // Long runs print progress, also in CI where an interactive progress bar would spam the log
@@ -30,10 +29,80 @@ const describeItem = (item: unknown): string => {
   return JSON.stringify(item);
 };
 
-const formatConcurrentErrors = <T>(errors: ConcurrentError<T>[]) =>
+/** An item whose processing failed, with its error */
+export type ConcurrentError<T, E> = { item: T; error: E };
+
+const formatConcurrentErrors = <T, E>(errors: ConcurrentError<T, E>[]) =>
   errors
     .map((error) => `  - ${describeItem(error.item)}: ${getErrorMessage(error.error)}`)
     .join("\n");
+
+type ProcessInParallelArgs<T, A, E, R> = {
+  items: T[];
+  processFn: (item: T) => Effect.Effect<A, E, R>;
+  concurrencyLimit?: number;
+};
+
+/**
+ * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent fibers, progress logs and error
+ * logging. A failing `processFn` does not stop the other items. Interrupting it interrupts the running items.
+ * @returns successful results and errors, both in item order
+ */
+export const processInParallel = <T, A, E, R>({
+  items,
+  processFn,
+  concurrencyLimit = CONCURRENCY_LIMIT,
+}: ProcessInParallelArgs<T, A, E, R>) =>
+  Effect.gen(function* () {
+    const startTime = yield* Clock.currentTimeMillis;
+    const done = yield* Ref.make(0);
+    // Stopped with the scope, also when the items are interrupted
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Effect.zipRight(
+          Effect.sleep(PROGRESS_LOG_INTERVAL),
+          Effect.flatMap(Ref.get(done), (count) =>
+            Console.log(`Progress: ${count}/${items.length}`),
+          ),
+        ),
+      ),
+    );
+    const settled = yield* Effect.forEach(
+      items,
+      (item) =>
+        processFn(item).pipe(
+          Effect.either,
+          Effect.ensuring(Ref.update(done, (count) => count + 1)),
+        ),
+      { concurrency: concurrencyLimit },
+    ).pipe(
+      Effect.ensuring(
+        Effect.flatMap(Clock.currentTimeMillis, (end) =>
+          Console.log(`Time taken: ${end - startTime}ms`),
+        ),
+      ),
+    );
+
+    const results: A[] = [];
+    const errors: ConcurrentError<T, E>[] = [];
+    for (const [i, item] of items.entries()) {
+      const outcome = settled[i];
+      if (outcome === undefined) {
+        continue;
+      }
+      if (Either.isRight(outcome)) {
+        results.push(outcome.right);
+      } else {
+        errors.push({ item, error: outcome.left });
+      }
+    }
+    if (errors.length > 0) {
+      yield* Console.error(
+        `Errors processing items: ${errors.length}\n${formatConcurrentErrors(errors)}`,
+      );
+    }
+    return { results, errors };
+  }).pipe(Effect.scoped);
 
 type ParallelProcessArgs<T, R> = {
   items: T[];
@@ -41,55 +110,21 @@ type ParallelProcessArgs<T, R> = {
   concurrencyLimit?: number;
 };
 
-/**
- * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent calls, progress logs and error
- * logging. A throwing `processFn` does not stop the other items.
- * @returns successful results and errors, both in item order
- */
-export const parallelProcess = async <T, R>({
+// TODO(effect): remove once callers use `processInParallel`
+/** Promise version of `processInParallel`, a rejecting `processFn` is an error of its item */
+export const parallelProcess = <T, R>({
   items,
   processFn,
-  concurrencyLimit = CONCURRENCY_LIMIT,
-}: ParallelProcessArgs<T, R>) => {
-  const startTime = Date.now();
-  let done = 0;
-  const progressTimer = setInterval(
-    () => console.log(`Progress: ${done}/${items.length}`),
-    PROGRESS_LOG_INTERVAL,
+  concurrencyLimit,
+}: ParallelProcessArgs<T, R>) =>
+  Effect.runPromise(
+    processInParallel({
+      items,
+      concurrencyLimit,
+      processFn: (item) =>
+        Effect.tryPromise({ try: () => processFn(item), catch: (error) => error }),
+    }),
   );
-  try {
-    const limit = pLimit(concurrencyLimit);
-    const settled = await Promise.allSettled(
-      items.map((item) =>
-        limit(async () => {
-          try {
-            return await processFn(item);
-          } finally {
-            done++;
-          }
-        }),
-      ),
-    );
-    const results: R[] = [];
-    const errors: ConcurrentError<T>[] = [];
-    for (const [i, item] of items.entries()) {
-      const outcome = settled[i];
-      if (outcome?.status === "fulfilled") {
-        results.push(outcome.value);
-      } else {
-        errors.push({ item, error: outcome?.reason });
-      }
-    }
-
-    if (errors.length > 0) {
-      console.error(`Errors processing items: ${errors.length}\n${formatConcurrentErrors(errors)}`);
-    }
-    return { results, errors };
-  } finally {
-    clearInterval(progressTimer);
-    console.log(`Time taken: ${Date.now() - startTime}ms`);
-  }
-};
 
 /**
  * Parses the `LINK_CHECK_SAMPLE_RATE` environment variable (float between 0 and 1, default 1).

@@ -1,4 +1,6 @@
+import type { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitHubServices } from "../github_client";
 
 const { octokit } = vi.hoisted(() => ({
   octokit: {
@@ -14,15 +16,26 @@ const { octokit } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../github_client", () => ({ getMyOctokit: () => octokit }));
-
+import { runWithFakeOctokit } from "../test_utils";
 import {
-  checkGitHubCommitLink,
-  checkGitHubDiscussionLink,
-  checkGitHubIssueLink,
-  checkGitHubPullRequestLink,
-  checkGitHubReleaseLink,
+  checkGitHubCommitLink as checkGitHubCommitLinkEffect,
+  checkGitHubDiscussionLink as checkGitHubDiscussionLinkEffect,
+  checkGitHubIssueLink as checkGitHubIssueLinkEffect,
+  checkGitHubPullRequestLink as checkGitHubPullRequestLinkEffect,
+  checkGitHubReleaseLink as checkGitHubReleaseLinkEffect,
 } from "./gh_simple";
+
+/** Promise version of a check, running against the fake Octokit */
+const withFakeOctokit =
+  <Args extends unknown[], A>(check: (...args: Args) => Effect.Effect<A, never, GitHubServices>) =>
+  (...args: Args) =>
+    runWithFakeOctokit(check(...args), () => octokit);
+
+const checkGitHubCommitLink = withFakeOctokit(checkGitHubCommitLinkEffect);
+const checkGitHubDiscussionLink = withFakeOctokit(checkGitHubDiscussionLinkEffect);
+const checkGitHubIssueLink = withFakeOctokit(checkGitHubIssueLinkEffect);
+const checkGitHubPullRequestLink = withFakeOctokit(checkGitHubPullRequestLinkEffect);
+const checkGitHubReleaseLink = withFakeOctokit(checkGitHubReleaseLinkEffect);
 
 const OK = { ok: true, status: 200 };
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });

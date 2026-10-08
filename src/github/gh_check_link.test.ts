@@ -6,7 +6,7 @@ const { octokit } = vi.hoisted(() => {
   return {
     octokit: {
       notFound,
-      // Simulates a missing `GH_TOKEN`: `getMyOctokit` throws
+      // Simulates a missing `GH_TOKEN`: creating the client throws
       noToken: false,
       users: { getByUsername: vi.fn() },
       repos: {
@@ -25,16 +25,16 @@ const { octokit } = vi.hoisted(() => {
   };
 });
 
-vi.mock("./github_client", () => ({
-  getMyOctokit: () => {
+import { checkLinkWithGithubApi as checkLinkWithGithubApiEffect } from "./gh_check_link";
+import { runWithFakeOctokit } from "./test_utils";
+
+const checkLinkWithGithubApi = (url: string) =>
+  runWithFakeOctokit(checkLinkWithGithubApiEffect(url), () => {
     if (octokit.noToken) {
       throw new Error("GH_TOKEN is not set. A GitHub token is required to check GitHub links.");
     }
     return octokit;
-  },
-}));
-
-import { checkLinkWithGithubApi } from "./gh_check_link";
+  });
 
 beforeEach(() => {
   octokit.noToken = false;

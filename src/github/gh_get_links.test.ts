@@ -8,11 +8,19 @@ const { octokit } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("./github_client", () => ({
-  getMyOctokit: () => octokit,
-}));
+import { Effect } from "effect";
+import {
+  getReadmeLinks as getReadmeLinksEffect,
+  getReadmesFromOrg as getReadmesFromOrgEffect,
+  ListOrgReposError,
+  resolveReadmeHref,
+} from "./gh_get_links";
+import { runWithFakeOctokit } from "./test_utils";
 
-import { getReadmeLinks, getReadmesFromOrg, resolveReadmeHref } from "./gh_get_links";
+const getReadmesFromOrg = (...args: Parameters<typeof getReadmesFromOrgEffect>) =>
+  runWithFakeOctokit(getReadmesFromOrgEffect(...args), () => octokit);
+const getReadmeLinks = (...args: Parameters<typeof getReadmeLinksEffect>) =>
+  runWithFakeOctokit(getReadmeLinksEffect(...args), () => octokit);
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
   full_name: `org/${name}`,
@@ -85,7 +93,12 @@ describe("getReadmesFromOrg()", () => {
 
   it("throws a clear error when the repositories cannot be listed", async () => {
     octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
-    await expect(getReadmesFromOrg("org")).rejects.toThrow(
+    const error = await runWithFakeOctokit(
+      Effect.flip(getReadmesFromOrgEffect("org")),
+      () => octokit,
+    );
+    expect(error).toBeInstanceOf(ListOrgReposError);
+    expect(error.message).toBe(
       "Failed to list repositories of GitHub organization org: Bad credentials",
     );
   });

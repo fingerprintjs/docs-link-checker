@@ -3,7 +3,7 @@ import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // TODO(effect): convert
-import { getHostLimiter, getRunContext, withRun } from "./effect_compat";
+import { getHostLimiter, getRunContext, runEffect, withRun } from "./effect_compat";
 import type { LinkCheckResult } from "./types";
 
 /**
@@ -42,9 +42,13 @@ const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("./github/gh_check_link", () => ({
-  checkLinkWithGithubApi: checkLinkWithGithubApiMock,
-}));
+vi.mock("./github/gh_check_link", async () => {
+  const { Effect } = await import("effect");
+  return {
+    // TODO(effect): convert, the mock returns an Effect of the Promise mock
+    checkLinkWithGithubApi: (url: string) => Effect.promise(() => checkLinkWithGithubApiMock(url)),
+  };
+});
 
 // Fake Playwright browser: records navigations, "renders" `playwrightState.html` and evaluates selectors with cheerio
 vi.mock("playwright", () => ({
@@ -128,9 +132,13 @@ vi.mock("playwright", () => ({
   },
 }));
 
-import { checkLinkWithFetch } from "./fetch_check";
+import { checkLinkWithFetch as checkLinkWithFetchEffect } from "./fetch_check";
 import { checkLinks, interleaveByHost } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
+
+// TODO(effect): convert. A run of its own per call (nested in `withRun` it joins that run), so tests do not share cached pages
+const checkLinkWithFetch = (url: string) =>
+  withRun({}, () => runEffect(checkLinkWithFetchEffect(url)));
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -147,7 +155,7 @@ const stubFetch = (handler: FetchHandler) => {
 const link = (href: string, page = "https://example.com/page") => ({ href, page, text: "link" });
 
 const checkLinkWithPlaywright = async (url: string) =>
-  (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
+  (await runEffect(checkUrlsOnPageWithPlaywright([url]))).get(url)!; // TODO(effect): convert
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
