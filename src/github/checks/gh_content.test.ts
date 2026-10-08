@@ -18,7 +18,7 @@ vi.mock("../github_client", () => ({
   }),
 }));
 
-import { checkGitHubBlobLink } from "./gh_blob";
+import { checkLinkWithGithubApi } from "../gh_check_link";
 
 const readme = readFileSync(
   join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"),
@@ -26,8 +26,7 @@ const readme = readFileSync(
 );
 
 const checkHash = (hash: string) => {
-  const url = new URL(`https://github.com/owner/repo/blob/main/README.md${hash}`);
-  return checkGitHubBlobLink(url, "owner", "repo", ["blob", "main", "README.md"]);
+  return checkLinkWithGithubApi(`https://github.com/owner/repo/blob/main/README.md${hash}`);
 };
 
 beforeEach(() => {
@@ -40,7 +39,7 @@ beforeEach(() => {
   });
 });
 
-describe("checkGitHubBlobLink() (mocked GitHub API)", () => {
+describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
   it.each([
     "",
     "#installation",
@@ -80,13 +79,10 @@ const file = (text: string | Buffer) => ({
 });
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
 
-/** Checks `https://github.com/owner/repo/blob/<refAndPath><hash>` like `checkLinkWithGithubApi` does */
-const checkBlob = (refAndPath: string, hash = "") => {
-  const url = new URL(`https://github.com/owner/repo/blob/${refAndPath}${hash}`);
-  return checkGitHubBlobLink(url, "owner", "repo", ["blob", ...refAndPath.split("/")]);
-};
+const checkBlob = (refAndPath: string, hash = "") =>
+  checkLinkWithGithubApi(`https://github.com/owner/repo/blob/${refAndPath}${hash}`);
 
-describe("checkGitHubBlobLink() code line links (mocked GitHub API)", () => {
+describe("checkLinkWithGithubApi() with code line links (mocked GitHub API)", () => {
   beforeEach(() => {
     // 3 lines, the trailing newline does not start a 4th one
     getContent.mockResolvedValue(file("one\ntwo\nthree\n"));

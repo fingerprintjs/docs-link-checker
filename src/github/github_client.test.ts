@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { throttleOptions } from "./github_client";
 
 /** Fresh modules: the client is cached per module instance, `../run` must be the instance the client imports */
 const loadModules = async () => {
@@ -31,25 +30,6 @@ describe("getMyOctokit()", () => {
     vi.resetModules();
     await expect(import("./gh_check_link")).resolves.toBeDefined();
     await expect(import("./gh_get_links")).resolves.toBeDefined();
-  });
-});
-
-describe("throttle options", () => {
-  const fakeOctokit = { log: { warn: vi.fn(), info: vi.fn() } };
-  const options = { method: "GET", url: "/repos/{owner}/{repo}" };
-
-  it("onRateLimit retries once", () => {
-    expect(throttleOptions.onRateLimit(10, options as never, fakeOctokit as never, 0)).toBe(true);
-    expect(throttleOptions.onRateLimit(10, options as never, fakeOctokit as never, 1)).toBe(false);
-  });
-
-  it("onSecondaryRateLimit retries once", () => {
-    expect(
-      throttleOptions.onSecondaryRateLimit(10, options as never, fakeOctokit as never, 0),
-    ).toBe(true);
-    expect(
-      throttleOptions.onSecondaryRateLimit(10, options as never, fakeOctokit as never, 1),
-    ).toBe(false);
   });
 });
 

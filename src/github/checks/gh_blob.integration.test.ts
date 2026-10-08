@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkGitHubBlobLink } from "./gh_blob";
+import { checkGitHubBlobLink } from "./gh_content";
 
 describe("checkGitHubBlobLink", () => {
   it("should return success for an existing file without hash", async () => {

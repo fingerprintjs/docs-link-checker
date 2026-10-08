@@ -6,7 +6,7 @@ import { timePhase } from "../run";
 import type { Link, LinkWithResult } from "../types";
 import { parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
-import { getRepoCached } from "./gh_cache";
+import { getRepoCached } from "./gh_api";
 import { getMyOctokit } from "./github_client";
 
 export interface MdFile {

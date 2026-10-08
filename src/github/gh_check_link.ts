@@ -1,6 +1,6 @@
 import { checkLinkWithFetch } from "../fetch_check";
 import type { LinkCheckResult } from "../types";
-import { checkGitHubBlobLink } from "./checks/gh_blob";
+import { checkGitHubBlobLink, checkGitHubTreeLink } from "./checks/gh_content";
 import {
   checkGitHubCommitLink,
   checkGitHubDiscussionLink,
@@ -10,7 +10,6 @@ import {
   checkIfOwnerExists,
   checkIfRepositoryExists,
 } from "./checks/gh_simple";
-import { checkGitHubTreeLink } from "./checks/gh_tree";
 import { getGithubPathSegments } from "./gh_url";
 
 /** Sections whose index page (`/owner/repo/issues`) exists for every repository */
