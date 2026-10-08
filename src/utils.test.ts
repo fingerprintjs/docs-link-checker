@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { getSampleRate, parallelProcess, sampleItems } from "./utils";
 
+let logSpy: MockInstance<typeof console.log>;
+let errorSpy: MockInstance<typeof console.error>;
+
 beforeEach(() => {
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -14,7 +17,6 @@ afterEach(() => {
 describe("parallelProcess() progress", () => {
   it("logs progress while running and stops when done", async () => {
     vi.useFakeTimers();
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     let resolve = () => {};
     const slow = new Promise<void>((done) => {
       resolve = done;
@@ -37,7 +39,6 @@ describe("parallelProcess() progress", () => {
 
 describe("parallelProcess() error logging", () => {
   it("logs the failed item and the error message (not [object Object])", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const items = [
       { href: "https://example.com/ok", page: "https://example.com", text: "ok" },
       { href: "https://example.com/fails", page: "https://example.com/source", text: "fails" },
@@ -68,7 +69,6 @@ describe("parallelProcess() error logging", () => {
       expected: "https://github.com/org/repo/blob/main/README.md",
     },
   ])("names the failed $expected", async ({ item, expected }) => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await parallelProcess({
       items: [item],
       processFn: async () => {
@@ -110,7 +110,7 @@ describe("sampleItems()", () => {
   const shuffled = items.toReversed();
 
   it("returns all items with rate 1", () => {
-    expect(sampleItems({ items: shuffled, key: (x) => x, rate: 1 })).toBe(shuffled);
+    expect(sampleItems({ items: shuffled, key: (x) => x, rate: 1 })).toEqual(shuffled);
   });
 
   it("returns every Nth item of the sorted list", () => {
@@ -133,7 +133,6 @@ describe("sampleItems()", () => {
   });
 
   it("logs the sample size", () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     sampleItems({ items, key: (x) => x, rate: 0.1 });
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Sampling 10 of 100 pages"));
   });

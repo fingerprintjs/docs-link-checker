@@ -11,7 +11,7 @@ const MAX_CELL_LENGTH = 300;
  * Escapes text for a markdown table cell: pipes, line breaks, and HTML (GitHub renders some HTML in summaries).
  * Long values are shortened.
  */
-export const escapeTableCell = (value: string, maxLength = MAX_CELL_LENGTH): string => {
+const escapeTableCell = (value: string, maxLength = MAX_CELL_LENGTH): string => {
   const singleLine = value.replace(/\s*[\r\n]+\s*/g, " ").trim();
   const shortened =
     singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 1)}…` : singleLine;
@@ -120,7 +120,7 @@ const escapeCommandProperty = (value: string) =>
 type AnnotationLevel = "error" | "warning";
 
 /** A workflow command annotation: `::error file=docs/a.md,line=3,title=Broken link::message` */
-export const formatAnnotation = (
+const formatAnnotation = (
   level: AnnotationLevel,
   { file, line, title }: { file: string; line?: number; title?: string },
   message: string,

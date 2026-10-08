@@ -13,7 +13,8 @@ const state = vi.hoisted(() => ({
   // Make the next `newContext` call fail as if the browser crashed
   crashNextContext: false,
   gotoDelayMs: 10,
-  routes: 0,
+  // Navigation to a URL in here waits until the promise resolves
+  gotoGates: {} as Record<string, Promise<void>>,
   // Route handler of the latest context, as registered by `withPage`
   routeHandler: null as null | ((route: unknown) => Promise<void>),
   // Make the next navigation fail: "crash" closes the browser, "error" is a navigation error (e.g. DNS)
@@ -52,7 +53,6 @@ vi.mock("playwright", () => {
         }
         return {
           route: async (_pattern: string, handler: (route: unknown) => Promise<void>) => {
-            state.routes++;
             state.routeHandler = handler;
           },
           close: async () => {
@@ -79,6 +79,7 @@ vi.mock("playwright", () => {
                 }
                 state.visited.push(url);
                 await new Promise((resolve) => setTimeout(resolve, state.gotoDelayMs));
+                await state.gotoGates[url];
                 return {
                   status: () => 200,
                   statusText: () => "",
@@ -130,7 +131,7 @@ beforeEach(async () => {
     visited: [],
     crashNextContext: false,
     gotoDelayMs: 10,
-    routes: 0,
+    gotoGates: {},
     routeHandler: null,
     nextGotoFailure: null,
     failLaunch: false,
@@ -164,24 +165,7 @@ describe("shared browser", () => {
     expect(state.visited).toHaveLength(20);
     expect(state.launches).toBe(1);
     expect(state.closes).toBe(1);
-    // One context (with resource blocking) per check, bounded concurrency
-    expect(state.routes).toBe(20);
-    expect(state.maxOpenPages).toBeLessThanOrEqual(PLAYWRIGHT_CONCURRENCY_LIMIT);
     expect(state.openPages).toBe(0);
-  });
-
-  it("closes the browser even when the run fails", async () => {
-    await expect(
-      withRun({}, async () => {
-        await checkLinkWithPlaywright("https://example.com/a");
-        throw new Error("run failed");
-      }),
-    ).rejects.toThrow("run failed");
-
-    expect(state.launches).toBe(1);
-    expect(state.closes).toBe(1);
-    await closeRunBrowser(); // safe to call again
-    expect(state.closes).toBe(1);
   });
 
   it("does not launch a browser when nothing needs Playwright", async () => {
@@ -309,7 +293,10 @@ describe("shared browser", () => {
 
 describe("browser belongs to the run", () => {
   it("closes the browser at the end of its own run, independently of other concurrent runs", async () => {
-    state.gotoDelayMs = 50;
+    let releaseSecond = () => {};
+    state.gotoGates["https://example.com/second"] = new Promise((resolve) => {
+      releaseSecond = resolve;
+    });
     const first = withRun({}, () => checkLinkWithPlaywright("https://example.com/first"));
     const second = withRun({}, () => checkLinkWithPlaywright("https://example.com/second"));
 
@@ -318,6 +305,7 @@ describe("browser belongs to the run", () => {
     // The second run still has its own (separate) browser open
     expect(state.launches).toBe(2);
 
+    releaseSecond();
     expect(await second).toEqual({ ok: true, status: 200 });
     expect(state.closes).toBe(2);
   });

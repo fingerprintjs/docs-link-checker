@@ -1,22 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createGlobMatcher, parseGlob } from "./glob";
+import { createGlobMatcher } from "./glob";
 
 const matchGlob = (glob: string, text: string): boolean => createGlobMatcher(glob)(text);
-
-describe("parseGlob()", () => {
-  it("splits literals and wildcards, runs of 2+ stars are one globstar", () => {
-    expect(parseGlob("a*b**c***d")).toEqual([
-      { type: "literal", value: "a" },
-      { type: "star" },
-      { type: "literal", value: "b" },
-      { type: "globstar" },
-      { type: "literal", value: "c" },
-      { type: "globstar" },
-      { type: "literal", value: "d" },
-    ]);
-    expect(parseGlob("")).toEqual([]);
-  });
-});
 
 describe("createGlobMatcher()", () => {
   it("matches the whole text literally without wildcards", () => {
@@ -48,6 +33,8 @@ describe("createGlobMatcher()", () => {
     expect(matchGlob("docs/**/*.md", "docs/a/b/c.md")).toBe(true);
     expect(matchGlob("docs/**/*.md", "docs/a/b/c.txt")).toBe(false);
     expect(matchGlob("**.linkedin.com/**", "https://www.linkedin.com/company/x")).toBe(true);
+    // A run of 3+ stars is one globstar
+    expect(matchGlob("a***b", "a/x/b")).toBe(true);
     expect(matchGlob("*", "")).toBe(true);
     expect(matchGlob("a*a*a", "aaa")).toBe(true);
     expect(matchGlob("a*a*a", "aa")).toBe(false);

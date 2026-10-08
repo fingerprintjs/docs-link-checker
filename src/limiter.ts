@@ -40,7 +40,7 @@ const waitForPause = async (state: HostState) => {
 export class HostLimiter {
   private readonly hosts = new Map<string, HostState>();
 
-  constructor(readonly limitPerHost: number) {}
+  constructor(private readonly limitPerHost: number) {}
 
   private getHost(url: string): HostState | undefined {
     let hostname: string;

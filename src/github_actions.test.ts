@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createBaseline } from "./baseline";
 import {
-  escapeTableCell,
-  formatAnnotation,
   getFileAnnotations,
   getGithubBlobBaseUrl,
   renderJobSummary,
@@ -36,29 +34,6 @@ const tempFile = (name: string) => {
   return path;
 };
 
-describe("escapeTableCell()", () => {
-  it("escapes pipes, backslashes, HTML and link syntax", () => {
-    expect(escapeTableCell("a|b")).toBe("a\\|b");
-    expect(escapeTableCell("a\\|b")).toBe("a\\\\\\|b");
-    expect(escapeTableCell("<script>&")).toBe("&lt;script&gt;&amp;");
-    expect(escapeTableCell("[x](javascript:alert(1)) `code`")).toBe(
-      "\\[x\\](javascript:alert(1)) \\`code\\`",
-    );
-  });
-
-  it("replaces line breaks with spaces", () => {
-    expect(escapeTableCell("line 1\r\nline 2\n\n  line 3\rline 4")).toBe(
-      "line 1 line 2 line 3 line 4",
-    );
-  });
-
-  it("shortens long values", () => {
-    const cell = escapeTableCell("x".repeat(500));
-    expect(cell).toHaveLength(300);
-    expect(cell.endsWith("…")).toBe(true);
-  });
-});
-
 describe("renderJobSummary()", () => {
   it("shows counts and a table of links to fix, escaped, with lines", () => {
     const markdown = renderJobSummary(
@@ -84,10 +59,22 @@ describe("renderJobSummary()", () => {
     expect(markdown).not.toContain("ignored.md");
     expect(markdown).not.toContain("Showing the first");
     expect(markdown).toContain("Full report: `results/local-files.html`");
-    // Every table row has exactly 3 unescaped separators + borders
-    for (const row of markdown.split("\n").filter((line) => line.startsWith("| docs/"))) {
-      expect(row.split(/(?<!\\)\|/).length).toBe(5);
-    }
+  });
+
+  it("escapes table cells so links cannot break the table or inject markdown/HTML", () => {
+    const markdown = renderJobSummary(
+      report([
+        broken("a|b\\|c <script>&", { page: "[x](javascript:alert(1)) `code`" }),
+        broken("line 1\r\nline 2\n\n  line 3\rline 4"),
+        broken(`https://example.com/${"x".repeat(500)}`),
+      ]),
+    );
+    expect(markdown).toContain(
+      "| \\[x\\](javascript:alert(1)) \\`code\\` | a\\|b\\\\\\|c &lt;script&gt;&amp; |",
+    );
+    expect(markdown).toContain("| line 1 line 2 line 3 line 4 |");
+    const longCell = markdown.match(/https:\/\/example\.com\/x+…/)?.[0];
+    expect(longCell).toHaveLength(300);
   });
 
   it("truncates the table and says so", () => {
@@ -114,7 +101,6 @@ describe("writeJobSummary()", () => {
     expect(writeJobSummary(report([broken("x.md")]), {}, file)).toBe(true);
     const content = readFileSync(file, "utf8");
     expect(content.startsWith("previous step\n## ❌")).toBe(true);
-    expect(writeJobSummary(report([]), {}, undefined)).toBe(false);
     expect(writeJobSummary(report([]), {}, "")).toBe(false);
   });
 
@@ -127,19 +113,6 @@ describe("writeJobSummary()", () => {
     expect(writeGithubOutputs({ a: 1 }, undefined)).toBe(false);
     expect(readFileSync(summary, "utf8")).toBe("");
     expect(readFileSync(output, "utf8")).toBe("");
-  });
-});
-
-describe("formatAnnotation()", () => {
-  it("formats a workflow command with escaped properties and message", () => {
-    expect(
-      formatAnnotation(
-        "error",
-        { file: "docs/a,b:c.md", line: 3, title: "Broken link" },
-        "50% done\nnext",
-      ),
-    ).toBe("::error file=docs/a%2Cb%3Ac.md,line=3,title=Broken link::50%25 done%0Anext");
-    expect(formatAnnotation("warning", { file: "a.md" }, "msg")).toBe("::warning file=a.md::msg");
   });
 });
 
@@ -173,6 +146,23 @@ describe("getFileAnnotations()", () => {
   });
 });
 
+describe("getFileAnnotations() escaping", () => {
+  it("escapes workflow command properties and messages", () => {
+    const [annotation] = getFileAnnotations(
+      report([
+        broken("x.md", {
+          page: "docs/a,b:c.md",
+          line: 3,
+          result: { ok: false, error: "broken link", errorDetail: "50% done\nnext" },
+        }),
+      ]),
+    );
+    expect(annotation).toBe(
+      "::error file=docs/a%2Cb%3Ac.md,line=3,title=Broken link::x.md: broken link: 50%25 done%0Anext",
+    );
+  });
+});
+
 describe("writeGithubOutputs()", () => {
   it("appends outputs to GITHUB_OUTPUT only when it is set", () => {
     const file = tempFile("output");
@@ -180,7 +170,6 @@ describe("writeGithubOutputs()", () => {
       true,
     );
     expect(readFileSync(file, "utf8")).toBe("links-to-fix=3\nreport-path=results/x.json\n");
-    expect(writeGithubOutputs({ a: 1 }, undefined)).toBe(false);
     expect(() => writeGithubOutputs({ a: "x\ny" }, file)).toThrow("single line");
   });
 });

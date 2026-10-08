@@ -23,7 +23,7 @@ type CheckLinksArgs = {
  * - `fetch`: plain `fetch`, assumes the page is server-side rendered
  * - `invalid`: the URL cannot be parsed or is not http(s), reported as broken link without any request
  */
-export type CheckMethod = "fetch" | "github-api" | "invalid";
+type CheckMethod = "fetch" | "github-api" | "invalid";
 
 const getInitialCheckMethod = (href: string): CheckMethod => {
   // Only http(s) links can be checked. Other schemes (`tel:`, `javascript:`, `data:`...) are filtered out
@@ -55,10 +55,7 @@ const PLAYWRIGHT_RETRY_STATUS_CODES = new Set([401, 403, 405, 406, 408, 429]);
  * Only failures that could be caused by the fetch method itself (client-side rendering, bot blocking,
  * rate limiting, network errors) are re-checked. Definitive answers (like 404 from the GitHub API) are not.
  */
-export const shouldRecheckWithPlaywright = (
-  result: LinkCheckResult,
-  method: CheckMethod,
-): boolean => {
+const shouldRecheckWithPlaywright = (result: LinkCheckResult, method: CheckMethod): boolean => {
   if (result.ok) {
     return false;
   }

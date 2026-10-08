@@ -17,7 +17,7 @@ export const decodeHash = (hash: string): string =>
  * Serializes a value as a quoted CSS string (for attribute selectors like `[id="..."]`),
  * escaping characters that would break the selector. Similar to `CSS.escape`, but for string values.
  */
-export const cssString = (value: string): string =>
+const cssString = (value: string): string =>
   `"${value
     .replace(/\0/g, "�")
     .replace(/\\/g, "\\\\")
