@@ -75,7 +75,7 @@
     "no-var": "error",
     "prefer-const": "error",
     "no-else-return": "error",
-    // Effect conventions (EFFECT_DESIGN.md "Layers and app wiring"): effects talk to the outside only through
+    // Effect conventions (docs/architecture.md): effects talk to the outside only through
     // services. Logs: `Effect.log*`, time: `Clock` / `Effect.sleep`, env: `Config`, files: `FileSystem`,
     // network: the `Fetch` service. Tests helpers, scripts and the bin are exempt, see the override below.
     "no-console": "error",
@@ -108,8 +108,7 @@
 
     // Tests: no skipped, focused or empty tests
     "vitest/no-disabled-tests": "error",
-    // TEMPORARY: skeleton files keep the titles of main's tests as `it.todo` until STEP 2 ports them (remove with the last skeleton)
-    "vitest/warn-todo": "off",
+    "vitest/warn-todo": "error",
     "vitest/no-focused-tests": "error",
     "vitest/expect-expect": "error",
     "vitest/no-identical-title": "error",
@@ -117,7 +116,17 @@
     // `it.effect` etc. of @effect/vitest are test blocks too
     "vitest/no-standalone-expect": [
       "error",
-      { "additionalTestBlockFunctions": ["it.effect", "it.live", "it.scoped", "it.scopedLive"] },
+      {
+        "additionalTestBlockFunctions": [
+          "it.effect",
+          "it.effect.each",
+          "it.live",
+          "it.live.each",
+          "it.scoped",
+          "it.scoped.each",
+          "it.scopedLive",
+        ],
+      },
     ],
     // `expect(value, message)` is valid in Vitest
     "vitest/valid-expect": ["error", { "maxArgs": 2 }],

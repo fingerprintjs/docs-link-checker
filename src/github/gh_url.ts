@@ -1,3 +1,6 @@
+/**
+ * Recognizes and parses GitHub URLs (reserved routes, wiki, code line links).
+ */
 import { parseLineAnchor } from "../line_anchor";
 
 /**

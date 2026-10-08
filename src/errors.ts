@@ -29,6 +29,10 @@ export class TooManyRedirects extends Data.TaggedError("TooManyRedirects")<{
   override get message() {
     return `Too many redirects (more than ${this.maxRedirects}) for ${this.url}`;
   }
+  // Reports show "Error: Too many redirects ...", like the plain `Error` did
+  override toString() {
+    return `Error: ${this.message}`;
+  }
 }
 
 /** Callers pass the full message ("Could not fetch X, status: N") */
@@ -77,11 +81,6 @@ export class BrowserLaunchError extends Data.TaggedError("BrowserLaunchError")<{
     return getErrorMessage(this.cause);
   }
 }
-
-/** The browser disconnected during a page operation */
-export class BrowserCrashed extends Data.TaggedError("BrowserCrashed")<{
-  readonly cause: unknown;
-}> {}
 
 export class PlaywrightError extends Data.TaggedError("PlaywrightError")<{
   readonly cause: unknown;

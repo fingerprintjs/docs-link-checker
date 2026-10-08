@@ -8,6 +8,7 @@ import * as cheerio from "cheerio";
 import { Clock, Effect, Layer, Runtime } from "effect";
 import type { Browser as PlaywrightBrowser } from "playwright";
 import { Chromium } from "../browser";
+import { BrowserLaunchError } from "../errors";
 
 /** Mutable on purpose: a test sets what the next browser calls do and reads what happened */
 export type FakeChromiumState = {
@@ -20,6 +21,13 @@ export type FakeChromiumState = {
   visited: string[];
   /** Route handler of the latest context, as registered by `withPage` */
   routeHandler: ((route: unknown) => Promise<void>) | undefined;
+
+  /** Runs of the Chromium installer (it is never really run) */
+  installs: number;
+  /** The installer fails */
+  failInstall: boolean;
+  /** Called by the installer, e.g. to make the next launch work */
+  onInstall: () => void;
 
   // Browser failures
   /** `launch` fails: "missing" = executable not installed, "other" = any other reason */
@@ -61,6 +69,9 @@ export type FakeChromiumState = {
 export const makeFakeChromiumState = (): FakeChromiumState => ({
   launches: 0,
   closes: 0,
+  installs: 0,
+  failInstall: false,
+  onInstall: () => {},
   openPages: 0,
   maxOpenPages: 0,
   visited: [],
@@ -114,6 +125,13 @@ export const fakeChromium = (state: FakeChromiumState): Layer.Layer<Chromium> =>
       const now = () => run(Clock.currentTimeMillis);
 
       return {
+        install: Effect.suspend(() => {
+          state.installs++;
+          state.onInstall();
+          return state.failInstall
+            ? Effect.fail(new BrowserLaunchError({ cause: new Error("playwright install failed") }))
+            : Effect.void;
+        }),
         launch: async () => {
           state.launches++;
           if (state.failLaunch === "missing") {

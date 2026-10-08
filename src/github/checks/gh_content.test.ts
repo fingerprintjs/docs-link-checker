@@ -131,11 +131,9 @@ describe("checkLinkWithGithubApi() with blob links (fake GitHub API)", () => {
         checkBlob("main/README.md", hash),
       );
 
-    for (const hash of ["", "#installation", "#InStAlLaTiOn"]) {
-      it.effect(`returns OK for ${hash}`, () =>
-        Effect.map(checkHash(hash), (result) => expect(result).toEqual(OK)),
-      );
-    }
+    it.effect.each(["", "#installation", "#InStAlLaTiOn"])("returns OK for %s", (hash) =>
+      Effect.map(checkHash(hash), (result) => expect(result).toEqual(OK)),
+    );
 
     it.effect("returns 'hash not found' for code block comments", () =>
       Effect.map(checkHash("#not-a-heading"), (result) =>
@@ -164,16 +162,15 @@ describe("checkLinkWithGithubApi() with blob links (fake GitHub API)", () => {
     const threeLines = { files: { "main:src/a.ts": "one\ntwo\nthree\n" } };
 
     // Anchor grammar is covered by line_anchor.test.ts, here: wiring, line counting, percent-decoding
-    for (const hash of ["#L3", "#%4C2"]) {
-      it.effect(`accepts ${hash} within the file`, () =>
-        withRepo(threeLines, ({ checkBlob }) =>
-          Effect.map(checkBlob("main/src/a.ts", hash), (result) => expect(result).toEqual(OK)),
-        ),
-      );
-    }
+    it.effect.each(["#L3", "#%4C2"])("accepts %s within the file", (hash) =>
+      withRepo(threeLines, ({ checkBlob }) =>
+        Effect.map(checkBlob("main/src/a.ts", hash), (result) => expect(result).toEqual(OK)),
+      ),
+    );
 
-    for (const hash of ["#L4", "#L2-L4"]) {
-      it.effect(`reports ${hash} past the end of the file as 'hash not found'`, () =>
+    it.effect.each(["#L4", "#L2-L4"])(
+      "reports %s past the end of the file as 'hash not found'",
+      (hash) =>
         withRepo(threeLines, ({ checkBlob }) =>
           Effect.map(checkBlob("main/src/a.ts", hash), (result) =>
             expect(result).toEqual({
@@ -184,8 +181,7 @@ describe("checkLinkWithGithubApi() with blob links (fake GitHub API)", () => {
             }),
           ),
         ),
-      );
-    }
+    );
 
     it.effect("reports an invalid line anchor as 'hash not found'", () =>
       withRepo(threeLines, ({ checkBlob }) =>
@@ -242,23 +238,21 @@ describe("checkLinkWithGithubApi() with blob links (fake GitHub API)", () => {
     );
 
     // 401, 403 and 5xx are covered in gh_check_link.test.ts
-    for (const [name, status] of [
+    it.effect.each([
       ["rate limit", 429],
       ["network error", undefined],
-    ] as const) {
-      it.effect(`reports a ${name} as 'unexpected error' (re-checked in the browser)`, () => {
-        const { layer } = fakeGitHub({
-          getContent: () => Effect.fail(new GitHubApiError({ status, cause: "Failed" })),
-        });
-        return checkLinkWithGithubApi("https://github.com/o/r/blob/main/src/a.ts#L1").pipe(
-          Effect.provide(testRunLayer({ github: layer })),
-          Effect.map((result) => {
-            expect(result).toMatchObject({ ok: false, error: "unexpected error" });
-            expect(!result.ok && result.status).toBe(status);
-          }),
-        );
+    ] as const)("reports a %s as 'unexpected error' (re-checked in the browser)", ([, status]) => {
+      const { layer } = fakeGitHub({
+        getContent: () => Effect.fail(new GitHubApiError({ status, cause: "Failed" })),
       });
-    }
+      return checkLinkWithGithubApi("https://github.com/o/r/blob/main/src/a.ts#L1").pipe(
+        Effect.provide(testRunLayer({ github: layer })),
+        Effect.map((result) => {
+          expect(result).toMatchObject({ ok: false, error: "unexpected error" });
+          expect(!result.ok && result.status).toBe(status);
+        }),
+      );
+    });
 
     it.effect("reports a failing blob API request (large file) as 'unexpected error'", () =>
       withRepo({ files: { "main:big.txt": { large: "x" } }, blobStatus: 403 }, ({ checkBlob }) =>

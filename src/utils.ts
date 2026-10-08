@@ -14,7 +14,7 @@ const PROGRESS_LOG_INTERVAL = "30 seconds";
 export const compareStrings = (a: string, b: string): number => Number(a > b) - Number(a < b);
 
 /** An item whose processing failed, with the failure */
-export type ItemError<T> = { readonly item: T; readonly error: unknown };
+type ItemError<T> = { readonly item: T; readonly error: unknown };
 
 /**
  * Human-readable description of an item that failed processing:

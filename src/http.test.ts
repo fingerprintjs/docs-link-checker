@@ -152,8 +152,9 @@ describe("fetchLimited() 429 rate limits", () => {
 });
 
 describe("fetchLimited() server errors (502, 503, 504)", () => {
-  for (const status of [502, 503, 504]) {
-    it.effect(`retries a ${status} with a backoff of 2s, then 5s, then returns the success`, () => {
+  it.effect.each([502, 503, 504])(
+    "retries a %s with a backoff of 2s, then 5s, then returns the success",
+    (status) => {
       let failures = 2;
       const { provide, calls } = setup(() =>
         failures-- > 0 ? new Response("busy", { status }) : new Response("ok", { status: 200 }),
@@ -178,8 +179,8 @@ describe("fetchLimited() server errors (502, 503, 504)", () => {
           expect(metrics.counters).toMatchObject({ serverErrorRetries: 2, httpRequests: 3 });
         }),
       );
-    });
-  }
+    },
+  );
 
   it.effect("returns the last 503 after the retries, cancelling every unread body", () => {
     let cancelled = 0;

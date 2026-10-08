@@ -1,3 +1,6 @@
+/**
+ * Link and result types shared by all checks and the report.
+ */
 export type Link = {
   page: string;
   href: string;

@@ -2,7 +2,7 @@
  * One benchmark round: checks the links of `corpus.json` and writes the result as JSON to the given file.
  * Run by `bench.ts`, in this checkout or in the base checkout of an A/B run (copied to `<dir>/.bench/`).
  * - Only Node built-ins and dynamic imports of `../src`: the base can have a different API, `runRound` knows the
- *   current one (`src/app.ts`, Effect) and the one before it (`src/run.ts`).
+ *   current one (`src/app.ts`, Effect) and the one before the Effect rewrite (`src/run.ts`).
  * - The result shape is validated by `RoundSchema` in `bench.ts`.
  */
 import { existsSync, writeFileSync } from "node:fs";
@@ -49,7 +49,7 @@ const runCurrent = async () => {
   );
 };
 
-// TODO: remove once main has the Effect version (`src/app.ts`), then `--base` needs no fallback
+// Base checkouts from before the Effect rewrite (no `src/app.ts`) have the old API. Remove once no base has it.
 type LegacyRun = {
   withRun: <T>(config: object, fn: () => Promise<T>) => Promise<T>;
   getRunContext: () => { metrics: RunMetrics } | undefined;

@@ -1,3 +1,7 @@
+/**
+ * GitHub Actions output of a run: job summary, file annotations, step outputs, blob base URL for reports.
+ * - https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+ */
 import { resolve } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";

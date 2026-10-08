@@ -4,11 +4,12 @@
 - pnpm: `package.json` (`packageManager`)
 - `pnpm install`
 - Style: [CODING_STANDARDS.md](CODING_STANDARDS.md)
+- Design: [docs/architecture.md](docs/architecture.md)
 - User docs: [README](README.md), [CLI](docs/cli.md), [Action](docs/action.md)
 
 ## Commands
 
-- `pnpm test`. Offline unit tests (`*.test.ts`), mocked network
+- `pnpm test`. Offline tests (`*.test.ts`), fake network, GitHub API and browser
 - `pnpm run test:integration`. Live sites and GitHub API. Needs network, Chromium, `GH_TOKEN` (or `.env`)
 - `pnpm run check`. Format, lint, `tsc`, knip (CI minus tests)
 - `pnpm run check:fix`. Apply format and safe lint fixes

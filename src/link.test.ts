@@ -1,19 +1,21 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
-import { Effect, Layer, Logger, LogLevel } from "effect";
+import { Clock, Effect, Layer, Logger, LogLevel } from "effect";
 import { describe, expect } from "vitest";
+import { GitHubApiError } from "./errors";
+import type { GitHubApi } from "./github/github_client";
 import { checkLinks, interleaveByHost } from "./link";
 import { Metrics } from "./metrics";
 import { runWithClock } from "./test/clock";
+import { fakeChromium, makeFakeChromiumState } from "./test/fake_chromium";
 import { type FetchHandler, fakeFetch } from "./test/fake_fetch";
 import { fakeGitHub } from "./test/fake_github";
 import { testRunLayer } from "./test/layers";
 
 /**
- * Offline tests for `checkLinks`: real `HostLimiter` and `Metrics`, fake `fetch`. `GitHub` and `Browser` die when used.
- * A link that is re-checked with Playwright ends as "unexpected error" here (dying `Browser`), that is how these tests
- * see the escalation decision. Results of real Playwright re-checks are covered by `playwright_check.test.ts`.
+ * Offline tests for `checkLinks`: real `HostLimiter`, `Metrics`, `Browser`, GitHub checks and page checks over a fake
+ * `fetch`, `GitHub` and Chromium. Details of the Playwright re-check are covered by `playwright_check.test.ts`.
  */
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
@@ -22,26 +24,33 @@ const link = (href: string, page = "https://example.com/page") => ({ href, page,
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const setup = (handler: FetchHandler, options: { readonly hostConcurrency?: number } = {}) => {
+const notFound = () => Effect.fail(new GitHubApiError({ status: 404, cause: new Error("404") }));
+
+const setup = (
+  handler: FetchHandler,
+  options: { readonly hostConcurrency?: number; readonly github?: Partial<GitHubApi> } = {},
+) => {
   const fake = fakeFetch(handler);
-  const github = fakeGitHub({});
+  const github = fakeGitHub(options.github ?? {});
+  const browser = makeFakeChromiumState();
   return {
     calls: fake.calls,
     githubCalls: github.calls,
+    /** What the fake browser shows and did (`visited`: URLs navigated to, so the Playwright re-check ran) */
+    browser,
     provide: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.provide(
-          testRunLayer({ fetch: fake.layer, github: github.layer, ...options }).pipe(
-            Layer.provideMerge(Logger.minimumLogLevel(LogLevel.None)),
-          ),
+          testRunLayer({
+            fetch: fake.layer,
+            github: github.layer,
+            chromium: fakeChromium(browser),
+            hostConcurrency: options.hostConcurrency,
+          }).pipe(Layer.provideMerge(Logger.minimumLogLevel(LogLevel.None))),
         ),
       ),
   };
 };
-
-/** The Playwright re-check ran (and failed, because there is no browser in these tests) */
-const isRechecked = (result: { readonly ok: boolean; readonly error?: string }) =>
-  result.error === "unexpected error";
 
 describe("checkLinks() deduplication", () => {
   it.effect("checks each href only once, even when concurrent tasks check the same href", () => {
@@ -65,16 +74,101 @@ describe("checkLinks() deduplication", () => {
     );
   });
 
-  // STEP 3: needs the real `checkLinkWithGithubApi` (GITHUB group), it is a stub here
-  it.todo("checks each GitHub href only once with the GitHub API");
+  it.effect("checks each GitHub href only once with the GitHub API", () => {
+    const { provide, githubCalls } = setup(() => new Response(null, { status: 200 }), {
+      github: { getIssue: () => Effect.yieldNow() },
+    });
+    const links = Array.from({ length: 5 }, () => link("https://github.com/owner/repo/issues/1"));
+    return provide(
+      Effect.gen(function* () {
+        const results = yield* checkLinks({ links });
+
+        expect(githubCalls).toEqual(['getIssue("owner", "repo", 1)']);
+        expect(results).toHaveLength(5);
+        expect(results.every((r) => r.result.ok)).toBe(true);
+      }),
+    );
+  });
 });
 
 describe("checkLinks() Playwright escalation", () => {
-  // STEP 3: these need the real `checkLinkWithGithubApi` (GITHUB group) to produce API results
-  it.todo("GitHub API result: %s -> re-checked with Playwright: %s");
-  it.todo("checks GitHub code line links with the GitHub API, without the browser");
-  it.todo(
+  const issue = "https://github.com/owner/repo/issues/999";
+  const apiCases: Array<[string, Partial<GitHubApi>, boolean]> = [
+    ["404", { getIssue: notFound }, false],
+    [
+      "unexpected error",
+      { getIssue: () => Effect.fail(new GitHubApiError({ status: 500, cause: "boom" })) },
+      true,
+    ],
+  ];
+
+  it.effect.each(apiCases)(
+    "GitHub API result: %s -> re-checked with Playwright: %s",
+    ([, github, escalate]) => {
+      const { provide, browser } = setup(() => new Response(null, { status: 200 }), { github });
+      return provide(
+        Effect.gen(function* () {
+          const results = yield* checkLinks({ links: [link(issue)] });
+
+          expect(browser.visited).toEqual(escalate ? [issue] : []);
+          // A definitive API result is reported as is, the browser result is the fake page (no hash to look for)
+          expect(results[0]?.result).toMatchObject(
+            escalate ? { ok: true, status: 200 } : { ok: false, error: "broken link", status: 404 },
+          );
+        }),
+      );
+    },
+  );
+
+  const codeFile = {
+    getRepo: () => Effect.succeed({ default_branch: "main" }),
+    getContent: () => Effect.succeed({ content: "", sha: "sha" }),
+    getFileText: () =>
+      Effect.succeed({
+        text: "one\ntwo\nthree",
+        binary: false,
+        getAnchors: () => new Set<string>(),
+      }),
+  } satisfies Partial<GitHubApi>;
+
+  it.effect("checks GitHub code line links with the GitHub API, without the browser", () => {
+    const href = "https://github.com/owner/repo/blob/main/a.js#L999";
+    const { provide, browser } = setup(() => new Response(null, { status: 200 }), {
+      github: codeFile,
+    });
+    return provide(
+      Effect.gen(function* () {
+        const results = yield* checkLinks({ links: [link(href), link(href)] });
+
+        expect(browser.visited).toEqual([]);
+        const hashNotFound = {
+          ok: false,
+          error: "hash not found",
+          status: 200,
+          errorDetail: "a.js has only 3 lines",
+        };
+        expect(results.map((r) => r.result)).toEqual([hashNotFound, hashNotFound]);
+      }),
+    );
+  });
+
+  it.effect(
     "falls back to the browser for GitHub code line links the API can't check (no token, rate limited)",
+    () => {
+      const href = "https://github.com/owner/repo/blob/main/a.js#L2";
+      const { provide, browser } = setup(() => new Response(null, { status: 200 }), {
+        github: { getContent: () => Effect.fail(new GitHubApiError({ status: 403, cause: "x" })) },
+      });
+      browser.html = '<div data-line-number="1"></div><div data-line-number="2"></div>';
+      return provide(
+        Effect.gen(function* () {
+          const results = yield* checkLinks({ links: [link(href)] });
+
+          expect(browser.visited).toEqual([href]);
+          expect(results[0]?.result).toEqual({ ok: true, status: 200 });
+        }),
+      );
+    },
   );
 
   it.effect("reports unparsable URLs as broken without any request or Playwright re-check", () => {
@@ -89,8 +183,9 @@ describe("checkLinks() Playwright escalation", () => {
     );
   });
 
-  for (const href of ["tel:+123", "javascript:void(0)", "data:text/plain,hi"]) {
-    it.effect(`never fetches or re-checks non-http(s) URLs like ${href}`, () => {
+  it.effect.each(["tel:+123", "javascript:void(0)", "data:text/plain,hi"])(
+    "never fetches or re-checks non-http(s) URLs like %s",
+    (href) => {
       const { provide, calls } = setup(() => new Response(null, { status: 200 }));
       return provide(
         Effect.gen(function* () {
@@ -100,8 +195,8 @@ describe("checkLinks() Playwright escalation", () => {
           expect(results[0]?.result).toMatchObject({ ok: false, error: "broken link" });
         }),
       );
-    });
-  }
+    },
+  );
 
   const fetchCases: Array<[string, boolean, FetchHandler]> = [
     ["404", false, () => new Response("Not found", { status: 404 })],
@@ -119,9 +214,10 @@ describe("checkLinks() Playwright escalation", () => {
     ],
   ];
 
-  for (const [name, escalate, handler] of fetchCases) {
-    it.effect(`fetch result: ${name} -> re-checked with Playwright: ${escalate}`, () => {
-      const { provide } = setup(handler);
+  it.effect.each(fetchCases)(
+    "fetch result: %s -> re-checked with Playwright: %s",
+    ([, escalate, handler]) => {
+      const { provide, browser } = setup(handler);
       return provide(
         Effect.gen(function* () {
           // The 503 case waits for its retries
@@ -131,23 +227,25 @@ describe("checkLinks() Playwright escalation", () => {
           );
 
           expect(results).toHaveLength(1);
-          expect(isRechecked(results[0]?.result ?? { ok: true })).toBe(escalate);
+          expect(browser.visited.length > 0).toBe(escalate);
         }),
       );
-    });
-  }
+    },
+  );
 
   it.effect(
     "re-checks 'hash not found' from fetch with Playwright (client-side rendered page)",
     () => {
-      const { provide } = setup(
+      const { provide, browser } = setup(
         () => new Response("<html><body>Loading...</body></html>", { status: 200 }),
       );
+      browser.html = '<html><body><h2 id="rendered"></h2></body></html>';
       return provide(
         Effect.gen(function* () {
           const results = yield* checkLinks({ links: [link("https://example.com/spa#rendered")] });
 
-          expect(isRechecked(results[0]?.result ?? { ok: true })).toBe(true);
+          expect(browser.visited).toEqual(["https://example.com/spa#rendered"]);
+          expect(results[0]?.result).toEqual({ ok: true, status: 200 });
         }),
       );
     },
@@ -168,7 +266,9 @@ describe("checkLinks() Playwright escalation", () => {
   it.effect(
     "checks GitHub's own pages with fetch (re-checked with Playwright if blocked), not as accounts",
     () => {
-      const { provide, calls, githubCalls } = setup(() => new Response(null, { status: 429 }));
+      const { provide, calls, githubCalls, browser } = setup(
+        () => new Response(null, { status: 429 }),
+      );
       const hrefs = ["https://github.com/features", "https://github.com/topics/javascript"];
       return provide(
         Effect.gen(function* () {
@@ -176,14 +276,25 @@ describe("checkLinks() Playwright escalation", () => {
 
           expect(githubCalls).toEqual([]);
           expect(calls).toHaveLength(2);
-          expect(results.every((r) => isRechecked(r.result))).toBe(true);
+          expect(browser.visited).toEqual(hrefs);
+          expect(results.every((r) => r.result.ok)).toBe(true);
         }),
       );
     },
   );
 
-  // STEP 3: need a fake Chromium (BROWSER group) to see the result of the re-check
-  it.todo("a link failing with fetch passes when the Playwright re-check passes");
+  it.effect("a link failing with fetch passes when the Playwright re-check passes", () => {
+    const { provide, browser } = setup(() => new Response("Forbidden", { status: 403 }));
+    const href = "https://example.com/blocked";
+    return provide(
+      Effect.gen(function* () {
+        const results = yield* checkLinks({ links: [link(href)] });
+
+        expect(browser.visited).toEqual([href]);
+        expect(results[0]?.result).toEqual({ ok: true, status: 200 });
+      }),
+    );
+  });
 });
 
 describe("checkLinks() grouping by page (URL without hash)", () => {
@@ -236,14 +347,129 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     );
   });
 
-  // STEP 3: need a fake Chromium (BROWSER group) to count navigations
-  it.todo(
+  it.effect(
     "navigates once with Playwright for all hashes of a page and checks each hash in the same DOM",
+    () => {
+      // Client-side rendered page: the server HTML has no anchors
+      const { provide, browser } = setup(
+        () => new Response("<html><body>Loading...</body></html>", { status: 200 }),
+      );
+      browser.html = '<html><body><h2 id="one">One</h2><a name="two"></a></body></html>';
+      const links = ["#one", "#two", "#three"].map((hash) =>
+        link(`https://example.com/spa${hash}`),
+      );
+      return provide(
+        Effect.gen(function* () {
+          const results = yield* checkLinks({ links });
+
+          expect(browser.visited).toEqual(["https://example.com/spa#one"]);
+          expect(results.map((r) => [new URL(r.href).hash, r.result])).toEqual([
+            ["#one", { ok: true, status: 200 }],
+            ["#two", { ok: true, status: 200 }],
+            ["#three", { ok: false, status: 200, error: "hash not found" }],
+          ]);
+        }),
+      );
+    },
   );
-  it.todo("checks GitHub code line links to the same file with one navigation (browser fallback)");
-  it.todo("navigates once per page with Playwright, also for repeated hrefs");
-  it.todo("finds late anchors of every hash with one navigation and one shared wait");
-  it.todo("checkLinks(): a fetch 503 persisting in the browser too is 'could not check'");
+
+  it.effect(
+    "checks GitHub code line links to the same file with one navigation (browser fallback)",
+    () => {
+      // The API can't check them (here: rate limited), they fall back to the browser
+      const { provide, browser } = setup(() => new Response(null, { status: 200 }), {
+        github: { getContent: () => Effect.fail(new GitHubApiError({ status: 403, cause: "x" })) },
+      });
+      browser.html =
+        '<html><body><div data-line-number="5"></div><div data-line-number="6"></div></body></html>';
+      const file = "https://github.com/owner/repo/blob/main/a.js";
+      const links = ["#L5", "#L6", "#L5-L6", "#L99"].map((hash) => link(`${file}${hash}`));
+      return provide(
+        Effect.gen(function* () {
+          const results = yield* checkLinks({ links });
+
+          expect(browser.visited).toEqual([`${file}#L5`]);
+          expect(results.filter((r) => r.result.ok).map((r) => r.href)).toEqual([
+            `${file}#L5`,
+            `${file}#L6`,
+            `${file}#L5-L6`,
+          ]);
+          expect(results.find((r) => r.href === `${file}#L99`)?.result).toMatchObject({
+            error: "hash not found",
+          });
+        }),
+      );
+    },
+  );
+
+  it.effect("navigates once per page with Playwright, also for repeated hrefs", () => {
+    const { provide, browser } = setup(() => new Response(null, { status: 403 }));
+    const links = [
+      link("https://blocked.example.com/a"),
+      link("https://blocked.example.com/a"),
+      link("https://blocked.example.com/a#x"),
+      link("https://blocked.example.com/b"),
+    ];
+    return provide(
+      Effect.gen(function* () {
+        const results = yield* checkLinks({ links });
+
+        expect(browser.visited).toEqual([
+          "https://blocked.example.com/a",
+          "https://blocked.example.com/b",
+        ]);
+        expect(results).toHaveLength(4);
+      }),
+    );
+  });
+
+  it.effect("finds late anchors of every hash with one navigation and one shared wait", () => {
+    const page = "https://docs.example.com/app";
+    const { provide, browser } = setup(
+      () => new Response("<html><body>Loading...</body></html>", { status: 200 }),
+    );
+    // Both anchors are added by a timer 4s after the navigation (e.g. expanded nested fields)
+    browser.waitForTakesTimeout = true;
+    browser.lateHtmlByUrl = {
+      [`${page}#a`]: { html: '<div id="a"></div><div id="b"></div>', afterMs: 4000 },
+    };
+    return provide(
+      Effect.gen(function* () {
+        const start = yield* Clock.currentTimeMillis;
+        const results = yield* runWithClock(
+          checkLinks({ links: ["#a", "#b"].map((hash) => link(`${page}${hash}`)) }),
+          "1 minute",
+        );
+        const end = yield* Clock.currentTimeMillis;
+
+        expect(results.map((r) => r.result)).toEqual([
+          { ok: true, status: 200 },
+          { ok: true, status: 200 },
+        ]);
+        expect(browser.visited).toEqual([`${page}#a`]);
+        expect(end - start).toBe(4000);
+      }),
+    );
+  });
+
+  it.effect("a fetch 503 persisting in the browser too is 'could not check'", () => {
+    const { provide, browser } = setup(() => new Response(null, { status: 503 }));
+    browser.status = 503;
+    const href = "https://busy.example.com/page";
+    return provide(
+      Effect.gen(function* () {
+        const results = yield* runWithClock(checkLinks({ links: [link(href)] }), "1 minute");
+
+        expect(results[0]?.result).toMatchObject({
+          ok: false,
+          error: "could not check",
+          status: 503,
+        });
+        // 1 navigation and 2 retries, no more
+        expect(browser.visited).toEqual([href, href, href]);
+      }),
+    );
+  });
 });
 
 describe("checkLinks() per-host limit", () => {

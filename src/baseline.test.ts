@@ -204,7 +204,8 @@ describe("loadBaseline()", () => {
   it.effect("reports invalid JSON and invalid entries with the file name", () =>
     Effect.gen(function* () {
       const notJson = yield* load("{ not json").pipe(Effect.flip);
-      expect(notJson.message).toMatch(/^Invalid baseline file .*baseline\.json: /);
+      // The JSON parser message as is, no path label
+      expect(notJson.message).toMatch(/^Invalid baseline file .*baseline\.json: (?!baseline:).+/);
       const invalid = yield* load({ ignore: [{ reason: "x" }] }).pipe(Effect.flip);
       expect(invalid.message).toMatch(
         /^Invalid baseline file .*baseline\.json: ignore\[0\]: expected exactly one of/,

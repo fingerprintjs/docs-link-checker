@@ -4,32 +4,12 @@
 import { it } from "@effect/vitest";
 import { Effect, Exit, Layer, Logger, LogLevel } from "effect";
 import type { Page } from "playwright";
-import { beforeEach, describe, expect, vi } from "vitest";
+import { describe, expect } from "vitest";
 import { Browser, PLAYWRIGHT_CONCURRENCY_LIMIT, tryPlaywright } from "./browser";
 import { BrowserLaunchError, PlaywrightError } from "./errors";
 import { Metrics } from "./metrics";
 import { runWithClock } from "./test/clock";
 import { fakeChromium, makeFakeChromiumState } from "./test/fake_chromium";
-
-// Installing Chromium runs `playwright install`: never really
-const installer = vi.hoisted(() => ({
-  installs: 0,
-  failInstall: false,
-  onInstall: () => {},
-}));
-vi.mock("node:child_process", () => ({
-  spawnSync: vi.fn(() => {
-    installer.installs++;
-    installer.onInstall();
-    return installer.failInstall
-      ? { status: 1, error: new Error("playwright install failed") }
-      : { status: 0 };
-  }),
-}));
-
-beforeEach(() => {
-  Object.assign(installer, { installs: 0, failInstall: false, onInstall: () => {} });
-});
 
 const silent = Logger.minimumLogLevel(LogLevel.None);
 
@@ -175,7 +155,7 @@ describe("shared browser", () => {
 
         expect(error).toBeInstanceOf(BrowserLaunchError);
         expect(error.message).toContain("Failed to launch");
-        expect(installer.installs).toBe(0);
+        expect(state.installs).toBe(0);
       }),
     );
   });
@@ -201,14 +181,14 @@ describe("shared browser", () => {
     () => {
       const { state, provide } = setup();
       state.failLaunch = "missing";
-      installer.onInstall = () => {
+      state.onInstall = () => {
         state.failLaunch = false;
       };
       return provide(
         Effect.gen(function* () {
           yield* withPage(visit("https://example.com/after-install"));
 
-          expect(installer.installs).toBe(1);
+          expect(state.installs).toBe(1);
           expect(state.launches).toBe(2);
           expect(state.visited).toEqual(["https://example.com/after-install"]);
           expect((yield* (yield* Metrics).snapshot).counters["browserLaunches"]).toBe(2);
@@ -220,14 +200,14 @@ describe("shared browser", () => {
   it.effect("fails with the install error when installing a missing Chromium fails", () => {
     const { state, provide } = setup();
     state.failLaunch = "missing";
-    installer.failInstall = true;
+    state.failInstall = true;
     return provide(
       Effect.gen(function* () {
         const error = yield* Effect.flip(withPage(() => Effect.void));
 
         expect(error).toBeInstanceOf(BrowserLaunchError);
         expect(error.message).toBe("playwright install failed");
-        expect(installer.installs).toBe(1);
+        expect(state.installs).toBe(1);
         expect(state.launches).toBe(1);
       }),
     );

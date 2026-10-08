@@ -114,45 +114,41 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
     });
   });
 
-  for (const status of [404, 410]) {
-    it.effect(`caches ${status} (the repository is definitely missing)`, () => {
-      const { run, count } = setup(() => json({ message: "Gone" }, status));
-      return run(
-        Effect.gen(function* () {
-          for (let i = 0; i < 2; i++) {
-            expect(yield* checkLinkWithGithubApi(REPO_URL)).toMatchObject({
-              ok: false,
-              error: "broken link",
-              status,
-            });
-          }
+  it.effect.each([404, 410])("caches %s (the repository is definitely missing)", (status) => {
+    const { run, count } = setup(() => json({ message: "Gone" }, status));
+    return run(
+      Effect.gen(function* () {
+        for (let i = 0; i < 2; i++) {
+          expect(yield* checkLinkWithGithubApi(REPO_URL)).toMatchObject({
+            ok: false,
+            error: "broken link",
+            status,
+          });
+        }
 
-          expect(count("/repos/owner/repo")).toBe(1);
-        }),
-      );
-    });
-  }
+        expect(count("/repos/owner/repo")).toBe(1);
+      }),
+    );
+  });
 
   // Bad token or no access: no proof the repository is missing, ask again next time
   // (5xx are not covered: Octokit retries them for seconds)
-  for (const status of [401, 403]) {
-    it.effect(`does not cache ${status}`, () => {
-      const { run, count } = setup(() => json({ message: "Failed" }, status));
-      return run(
-        Effect.gen(function* () {
-          for (let i = 0; i < 2; i++) {
-            expect(yield* checkLinkWithGithubApi(REPO_URL)).toMatchObject({
-              ok: false,
-              error: "unexpected error",
-              status,
-            });
-          }
+  it.effect.each([401, 403])("does not cache %s", (status) => {
+    const { run, count } = setup(() => json({ message: "Failed" }, status));
+    return run(
+      Effect.gen(function* () {
+        for (let i = 0; i < 2; i++) {
+          expect(yield* checkLinkWithGithubApi(REPO_URL)).toMatchObject({
+            ok: false,
+            error: "unexpected error",
+            status,
+          });
+        }
 
-          expect(count("/repos/owner/repo")).toBe(2);
-        }),
-      );
-    });
-  }
+        expect(count("/repos/owner/repo")).toBe(2);
+      }),
+    );
+  });
 
   it.effect("checks many hashes of the same file with one API request", () => {
     const { run, count } = setup(defaultHandler);

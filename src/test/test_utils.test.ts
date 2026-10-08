@@ -52,7 +52,7 @@ describe("fakeGitHub()", () => {
 
 describe("testRunLayer()", () => {
   it.effect(
-    "has real metrics and limits, and dies when a Browser or GitHub fake was not given",
+    "has real metrics and limits, and fails when no Chromium or GitHub fake was given",
     () =>
       Effect.gen(function* () {
         yield* HostLimiter;

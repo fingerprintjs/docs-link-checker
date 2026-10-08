@@ -1,55 +1,54 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import { it } from "@effect/vitest";
 import { ConfigProvider, Effect } from "effect";
-import { beforeEach, describe, expect, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { formatFileProblems, runCli, runCliEffect } from "./cli";
-import { NoMarkdownFiles } from "./errors";
+import { GitHubApiError } from "./errors";
+import type { GitHubApi } from "./github/github_client";
 import { getJSONReport } from "./report/report";
+import { fakeFetch, type FetchHandler } from "./test/fake_fetch";
+import { fakeGitHub } from "./test/fake_github";
 import { testRunLayer } from "./test/layers";
 import { makeTestConsole } from "./test/test_console";
-import type { Link, LinkWithResult } from "./types";
 
-// The check functions belong to other modules and are tested there: here they are faked, the tests are about
-// what the CLI passes to them and what it does with their results
-const checks = vi.hoisted(() => ({
-  checkLocalFiles: vi.fn(),
-  collectLinksFromFiles: vi.fn(),
-  checkWebsite: vi.fn(),
-  checkReadmesInGithubOrg: vi.fn(),
-}));
-vi.mock("./local_files", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./local_files")>()),
-  checkLocalFiles: checks.checkLocalFiles,
-  collectLinksFromFiles: checks.collectLinksFromFiles,
-}));
-vi.mock("./website", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./website")>()),
-  checkWebsite: checks.checkWebsite,
-}));
-vi.mock("./github/gh_get_links", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./github/gh_get_links")>()),
-  checkReadmesInGithubOrg: checks.checkReadmesInGithubOrg,
-}));
+/**
+ * End to end tests of the commands over the real pipeline: real files in temp dirs (`files`), a fake `fetch`
+ * (`site`, link checks) and a fake `GitHub` (`github-org`).
+ */
 
 const tempDir = () => mkdtempSync(join(tmpdir(), "cli-test-"));
 
-const link = (href: string, extra: Partial<Link> = {}): Link => ({
-  href,
-  page: "docs/guide.md",
-  text: "",
-  ...extra,
-});
-const brokenLocal: LinkWithResult = {
-  ...link("../nope.md", { line: 8 }),
-  result: { ok: false, error: "broken link", errorDetail: "File not found: nope.md" },
+const GUIDE = [
+  "# Guide",
+  "",
+  "Some text.",
+  "",
+  "",
+  "",
+  "[Readme](../README.md#getting-started)",
+  "[Missing](../nope.md)",
+  "",
+].join("\n");
+
+/** Temp dir with a README and a guide that links to it (line 7, works) and to a missing file (line 8) */
+const project = (files: Record<string, string> = {}) => {
+  const dir = tempDir();
+  for (const [name, content] of Object.entries({
+    "README.md": "# Getting started\n",
+    "docs/guide.md": GUIDE,
+    ...files,
+  })) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
+    writeFileSync(join(dir, name), content);
+  }
+  return dir;
 };
-const okLocal: LinkWithResult = {
-  ...link("../README.md#getting-started", { line: 7 }),
-  result: { ok: true, status: 200 },
-};
+const BROKEN_LINE = "docs/guide.md:8: ../nope.md: broken link: File not found: nope.md";
+const ANNOTATION =
+  "::error file=docs/guide.md,line=8,title=Broken link::../nope.md: broken link: File not found: nope.md";
 
 describe("formatFileProblems()", () => {
   it("prints one line per link to fix, collapsing and shortening error details", () => {
@@ -75,12 +74,22 @@ describe("formatFileProblems()", () => {
   });
 });
 
-type RunOptions = { readonly env?: Record<string, string>; readonly cwd?: string };
+type RunOptions = {
+  readonly env?: Record<string, string>;
+  readonly cwd?: string;
+  readonly fetch?: FetchHandler;
+  readonly github?: Partial<GitHubApi>;
+};
 
 /** Runs the CLI with a fake environment and captured output */
-const run = (args: string[], { env = {}, cwd = tempDir() }: RunOptions = {}) => {
+const run = (args: string[], { env = {}, cwd = project(), fetch, github }: RunOptions = {}) => {
   const testConsole = makeTestConsole();
-  return runCliEffect(args, { cwd, runLayer: () => testRunLayer() }).pipe(
+  const runLayer = () =>
+    testRunLayer({
+      fetch: fetch ? fakeFetch(fetch).layer : undefined,
+      github: github ? fakeGitHub(github).layer : undefined,
+    });
+  return runCliEffect(args, { cwd, runLayer }).pipe(
     Effect.withConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(env)))),
     Effect.withConsole(testConsole.console),
     Effect.provide(NodeFileSystem.layer),
@@ -91,26 +100,20 @@ const run = (args: string[], { env = {}, cwd = tempDir() }: RunOptions = {}) => 
 const readJson = (path: string): unknown => JSON.parse(readFileSync(path, "utf8"));
 
 describe("runCliEffect()", () => {
-  beforeEach(() => {
-    checks.checkLocalFiles.mockReset().mockReturnValue(Effect.succeed([okLocal, brokenLocal]));
-    checks.collectLinksFromFiles.mockReset();
-    checks.checkWebsite.mockReset();
-    checks.checkReadmesInGithubOrg.mockReset().mockReturnValue(Effect.succeed([]));
-  });
-
   describe("arguments and options", () => {
-    const dryRun = (args: string[], env: Record<string, string> = {}) => {
-      checks.collectLinksFromFiles.mockReturnValue(
-        Effect.succeed({ files: [], local: [], external: [], skipped: [] }),
-      );
-      return run(["files", "docs/*.md", "--dry-run", ...args], { env }).pipe(
-        Effect.map(({ code, stderr }) => {
+    // Ten files, a sample of them is checked: the sampling log says with which rate
+    const manyFiles = Object.fromEntries(
+      Array.from({ length: 10 }, (_, i) => [`pages/p${i}.md`, "text\n"]),
+    );
+    const dryRun = (args: string[], env: Record<string, string> = {}) =>
+      run(["files", "pages/*.md", "--dry-run", ...args], { env, cwd: project(manyFiles) }).pipe(
+        Effect.map(({ code, stdout, stderr }) => {
           expect(stderr).toEqual([]);
           expect(code).toBe(0);
-          return checks.collectLinksFromFiles.mock.lastCall?.[0].sampleRate;
+          const rate = /sample rate ([\d.]+)/.exec(stdout.join("\n"))?.[1];
+          return rate === undefined ? 1 : Number(rate);
         }),
       );
-    };
 
     it.effect(
       "--sample-rate sets the sample rate, LINK_CHECK_SAMPLE_RATE is the default and flags win",
@@ -129,23 +132,21 @@ describe("runCliEffect()", () => {
     it.effect("--host-concurrency and LINK_CHECK_HOST_CONCURRENCY set the run settings", () =>
       Effect.gen(function* () {
         const concurrencies: number[] = [];
-        const runWith = (args: string[], env: Record<string, string> = {}) => {
-          const testConsole = makeTestConsole();
-          return runCliEffect(["files", "a.md", "--output-dir", tempDir(), ...args], {
-            cwd: tempDir(),
+        const runWith = (args: string[], env: Record<string, string> = {}) =>
+          runCliEffect(["files", "a.md", "--output-dir", tempDir(), ...args], {
+            cwd: project({ "a.md": "text\n" }),
             runLayer: ({ hostConcurrency }) => {
               concurrencies.push(hostConcurrency);
               return testRunLayer();
             },
           }).pipe(
             Effect.withConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(env)))),
-            Effect.withConsole(testConsole.console),
+            Effect.withConsole(makeTestConsole().console),
             Effect.provide(NodeFileSystem.layer),
           );
-        };
-        yield* runWith(["--no-fail-on-broken"]);
-        yield* runWith(["--host-concurrency", "3", "--no-fail-on-broken"]);
-        yield* runWith(["--no-fail-on-broken"], { LINK_CHECK_HOST_CONCURRENCY: "5" });
+        yield* runWith([]);
+        yield* runWith(["--host-concurrency", "3"]);
+        yield* runWith([], { LINK_CHECK_HOST_CONCURRENCY: "5" });
         expect(concurrencies).toEqual([8, 3, 5]);
       }),
     );
@@ -153,8 +154,9 @@ describe("runCliEffect()", () => {
     it.effect("FAIL_ON_BROKEN_LINKS=false and --no-fail-on-broken only report links to fix", () =>
       Effect.gen(function* () {
         const outputDir = tempDir();
+        const cwd = project();
         const exitCode = (args: string[], env: Record<string, string> = {}) =>
-          run(["files", "docs/*.md", "--output-dir", outputDir, ...args], { env }).pipe(
+          run(["files", "docs/*.md", "--output-dir", outputDir, ...args], { env, cwd }).pipe(
             Effect.map(({ code }) => code),
           );
         expect(yield* exitCode([])).toBe(1);
@@ -185,7 +187,7 @@ describe("runCliEffect()", () => {
       "--update-baseline writes the default baseline file and reads a relative --baseline in cwd, not process.cwd()",
       () =>
         Effect.gen(function* () {
-          const cwd = tempDir();
+          const cwd = project();
           const outputDir = tempDir();
           const runInCwd = (args: string[]) =>
             run(["files", "docs/*.md", "--output-dir", outputDir, ...args], { cwd }).pipe(
@@ -228,12 +230,16 @@ describe("runCliEffect()", () => {
         "--prune-baseline needs a full run",
       ],
     ];
-    it.each(usageErrors)("rejects %j with exit code 2", async (args, message) => {
-      const { code, stderr } = await Effect.runPromise(run(args));
-      expect(code).toBe(2);
-      expect(stderr.join("\n")).toContain(message);
-      expect(checks.checkLocalFiles).not.toHaveBeenCalled();
-    });
+    it.effect.each(usageErrors)("rejects %j with exit code 2", ([args, message]) =>
+      Effect.gen(function* () {
+        const { code, stdout, stderr } = yield* run(args);
+
+        expect(code).toBe(2);
+        expect(stderr.join("\n")).toContain(message);
+        // Nothing was checked
+        expect(stdout.join("\n")).not.toContain("Checking");
+      }),
+    );
 
     it.effect("prints usage errors as a message and a hint to stderr only", () =>
       run(["files", "a.md", "--update-baseline", "--prune-baseline", "--sample-rate", "0.5"]).pipe(
@@ -283,35 +289,31 @@ describe("runCliEffect()", () => {
           expect(stdout.join("\n")).toContain("Usage: docs-link-checker");
           expect(stderr).toEqual([]);
         }
+      }),
+    );
+
+    it.effect("describes the options and environment variables of a command in its help", () =>
+      Effect.gen(function* () {
         const { stdout } = yield* run(["site", "--help"]);
+
         expect(stdout.join("\n")).toContain("--include <prefix>");
         expect(stdout.join("\n")).toContain("LINK_CHECK_SAMPLE_RATE");
       }),
     );
   });
 
-  it.effect(
-    "files: passes patterns and cwd, prints problems, writes reports and outputs, fails on links to fix",
-    () => {
+  describe("files", () => {
+    it.effect("prints problems, writes reports and outputs, fails on links to fix", () => {
       const out = tempDir();
-      const cwd = tempDir();
       const githubOutput = join(out, "github-output");
       const summary = join(out, "summary.md");
       writeFileSync(githubOutput, "");
       return run(["files", "docs/*.md", "README.md", "--output-dir", out], {
-        cwd,
         env: { GITHUB_OUTPUT: githubOutput, GITHUB_STEP_SUMMARY: summary },
       }).pipe(
         Effect.tap(({ code, stdout }) => {
           expect(code).toBe(1);
-          expect(checks.checkLocalFiles).toHaveBeenCalledWith({
-            patterns: ["docs/*.md", "README.md"],
-            cwd,
-            sampleRate: 1,
-          });
-          expect(stdout).toContain(
-            "docs/guide.md:8: ../nope.md: broken link: File not found: nope.md",
-          );
+          expect(stdout).toContain(BROKEN_LINE);
           expect(stdout).toContain(`Saved JSON report to ${join(out, "local-files.json")}`);
           expect(readFileSync(githubOutput, "utf8")).toBe(
             `links-to-fix=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
@@ -323,66 +325,77 @@ describe("runCliEffect()", () => {
           expect(existsSync(join(out, "local-files.html"))).toBe(true);
         }),
       );
-    },
-  );
+    });
 
-  it.effect("files: logs the summary, the duration and, last, the run metrics", () =>
-    run(["files", "docs/*.md", "--output-dir", tempDir(), "--no-fail-on-broken"]).pipe(
-      Effect.tap(({ stdout }) => {
-        const text = stdout.join("\n");
-        expect(text).toContain("linksChecked: 2");
-        expect(text).toMatch(/Finished in [\d.]+ seconds\./);
-        expect(text.indexOf("Finished in")).toBeLessThan(text.indexOf("Run metrics:"));
-      }),
-    ),
-  );
-
-  it.effect("files: emits annotations in GitHub Actions, and passes with --no-fail-on-broken", () =>
-    Effect.gen(function* () {
-      const env = { GITHUB_ACTIONS: "true" };
-      const args = ["files", "docs/*.md", "--output-dir", tempDir(), "--no-fail-on-broken"];
-      const annotated = yield* run(args, { env });
-      expect(annotated.code).toBe(0);
-      expect(annotated.stdout).toContain(
-        "::error file=docs/guide.md,line=8,title=Broken link::../nope.md: broken link: File not found: nope.md",
-      );
-
-      const quiet = yield* run([...args, "--no-annotations"], { env });
-      expect(quiet.stdout.filter((line) => line.startsWith("::"))).toEqual([]);
-      expect(quiet.stdout.filter((line) => line.includes("nope.md"))).toEqual([]);
-    }),
-  );
-
-  it.effect(
-    "files: links local files to the checked commit in the HTML report in GitHub Actions",
-    () => {
-      const out = tempDir();
-      const cwd = tempDir();
-      const sha = "0123456789abcdef0123456789abcdef01234567";
-      return run(["files", "docs/*.md", "--output-dir", out, "--no-fail-on-broken"], {
+    it.effect("checks external links over the network", () => {
+      const cwd = project({
+        "docs/guide.md": "[A](https://ok.example/a)\n[B](https://ok.example/b)\n",
+      });
+      return run(["files", "docs/*.md", "--output-dir", tempDir()], {
         cwd,
-        env: {
-          GITHUB_ACTIONS: "true",
-          GITHUB_WORKSPACE: cwd,
-          GITHUB_REPOSITORY: "owner/repo",
-          GITHUB_SHA: sha,
-          GITHUB_SERVER_URL: "https://github.com",
-        },
+        fetch: (url) => new Response("", { status: url.endsWith("/a") ? 200 : 404 }),
       }).pipe(
-        Effect.tap(() => {
-          const html = readFileSync(join(out, "local-files.html"), "utf8");
-          expect(html).toContain(
-            `href="https://github.com/owner/repo/blob/${sha}/docs/guide.md#L8"`,
-          );
-          expect(html).toContain(`href="https://github.com/owner/repo/blob/${sha}/nope.md"`);
+        Effect.tap(({ code, stdout }) => {
+          expect(code).toBe(1);
+          expect(stdout).toContain("docs/guide.md:2: https://ok.example/b: broken link (404)");
         }),
       );
-    },
-  );
+    });
 
-  it.effect(
-    "files --json: prints only the JSON report to stdout, logs and annotations to stderr",
-    () =>
+    it.effect("logs the summary, the duration and, last, the run metrics", () =>
+      run(["files", "docs/*.md", "--output-dir", tempDir(), "--no-fail-on-broken"]).pipe(
+        Effect.tap(({ stdout }) => {
+          const text = stdout.join("\n");
+          expect(text).toContain("linksChecked: 2");
+          expect(text).toMatch(/Finished in [\d.]+ seconds\./);
+          expect(text.indexOf("Finished in")).toBeLessThan(text.indexOf("Run metrics:"));
+        }),
+      ),
+    );
+
+    it.effect("emits annotations in GitHub Actions, and passes with --no-fail-on-broken", () =>
+      Effect.gen(function* () {
+        const env = { GITHUB_ACTIONS: "true" };
+        const cwd = project();
+        const args = ["files", "docs/*.md", "--output-dir", tempDir(), "--no-fail-on-broken"];
+        const annotated = yield* run(args, { env, cwd });
+        expect(annotated.code).toBe(0);
+        expect(annotated.stdout).toContain(ANNOTATION);
+
+        const quiet = yield* run([...args, "--no-annotations"], { env, cwd });
+        expect(quiet.stdout.filter((line) => line.startsWith("::"))).toEqual([]);
+        expect(quiet.stdout.filter((line) => line.includes("nope.md"))).toEqual([]);
+      }),
+    );
+
+    it.effect(
+      "links local files to the checked commit in the HTML report in GitHub Actions",
+      () => {
+        const out = tempDir();
+        const cwd = project();
+        const sha = "0123456789abcdef0123456789abcdef01234567";
+        return run(["files", "docs/*.md", "--output-dir", out, "--no-fail-on-broken"], {
+          cwd,
+          env: {
+            GITHUB_ACTIONS: "true",
+            GITHUB_WORKSPACE: cwd,
+            GITHUB_REPOSITORY: "owner/repo",
+            GITHUB_SHA: sha,
+            GITHUB_SERVER_URL: "https://github.com",
+          },
+        }).pipe(
+          Effect.tap(() => {
+            const html = readFileSync(join(out, "local-files.html"), "utf8");
+            expect(html).toContain(
+              `href="https://github.com/owner/repo/blob/${sha}/docs/guide.md#L8"`,
+            );
+            expect(html).toContain(`href="https://github.com/owner/repo/blob/${sha}/nope.md"`);
+          }),
+        );
+      },
+    );
+
+    it.effect("--json prints only the JSON report to stdout, logs and annotations to stderr", () =>
       run(["files", "docs/*.md", "--output-dir", tempDir(), "--json", "--no-fail-on-broken"], {
         env: { GITHUB_ACTIONS: "true" },
       }).pipe(
@@ -392,229 +405,289 @@ describe("runCliEffect()", () => {
           expect(JSON.parse(stdout[0] ?? "")).toMatchObject({
             summary: { linksChecked: 2, totalLinksToFix: 1 },
           });
-          expect(stderr).toContain(
-            "::error file=docs/guide.md,line=8,title=Broken link::../nope.md: broken link: File not found: nope.md",
-          );
+          expect(stderr).toContain(ANNOTATION);
           expect(stderr.some((line) => line.startsWith("Saved JSON report to"))).toBe(true);
           expect(stderr.some((line) => line.startsWith("Run metrics:"))).toBe(true);
         }),
       ),
-  );
-
-  it.effect("files --dry-run: lists links without checking them", () => {
-    const githubOutput = join(tempDir(), "github-output");
-    writeFileSync(githubOutput, "");
-    checks.collectLinksFromFiles.mockReturnValue(
-      Effect.succeed({
-        files: ["README.md"],
-        local: [link("docs/missing.md", { page: "README.md", line: 7 }), link("#top")],
-        external: [link("https://example.com/page", { page: "README.md", line: 19 })],
-        skipped: [link("mailto:hello@example.com", { page: "README.md", line: 18 })],
-      }),
     );
-    return run(["files", "README.md", "--dry-run"], { env: { GITHUB_OUTPUT: githubOutput } }).pipe(
-      Effect.tap(({ code, stdout }) => {
-        expect(code).toBe(0);
-        expect(stdout).toEqual([
-          "local\tREADME.md:7\tdocs/missing.md",
-          "local\tdocs/guide.md\t#top",
-          "external\tREADME.md:19\thttps://example.com/page",
-          "skipped\tREADME.md:18\tmailto:hello@example.com",
-          "1 files, 2 local, 1 external, 1 skipped links.",
-        ]);
-        expect(readFileSync(githubOutput, "utf8")).toBe("local-links=2\nexternal-links=1\n");
-        expect(checks.checkLocalFiles).not.toHaveBeenCalled();
-      }),
+
+    // Lines 7, 18 and 19 of the README
+    const readme = [..."123456".split("").map(() => ""), "[Missing](docs/missing.md)"]
+      .concat(Array.from({ length: 10 }, () => ""))
+      .concat([
+        "[Mail](mailto:hello@example.com)",
+        "[Page](https://example.com/page)",
+        "[Top](#top)",
+        "",
+      ])
+      .join("\n");
+
+    it.effect("--dry-run lists links without checking them", () => {
+      const githubOutput = join(tempDir(), "github-output");
+      writeFileSync(githubOutput, "");
+      return run(["files", "README.md", "--dry-run"], {
+        cwd: project({ "README.md": readme }),
+        env: { GITHUB_OUTPUT: githubOutput },
+      }).pipe(
+        Effect.tap(({ code, stdout }) => {
+          expect(code).toBe(0);
+          expect(stdout).toEqual([
+            "local\tREADME.md:7\tdocs/missing.md",
+            "local\tREADME.md:20\t#top",
+            "external\tREADME.md:19\thttps://example.com/page",
+            "skipped\tREADME.md:18\tmailto:hello@example.com",
+            "1 files, 2 local, 1 external, 1 skipped links.",
+          ]);
+          expect(readFileSync(githubOutput, "utf8")).toBe("local-links=2\nexternal-links=1\n");
+        }),
+      );
+    });
+
+    it.effect("--dry-run --json prints the collected links as JSON", () =>
+      run(["files", "a.md", "--dry-run", "--json"], {
+        cwd: project({ "a.md": "[B](b.md)\n" }),
+      }).pipe(
+        Effect.tap(({ code, stdout }) => {
+          expect(code).toBe(0);
+          expect(stdout).toHaveLength(1);
+          expect(JSON.parse(stdout[0] ?? "")).toEqual({
+            files: ["a.md"],
+            local: [{ href: "b.md", page: "a.md", text: "B", line: 1 }],
+            external: [],
+            skipped: [],
+          });
+        }),
+      ),
+    );
+
+    it.effect("returns 1 when no file matches", () =>
+      run(["files", "nope/*.md"]).pipe(
+        Effect.tap(({ code, stderr }) => {
+          expect(code).toBe(1);
+          expect(stderr.join("\n")).toContain('No markdown files match "nope/*.md"');
+        }),
+      ),
     );
   });
 
-  it.effect("files --dry-run --json: prints the collected links as JSON", () => {
-    const collected = { files: ["a.md"], local: [link("b.md")], external: [], skipped: [] };
-    checks.collectLinksFromFiles.mockReturnValue(Effect.succeed(collected));
-    return run(["files", "a.md", "--dry-run", "--json"]).pipe(
-      Effect.tap(({ code, stdout }) => {
-        expect(code).toBe(0);
-        expect(stdout).toHaveLength(1);
-        expect(JSON.parse(stdout[0] ?? "")).toEqual(collected);
-      }),
-    );
-  });
-
-  it.effect("files: returns 1 when no file matches", () => {
-    checks.checkLocalFiles.mockReturnValue(
-      Effect.fail(new NoMarkdownFiles({ patterns: ["nope/*.md"] })),
-    );
-    return run(["files", "nope/*.md"]).pipe(
-      Effect.tap(({ code, stderr }) => {
-        expect(code).toBe(1);
-        expect(stderr.join("\n")).toContain('No markdown files match "nope/*.md"');
-      }),
-    );
-  });
-
-  it.effect("baseline: ignores matching links, --update-baseline writes failures and passes", () =>
-    Effect.gen(function* () {
-      const dir = tempDir();
-      const baselinePath = join(dir, "baseline.json");
-      const args = ["files", "docs/*.md", "--baseline", baselinePath, "--output-dir", dir];
-
-      // Missing baseline file without --update-baseline
-      const missing = yield* run(args);
-      expect(missing.code).toBe(2);
-      expect(missing.stderr).toEqual([`Error: Baseline file not found: ${baselinePath}`]);
-
-      // Update creates it
-      const updated = yield* run([...args, "--update-baseline"]);
-      expect(updated.code).toBe(0);
-      expect(updated.stderr).toEqual(["Found 1 links to fix, added to the baseline."]);
-      expect(updated.stdout).toContain(`Updated baseline ${baselinePath}: 1 entries (was 0).`);
-      expect(readJson(baselinePath)).toEqual({
-        ignore: [{ href: "../nope.md", page: "docs/guide.md" }],
-      });
-
-      // Next run passes, the link is ignored
-      const next = yield* run(args);
-      expect(next.code).toBe(0);
-      expect(next.stdout).toContain(`Using baseline ${baselinePath} (1 entries).`);
-      expect(next.stdout.filter((line) => line.includes("nope.md"))).toEqual([]);
-      expect(readJson(join(dir, "local-files.json"))).toMatchObject({
-        summary: { totalLinksToFix: 0, ignored: 1 },
-      });
-    }),
-  );
-
-  it.effect(
-    "baseline: --update-baseline on a partial scope keeps entries of other files, --prune-baseline drops them",
-    () =>
+  describe("baseline", () => {
+    it.effect("ignores matching links, --update-baseline writes failures and passes", () =>
       Effect.gen(function* () {
         const dir = tempDir();
+        const cwd = project();
         const baselinePath = join(dir, "baseline.json");
-        const otherEntry = {
-          href: "missing.md",
-          page: "other/README.md",
-          reason: "shared baseline",
-        };
-        writeFileSync(baselinePath, JSON.stringify({ ignore: [otherEntry] }));
-        const update = (...extra: string[]) =>
-          run(
-            [
-              "files",
-              "docs/*.md",
-              "--baseline",
-              baselinePath,
-              "--update-baseline",
-              "--output-dir",
-              dir,
-              ...extra,
-            ],
-            { cwd: dir },
-          ).pipe(Effect.map(({ code }) => code));
+        const args = ["files", "docs/*.md", "--baseline", baselinePath, "--output-dir", dir];
 
-        expect(yield* update()).toBe(0);
-        expect(readJson(baselinePath)).toEqual({
-          ignore: [otherEntry, { href: "../nope.md", page: "docs/guide.md" }],
-        });
+        // Missing baseline file without --update-baseline
+        const missing = yield* run(args, { cwd });
+        expect(missing.code).toBe(2);
+        expect(missing.stderr).toEqual([`Error: Baseline file not found: ${baselinePath}`]);
 
-        expect(yield* update("--prune-baseline")).toBe(0);
+        // Update creates it
+        const updated = yield* run([...args, "--update-baseline"], { cwd });
+        expect(updated.code).toBe(0);
+        expect(updated.stderr).toEqual(["Found 1 links to fix, added to the baseline."]);
+        expect(updated.stdout).toContain(`Updated baseline ${baselinePath}: 1 entries (was 0).`);
         expect(readJson(baselinePath)).toEqual({
           ignore: [{ href: "../nope.md", page: "docs/guide.md" }],
         });
-      }),
-  );
 
-  it.effect("baseline: returns 2 with a clear message for an invalid file", () => {
-    const baselinePath = join(tempDir(), "baseline.json");
-    writeFileSync(baselinePath, JSON.stringify({ ignore: [{ url: "x" }] }));
-    return run(["files", "docs/*.md", "--baseline", baselinePath]).pipe(
-      Effect.tap(({ code, stderr }) => {
-        expect(code).toBe(2);
-        expect(stderr.join("\n")).toContain(
-          `Invalid baseline file ${baselinePath}: ignore[0].url: is unexpected`,
-        );
-        expect(checks.checkLocalFiles).not.toHaveBeenCalled();
+        // Next run passes, the link is ignored
+        const next = yield* run(args, { cwd });
+        expect(next.code).toBe(0);
+        expect(next.stdout).toContain(`Using baseline ${baselinePath} (1 entries).`);
+        expect(next.stdout.filter((line) => line.includes("nope.md"))).toEqual([]);
+        expect(readJson(join(dir, "local-files.json"))).toMatchObject({
+          summary: { totalLinksToFix: 0, ignored: 1 },
+        });
       }),
     );
-  });
 
-  it.effect(
-    "site: checks the sitemap pages, --include (repeatable) filters links, reports links to fix, applies the baseline",
-    () => {
-      // Fake of the site check: the page links to a working and two missing URLs, only the filtered ones are checked
-      const site = "https://site.example";
-      const page = `${site}/page`;
-      const found = [
-        { ...link(`${site}/keep/ok`, { page }), result: { ok: true as const, status: 200 } },
-        {
-          ...link(`${site}/keep/missing`, { page }),
-          result: { ok: false as const, error: "broken link" as const, status: 404 },
-        },
-        {
-          ...link(`${site}/other/missing`, { page }),
-          result: { ok: false as const, error: "broken link" as const, status: 404 },
-        },
-      ];
-      checks.checkWebsite.mockImplementation(
-        ({ linkFilter }: { linkFilter?: (link: Link) => boolean }) =>
-          Effect.succeed(found.filter((item) => linkFilter?.(item) ?? true)),
-      );
+    it.effect(
+      "--update-baseline on a partial scope keeps entries of other files, --prune-baseline drops them",
+      () =>
+        Effect.gen(function* () {
+          const dir = project();
+          const baselinePath = join(dir, "baseline.json");
+          const otherEntry = {
+            href: "missing.md",
+            page: "other/README.md",
+            reason: "shared baseline",
+          };
+          writeFileSync(baselinePath, JSON.stringify({ ignore: [otherEntry] }));
+          const update = (...extra: string[]) =>
+            run(
+              [
+                "files",
+                "docs/*.md",
+                "--baseline",
+                baselinePath,
+                "--update-baseline",
+                "--output-dir",
+                dir,
+                ...extra,
+              ],
+              { cwd: dir },
+            ).pipe(Effect.map(({ code }) => code));
+
+          expect(yield* update()).toBe(0);
+          expect(readJson(baselinePath)).toEqual({
+            ignore: [otherEntry, { href: "../nope.md", page: "docs/guide.md" }],
+          });
+
+          expect(yield* update("--prune-baseline")).toBe(0);
+          expect(readJson(baselinePath)).toEqual({
+            ignore: [{ href: "../nope.md", page: "docs/guide.md" }],
+          });
+        }),
+    );
+
+    it.effect("returns 2 with a clear message for an invalid file", () => {
+      const baselinePath = join(tempDir(), "baseline.json");
       const outputDir = tempDir();
-      const args = [
-        "site",
-        site,
-        "--include",
-        `${site}/keep`,
-        "--include=https://other.example",
+      writeFileSync(baselinePath, JSON.stringify({ ignore: [{ url: "x" }] }));
+      return run([
+        "files",
+        "docs/*.md",
+        "--baseline",
+        baselinePath,
         "--output-dir",
         outputDir,
-      ];
-      const reportPath = join(outputDir, "site-example.json");
-      return Effect.gen(function* () {
-        expect((yield* run(args)).code).toBe(1);
-        expect(checks.checkWebsite).toHaveBeenCalledWith(
-          expect.objectContaining({ websiteUrl: site, sampleRate: 1 }),
+      ]).pipe(
+        Effect.tap(({ code, stderr }) => {
+          expect(code).toBe(2);
+          expect(stderr.join("\n")).toContain(
+            `Invalid baseline file ${baselinePath}: ignore[0].url: is unexpected`,
+          );
+          // Nothing was checked
+          expect(existsSync(join(outputDir, "local-files.json"))).toBe(false);
+        }),
+      );
+    });
+  });
+
+  describe("site", () => {
+    const site = "https://site.example";
+    // One page that links to a working and a missing URL below `/keep`, to a missing URL elsewhere and to another site
+    const handler: FetchHandler = (url) => {
+      const { pathname } = new URL(url);
+      if (pathname === "/sitemap.xml") {
+        return new Response(`<urlset><url><loc>${site}/page</loc></url></urlset>`);
+      }
+      if (pathname === "/page") {
+        const hrefs = [`${site}/keep/ok`, `${site}/keep/missing`, `${site}/other/missing`];
+        return new Response(
+          [...hrefs, "https://other.example/x"].map((href) => `<a href="${href}">x</a>`).join(""),
         );
-        expect(readJson(reportPath)).toMatchObject({
-          summary: { linksChecked: 2, totalLinksToFix: 1 },
+      }
+      return new Response("", { status: pathname.endsWith("missing") ? 404 : 200 });
+    };
+
+    it.effect(
+      "checks the sitemap pages, --include (repeatable) filters links, reports links to fix, applies the baseline",
+      () => {
+        const outputDir = tempDir();
+        const args = [
+          "site",
+          site,
+          "--include",
+          `${site}/keep`,
+          "--include=https://other.example",
+          "--output-dir",
+          outputDir,
+        ];
+        const reportPath = join(outputDir, "site-example.json");
+        return Effect.gen(function* () {
+          expect((yield* run(args, { fetch: handler })).code).toBe(1);
+          // /keep/ok, /keep/missing and other.example, not /other/missing
+          expect(readJson(reportPath)).toMatchObject({
+            summary: { linksChecked: 3, totalLinksToFix: 1 },
+          });
+
+          const baselinePath = join(tempDir(), "baseline.json");
+          writeFileSync(baselinePath, JSON.stringify({ ignore: [{ pattern: `${site}/**` }] }));
+          expect((yield* run([...args, "--baseline", baselinePath], { fetch: handler })).code).toBe(
+            0,
+          );
+          expect(readJson(reportPath)).toMatchObject({
+            summary: { totalLinksToFix: 0, ignored: 1 },
+          });
         });
+      },
+    );
 
-        const baselinePath = join(tempDir(), "baseline.json");
-        writeFileSync(baselinePath, JSON.stringify({ ignore: [{ pattern: `${site}/**` }] }));
-        expect((yield* run([...args, "--baseline", baselinePath])).code).toBe(0);
-        expect(readJson(reportPath)).toMatchObject({ summary: { totalLinksToFix: 0, ignored: 1 } });
-      });
-    },
-  );
-
-  it.effect("github-org: passes the organization and sample rate, names the report", () => {
-    const outputDir = tempDir();
-    return run(["github-org", "org", "--sample-rate", "0.5", "--output-dir", outputDir]).pipe(
-      Effect.tap(({ code }) => {
-        expect(code).toBe(0);
-        expect(checks.checkReadmesInGithubOrg).toHaveBeenCalledWith("org", { sampleRate: 0.5 });
-        expect(existsSync(join(outputDir, "org-github-readmes.json"))).toBe(true);
-      }),
+    it.effect("warns and passes when the site has no sitemap", () =>
+      run(["site", site, "--output-dir", tempDir()], {
+        fetch: () => new Response("", { status: 404 }),
+      }).pipe(
+        Effect.tap(({ code, stderr }) => {
+          expect(code).toBe(0);
+          expect(stderr).toEqual(["No sitemap.xml or sitemap-index.xml found"]);
+        }),
+      ),
     );
   });
 
-  it.effect("returns 1 when the check crashes", () => {
-    checks.checkReadmesInGithubOrg.mockReturnValue(Effect.die(new Error("GitHub exploded")));
-    return run(["github-org", "org"]).pipe(
-      Effect.tap(({ code, stderr }) => {
-        expect(code).toBe(1);
-        expect(stderr.join("\n")).toContain("GitHub exploded");
-      }),
-    );
-  });
+  describe("github-org", () => {
+    const repo = (name: string) => ({
+      full_name: `org/${name}`,
+      name,
+      archived: false,
+      owner: { login: "org" },
+    });
+    const orgApi: Partial<GitHubApi> = {
+      listOrgRepos: () => Effect.succeed([repo("a"), repo("b")]),
+      getRepo: () => Effect.succeed({ default_branch: "main" }),
+      getTreeEntries: () => Effect.succeed([{ type: "blob", path: "README.md" }]),
+    };
 
-  it.effect("returns 1 when the check fails with an error", () => {
-    checks.checkReadmesInGithubOrg.mockReturnValue(
-      Effect.fail(new Error("Failed to list repositories")),
+    it.effect(
+      "checks the READMEs of the repositories, applies the sample rate, names the report",
+      () => {
+        const outputDir = tempDir();
+        return run(["github-org", "org", "--sample-rate", "0.5", "--output-dir", outputDir], {
+          github: orgApi,
+          fetch: (url) =>
+            new Response(
+              url.startsWith("https://raw.githubusercontent.com/") ? "[X](https://x.example/)" : "",
+            ),
+        }).pipe(
+          Effect.tap(({ code, stdout }) => {
+            expect(code).toBe(0);
+            expect(stdout).toContain("Sampling 1 of 2 README files (sample rate 0.5).");
+            expect(readJson(join(outputDir, "org-github-readmes.json"))).toMatchObject({
+              summary: { linksChecked: 1, totalLinksToFix: 0 },
+            });
+          }),
+        );
+      },
     );
-    return run(["github-org", "org"]).pipe(
-      Effect.tap(({ code, stderr }) => {
-        expect(code).toBe(1);
-        expect(stderr.join("\n")).toContain("Failed to list repositories");
-      }),
+
+    it.effect("returns 1 when the repositories cannot be listed", () =>
+      run(["github-org", "org"], {
+        github: {
+          listOrgRepos: () =>
+            Effect.fail(new GitHubApiError({ status: 500, cause: new Error("GitHub is down") })),
+        },
+      }).pipe(
+        Effect.tap(({ code, stderr }) => {
+          expect(code).toBe(1);
+          expect(stderr.join("\n")).toContain(
+            "Failed to list repositories of GitHub organization org: GitHub is down",
+          );
+        }),
+      ),
+    );
+
+    it.effect("returns 1 when the check crashes", () =>
+      // The fake GitHub dies for a method nobody gave it
+      run(["github-org", "org"], { github: {} }).pipe(
+        Effect.tap(({ code, stderr }) => {
+          expect(code).toBe(1);
+          expect(stderr.join("\n")).toContain("unexpected GitHub call: listOrgRepos");
+        }),
+      ),
     );
   });
 });

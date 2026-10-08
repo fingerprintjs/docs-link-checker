@@ -44,19 +44,17 @@ describe("checkGitHubCommitLink()", () => {
   );
 
   // GitHub answers an unknown SHA with 422 "No commit found for SHA"
-  for (const status of [404, 422]) {
-    it.effect(`reports a ${status} as broken link`, () =>
-      Effect.gen(function* () {
-        const { result } = yield* checkCommit(failWith(status));
-        expect(result).toMatchObject({
-          ok: false,
-          error: "broken link",
-          status,
-          errorDetail: "Commit not found",
-        });
-      }),
-    );
-  }
+  it.effect.each([404, 422])("reports a %s as broken link", (status) =>
+    Effect.gen(function* () {
+      const { result } = yield* checkCommit(failWith(status));
+      expect(result).toMatchObject({
+        ok: false,
+        error: "broken link",
+        status,
+        errorDetail: "Commit not found",
+      });
+    }),
+  );
 
   it.effect("reports a rate limit (403) as unexpected error", () =>
     Effect.gen(function* () {
@@ -91,18 +89,16 @@ describe("checkGitHubDiscussionLink()", () => {
     }),
   );
 
-  for (const [name, status] of [
+  it.effect.each([
     ["rate limit", 403],
     ["bad credentials", 401],
     ["server error", 502],
-  ] as const) {
-    it.effect(`is an unexpected error for a ${name} (${status})`, () =>
-      Effect.gen(function* () {
-        const { result } = yield* checkDiscussion(failWith(status));
-        expect(result).toMatchObject({ ok: false, error: "unexpected error", status });
-      }),
-    );
-  }
+  ] as const)("is an unexpected error for a %s (%s)", ([, status]) =>
+    Effect.gen(function* () {
+      const { result } = yield* checkDiscussion(failWith(status));
+      expect(result).toMatchObject({ ok: false, error: "unexpected error", status });
+    }),
+  );
 
   it.effect("is an unexpected error for another GraphQL error (no status)", () =>
     Effect.gen(function* () {

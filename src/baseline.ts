@@ -1,3 +1,6 @@
+/**
+ * Baseline (ignore) file: validation, matching of links, update after a run.
+ */
 import { FileSystem } from "@effect/platform";
 import { Effect, ParseResult, Schema } from "effect";
 import { BaselineError, getErrorMessage } from "./errors";
@@ -168,9 +171,13 @@ export const loadBaseline = Effect.fn("loadBaseline")(function* (
       ? EMPTY_BASELINE
       : yield* new BaselineError({ message: `Baseline file not found: ${path}` });
   }
-  const file = yield* Schema.decodeUnknown(Schema.parseJson(BaselineFileSchema), {
-    onExcessProperty: "error",
-  })(text).pipe(Effect.mapError((error) => invalid(describeParseError(error))));
+  const data = yield* Effect.try({
+    try: (): unknown => JSON.parse(text),
+    catch: (error) => invalid(getErrorMessage(error)),
+  });
+  const file = yield* Schema.decodeUnknown(BaselineFileSchema, { onExcessProperty: "error" })(
+    data,
+  ).pipe(Effect.mapError((error) => invalid(describeParseError(error))));
   return createBaseline([...file.ignore]);
 });
 

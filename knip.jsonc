@@ -1,20 +1,4 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignore": [
-    "src/__fixtures__/**",
-    // TEMPORARY (EFFECT_DESIGN.md STEP 1), remove in STEP 3: stubs that nothing imports until the STEP 2 groups
-    // implement them
-  ],
-  // TEMPORARY, remove in STEP 3: exports whose users are the STEP 2 implementations
-  "ignoreIssues": {
-    "src/errors.ts": ["exports"],
-    "src/glob.ts": ["exports"],
-    "src/hash.ts": ["exports"],
-    "src/http.ts": ["exports", "types"],
-    "src/local_files.ts": ["exports", "types"],
-    "src/metrics.ts": ["exports"],
-    "src/utils.ts": ["exports", "types"],
-  },
-  // TEMPORARY, remove in STEP 3: dependencies that only the STEP 2 implementations use
-  "ignoreDependencies": [],
+  "ignore": ["src/__fixtures__/**"],
 }

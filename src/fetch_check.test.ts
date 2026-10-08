@@ -57,6 +57,21 @@ describe("checkLinkWithFetch()", () => {
     );
   });
 
+  it.effect("reports a redirect loop as broken link with the error text", () => {
+    const { provide } = setup(
+      (url) => new Response(null, { status: 302, headers: { Location: `${url}x` } }),
+    );
+    return provide(
+      Effect.gen(function* () {
+        expect(yield* checkLinkWithFetch("https://example.com/loop")).toEqual({
+          ok: false,
+          error: "broken link",
+          errorDetail: "Error: Too many redirects (more than 10) for https://example.com/loop",
+        });
+      }),
+    );
+  });
+
   it.effect("reports a failed request, also for a link without a hash", () => {
     const { provide } = setup(() => new Response("Not found", { status: 404 }));
     return provide(
@@ -125,8 +140,9 @@ describe("checkLinkWithFetch()", () => {
   });
 
   // Special characters are covered by hash.test.ts, these only check the wiring
-  for (const hash of ["#version-1.2.3", "#caf%C3%A9"]) {
-    it.effect(`finds hash ${hash} in server-rendered HTML`, () => {
+  it.effect.each(["#version-1.2.3", "#caf%C3%A9"])(
+    "finds hash %s in server-rendered HTML",
+    (hash) => {
       const { provide } = setup(() => new Response(hashesHtml, { status: 200 }));
       return provide(
         Effect.gen(function* () {
@@ -134,8 +150,8 @@ describe("checkLinkWithFetch()", () => {
           expect(result).toEqual({ ok: true, status: 200 });
         }),
       );
-    });
-  }
+    },
+  );
 
   it.effect("reports missing hashes as 'hash not found' (not 'broken link')", () => {
     const { provide } = setup(() => new Response(hashesHtml, { status: 200 }));

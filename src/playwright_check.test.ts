@@ -18,7 +18,7 @@ import {
   HASH_WAIT_TIMEOUT,
   PAGE_OPERATION_TIMEOUT,
 } from "./playwright_check";
-import { settle } from "./test/clock";
+import { runWithClock, settle } from "./test/clock";
 import { fakeChromium, makeFakeChromiumState } from "./test/fake_chromium";
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
@@ -41,31 +41,22 @@ const setup = () => {
 const checkOne = (url: string) =>
   checkUrlsOnPageWithPlaywright([url]).pipe(Effect.map((results) => results.get(url)));
 
-// All waits of the tests are multiples of this, so the measured times are exact
-const STEP_MS = 500;
-
 /**
- * Moves the test clock in steps of 500ms (letting the promise based fake browser settle) until `effect` is done.
- * A missing anchor takes its whole wait, like in a real browser. Returns the result and how long it took
- * (simulated time).
+ * Runs `effect` on the test clock until it is done. A missing anchor takes its whole wait, like in a real browser.
+ * Returns the result and how long it took (simulated time, exact: all waits are multiples of the clock step).
  */
 const timed = <A, E, R>(state: { waitForTakesTimeout: boolean }, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     state.waitForTakesTimeout = true;
     const start = yield* Clock.currentTimeMillis;
-    const fiber = yield* Effect.fork(
+    return yield* runWithClock(
       effect.pipe(
         Effect.flatMap((value) =>
           Effect.map(Clock.currentTimeMillis, (end) => ({ result: value, took: end - start })),
         ),
       ),
+      "10 minutes",
     );
-    yield* settle;
-    while (Option.isNone(yield* Fiber.poll(fiber))) {
-      yield* TestClock.adjust(STEP_MS);
-      yield* settle;
-    }
-    return yield* Fiber.join(fiber);
   });
 
 describe("checkUrlsOnPageWithPlaywright() hash check", () => {
@@ -180,20 +171,18 @@ describe("checkUrlsOnPageWithPlaywright() hash check", () => {
     );
   });
 
-  for (const status of [401, 403]) {
-    it.effect(`reports a ${status} page with its body`, () => {
-      const { state, provide } = setup();
-      state.status = status;
-      return provide(
-        Effect.gen(function* () {
-          const result = yield* checkOne("https://example.com/docs#a");
+  it.effect.each([401, 403])("reports a %s page with its body", (status) => {
+    const { state, provide } = setup();
+    state.status = status;
+    return provide(
+      Effect.gen(function* () {
+        const result = yield* checkOne("https://example.com/docs#a");
 
-          expect(result).toMatchObject({ ok: false, status, error: "could not check" });
-          expect(!result?.ok && result?.errorDetail).toContain("Forbidden page");
-        }),
-      );
-    });
-  }
+        expect(result).toMatchObject({ ok: false, status, error: "could not check" });
+        expect(!result?.ok && result?.errorDetail).toContain("Forbidden page");
+      }),
+    );
+  });
 
   it.effect("does not wait forever for the body of a forbidden page", () => {
     const { state, provide } = setup();
@@ -214,20 +203,19 @@ describe("checkUrlsOnPageWithPlaywright() hash check", () => {
     const codeView =
       '<div data-line-number="1"></div><div data-line-number="2"></div><div data-line-number="3"></div>';
 
-    for (const hash of ["#L2", "#L1-L3"]) {
-      it.effect(`finds line ${hash} in the code view`, () => {
-        const { state, provide } = setup();
-        state.html = codeView;
-        return provide(
-          Effect.gen(function* () {
-            expect(yield* checkOne(`${file}${hash}`)).toEqual({ ok: true, status: 200 });
-          }),
-        );
-      });
-    }
+    it.effect.each(["#L2", "#L1-L3"])("finds line %s in the code view", (hash) => {
+      const { state, provide } = setup();
+      state.html = codeView;
+      return provide(
+        Effect.gen(function* () {
+          expect(yield* checkOne(`${file}${hash}`)).toEqual({ ok: true, status: 200 });
+        }),
+      );
+    });
 
-    for (const hash of ["#L99", "#L99-L120"]) {
-      it.effect(`reports line ${hash} beyond the end of the file without the long wait`, () => {
+    it.effect.each(["#L99", "#L99-L120"])(
+      "reports line %s beyond the end of the file without the long wait",
+      (hash) => {
         const { state, provide } = setup();
         state.html = codeView;
         return provide(
@@ -239,8 +227,8 @@ describe("checkUrlsOnPageWithPlaywright() hash check", () => {
             expect(took).toBe(HASH_WAIT_TIMEOUT);
           }),
         );
-      });
-    }
+      },
+    );
 
     it.effect("reports a line as not found when the code view never renders", () => {
       const { state, provide } = setup();

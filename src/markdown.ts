@@ -1,3 +1,6 @@
+/**
+ * Markdown parsing: links with line numbers and the anchors GitHub renders for headings.
+ */
 import * as cheerio from "cheerio";
 import GithubSlugger from "github-slugger";
 import { fromMarkdown } from "mdast-util-from-markdown";

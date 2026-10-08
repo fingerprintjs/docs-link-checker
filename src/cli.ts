@@ -1,12 +1,12 @@
-import { resolve } from "node:path";
 /**
  * Command line: commander parses (sync, no side effects), one Effect runs the command and returns the exit code
  * (0 ok, 1 links to fix or crash, 2 usage or baseline error, 130 interrupted).
  * - Env defaults of options are read with `Config` and parsed only when the flag is absent, so `--help` and flags
  *   that override an invalid variable still work.
  * - Usage text and errors of commander are buffered and printed through `Console`, so tests can capture them.
- * - Why not `@effect/cli`: EFFECT_DESIGN.md, "CLI".
+ * - Why not `@effect/cli`: docs/architecture.md.
  */
+import { resolve } from "node:path";
 import { inspect } from "node:util";
 import type { FileSystem } from "@effect/platform";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";

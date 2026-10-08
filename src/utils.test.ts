@@ -123,24 +123,22 @@ describe("processAll()", () => {
     return logs.run;
   });
 
-  for (const { item, expected } of [
+  it.effect.each([
     { item: { full_name: "org/repo", name: "repo" }, expected: "org/repo" },
     {
       item: { sourcePath: "https://github.com/org/repo/blob/main/README.md" },
       expected: "https://github.com/org/repo/blob/main/README.md",
     },
     { item: "plain", expected: "plain" },
-  ]) {
-    it.effect(`names the failed item ${expected}`, () => {
-      const logs = withLogs(
-        Effect.gen(function* () {
-          yield* processAll({ items: [item], process: () => Effect.fail("Something exploded") });
-          expect(logs.stderr.join("\n")).toContain(`  - ${expected}: Something exploded`);
-        }),
-      );
-      return logs.run;
-    });
-  }
+  ])("names the failed item $expected", ({ item, expected }) => {
+    const logs = withLogs(
+      Effect.gen(function* () {
+        yield* processAll({ items: [item], process: () => Effect.fail("Something exploded") });
+        expect(logs.stderr.join("\n")).toContain(`  - ${expected}: Something exploded`);
+      }),
+    );
+    return logs.run;
+  });
 });
 
 describe("sampleItems()", () => {

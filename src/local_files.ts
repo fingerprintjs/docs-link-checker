@@ -249,7 +249,7 @@ export const checkLocalLink = (
     ),
   );
 
-export type CollectedLinks = {
+type CollectedLinks = {
   files: string[];
   /** Relative links and anchors, checked on the filesystem */
   local: Link[];

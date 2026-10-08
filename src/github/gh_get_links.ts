@@ -53,7 +53,7 @@ export const getReadmesFromOrg = Effect.fn("github.getReadmesFromOrg")(function*
     .listOrgRepos(org)
     .pipe(Effect.mapError((cause) => new OrgListError({ org, cause })));
   const repos = orgRepos.filter(
-    (repo) => !repo.archived && !GITHUB_ORG_EXCLUDED_REPOS.has(repo.name),
+    (repo) => repo.archived === false && !GITHUB_ORG_EXCLUDED_REPOS.has(repo.name),
   );
   yield* Effect.logInfo(`\nFound ${repos.length} public repositories in ${org} organization.`);
 

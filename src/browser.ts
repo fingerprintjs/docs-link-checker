@@ -125,23 +125,8 @@ const createResourceBlocker = () => {
   };
 };
 
-/** The only place `chromium` is referenced. Faked in tests instead of mocking the `playwright` module. */
-export class Chromium extends Context.Tag("Chromium")<Chromium, Pick<BrowserType, "launch">>() {
-  static readonly layer: Layer.Layer<Chromium> = Layer.succeed(Chromium, {
-    launch: (options) => chromium.launch(options),
-  });
-}
-
-/** Promise-returning Playwright call as an effect (the only place Playwright errors are caught) */
-export const tryPlaywright = <A>(f: () => Promise<A>): Effect.Effect<A, PlaywrightError> =>
-  Effect.tryPromise({ try: f, catch: (cause) => new PlaywrightError({ cause }) });
-
-const isMissingBrowserExecutable = (error: BrowserLaunchError) =>
-  error.cause instanceof Error && error.cause.message.includes("Executable doesn't exist");
-
-const installPlaywrightChromium = Effect.gen(function* () {
-  yield* Effect.logInfo("Playwright Chromium is missing, installing...");
-  // This package's `playwright` CLI, not a different version from `npx playwright`
+/** Downloads Chromium with this package's `playwright` CLI, not a different version from `npx playwright` */
+const installChromium = Effect.gen(function* () {
   const cli = join(
     dirname(createRequire(import.meta.url).resolve("playwright/package.json")),
     "cli.js",
@@ -157,6 +142,27 @@ const installPlaywrightChromium = Effect.gen(function* () {
     });
   }
 });
+
+/** The only place `chromium` is used (launch, install). Faked in tests instead of mocking modules. */
+export class Chromium extends Context.Tag("Chromium")<
+  Chromium,
+  {
+    readonly launch: BrowserType["launch"];
+    readonly install: Effect.Effect<void, BrowserLaunchError>;
+  }
+>() {
+  static readonly layer: Layer.Layer<Chromium> = Layer.succeed(Chromium, {
+    launch: (options) => chromium.launch(options),
+    install: installChromium,
+  });
+}
+
+/** Promise-returning Playwright call as an effect (the only place Playwright errors are caught) */
+export const tryPlaywright = <A>(f: () => Promise<A>): Effect.Effect<A, PlaywrightError> =>
+  Effect.tryPromise({ try: f, catch: (cause) => new PlaywrightError({ cause }) });
+
+const isMissingBrowserExecutable = (error: BrowserLaunchError) =>
+  error.cause instanceof Error && error.cause.message.includes("Executable doesn't exist");
 
 const closeQuietly = (browser: PlaywrightBrowser) =>
   tryPlaywright(() => browser.close()).pipe(Effect.ignore);
@@ -205,7 +211,7 @@ export class Browser extends Context.Tag("Browser")<
   static readonly layer: Layer.Layer<Browser, never, Chromium | Metrics> = Layer.scoped(
     Browser,
     Effect.gen(function* () {
-      const { launch } = yield* Chromium;
+      const { launch, install } = yield* Chromium;
       const metrics = yield* Metrics;
       const pageSlots = yield* Effect.makeSemaphore(PLAYWRIGHT_CONCURRENCY_LIMIT);
       // The browser of the RcRef, to not invalidate a newer one when an older browser's page fails late
@@ -221,7 +227,10 @@ export class Browser extends Context.Tag("Browser")<
       );
       const launchBrowser = launchOnce.pipe(
         Effect.catchIf(isMissingBrowserExecutable, () =>
-          installPlaywrightChromium.pipe(Effect.zipRight(launchOnce)),
+          Effect.logInfo("Playwright Chromium is missing, installing...").pipe(
+            Effect.zipRight(install),
+            Effect.zipRight(launchOnce),
+          ),
         ),
       );
 

@@ -6,7 +6,7 @@
 import { Clock, Context, Effect, Layer, Ref } from "effect";
 
 /** Metric names and their labels in the summary log */
-export const METRICS = {
+const METRICS = {
   totalLinks: "Total links",
   uniqueUrls: "Unique URLs",
   uniquePages: "Unique pages (URLs without hash)",

@@ -1,3 +1,6 @@
+/**
+ * GitHub code line anchors (`#L10-L12`): parsing and checking against the number of lines of a file.
+ */
 import type { LinkCheckResult } from "./types";
 
 /**

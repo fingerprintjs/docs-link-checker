@@ -19,10 +19,7 @@ import type { LinkCheckResult } from "./types";
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
 
 export class Fetch extends Context.Tag("Fetch")<Fetch, FetchFn>() {
-  // Looked up per call, so tests can still stub the global
-  static readonly layer: Layer.Layer<Fetch> = Layer.succeed(Fetch, (url, init) =>
-    globalThis.fetch(url, init),
-  );
+  static readonly layer: Layer.Layer<Fetch> = Layer.succeed(Fetch, globalThis.fetch);
 }
 
 // GitHub web rate limit makes you wait 60 seconds after 500 requests
@@ -136,7 +133,7 @@ const MAX_REDIRECTS = 10;
 
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
-export type LimitedResponse<T> = {
+type LimitedResponse<T> = {
   readonly status: number;
   readonly statusText: string;
   readonly headers: Headers;

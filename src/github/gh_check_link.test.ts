@@ -124,20 +124,18 @@ describe("checkLinkWithGithubApi() with percent-encoded paths", () => {
 });
 
 describe("checkLinkWithGithubApi() with user and organization URLs", () => {
-  for (const [url, username] of [
+  it.effect.each([
     ["https://github.com/frida/", "frida"],
     ["https://github.com/Universal-Commerce-Protocol", "Universal-Commerce-Protocol"],
     ["https://github.com/ua-parser", "ua-parser"],
-  ]) {
-    it.effect(`checks ${url} as an account, not as a repository`, () =>
-      Effect.gen(function* () {
-        const { result, calls } = yield* check(url ?? "");
+  ])("checks %s as an account, not as a repository", ([url, username]) =>
+    Effect.gen(function* () {
+      const { result, calls } = yield* check(url ?? "");
 
-        expect(result).toEqual(OK);
-        expect(calls).toEqual([`getUser("${username}")`]);
-      }),
-    );
-  }
+      expect(result).toEqual(OK);
+      expect(calls).toEqual([`getUser("${username}")`]);
+    }),
+  );
 
   it.effect("still checks repository URLs as repositories", () =>
     Effect.gen(function* () {
@@ -159,32 +157,56 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
 });
 
 describe("checkLinkWithGithubApi() with unknown sections", () => {
-  for (const section of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
-    it.effect(
-      `reports /owner/repo/${section}/x as an unknown link type (no inherited object property)`,
-      () =>
-        Effect.gen(function* () {
-          const { result } = yield* check(`https://github.com/o/r/${section}/x`);
+  it.effect.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "reports /owner/repo/%s/x as an unknown link type (no inherited object property)",
+    (section) =>
+      Effect.gen(function* () {
+        const { result } = yield* check(`https://github.com/o/r/${section}/x`);
 
-          expect(result).toEqual({
-            ok: false,
-            error: "unexpected error",
-            status: 400,
-            errorDetail: `Unknown link type: ${section}/x`,
-          });
-        }),
-    );
-  }
+        expect(result).toEqual({
+          ok: false,
+          error: "unexpected error",
+          status: 400,
+          errorDetail: `Unknown link type: ${section}/x`,
+        });
+      }),
+  );
 });
 
 describe("checkLinkWithGithubApi() with unknown account URLs", () => {
-  // These fetch the page of an unknown account with `checkLinkWithFetch`, still a stub of the PIPELINE group.
-  // Port them with `fakeFetch` when `fetch_check.ts` is implemented (STEP 3).
-  it.todo(
-    "accepts an unknown account URL whose page exists (a GitHub page missing from the reserved routes)",
+  // The account is unknown to the API: its page is fetched, GitHub has pages that are not in the reserved routes
+  const unknownAccount = (pageResponse: Response) => {
+    const github = fakeGitHub({ getUser: notFound });
+    const page = fakeFetch(() => pageResponse);
+    return checkLinkWithGithubApi("https://github.com/premium-support").pipe(
+      Effect.provide(testRunLayer({ github: github.layer, fetch: page.layer })),
+      Effect.map((result) => ({ result, github, page })),
+    );
+  };
+
+  it.effect("accepts an unknown account URL whose page exists", () =>
+    Effect.gen(function* () {
+      const { result, github, page } = yield* unknownAccount(new Response("<html></html>"));
+
+      expect(result).toEqual(OK);
+      expect(github.calls).toEqual(['getUser("premium-support")']);
+      expect(page.calls).toHaveLength(1);
+    }),
   );
-  it.todo(
-    "reports the API 404 as broken link when the page of an unknown account answers 404 or 429",
+
+  it.effect.each([404, 429])(
+    "reports the API 404 as broken link when the page of an unknown account answers %s",
+    (pageStatus) =>
+      Effect.gen(function* () {
+        const { result } = yield* unknownAccount(new Response("No page", { status: pageStatus }));
+
+        expect(result).toEqual({
+          ok: false,
+          error: "broken link",
+          status: 404,
+          errorDetail: "User or organization premium-support not found",
+        });
+      }),
   );
 
   it.effect("does not fetch the page of an existing account", () =>
@@ -198,8 +220,9 @@ describe("checkLinkWithGithubApi() with unknown account URLs", () => {
 
 describe("GitHub API errors", () => {
   // 401 (bad token), 403 (rate limits after Octokit's retry, no access) and 5xx say nothing about the link
-  for (const status of [401, 403, 502, 503]) {
-    it.effect(`reports ${status} as unexpected error (not broken) for every link type`, () =>
+  it.effect.each([401, 403, 502, 503])(
+    "reports %s as unexpected error (not broken) for every link type",
+    (status) =>
       Effect.gen(function* () {
         for (const url of [
           "https://github.com/someone",
@@ -222,8 +245,7 @@ describe("GitHub API errors", () => {
           });
         }
       }),
-    );
-  }
+  );
 
   it.effect("reports a missing repository as broken link", () =>
     Effect.gen(function* () {
@@ -262,7 +284,7 @@ describe("GitHub API errors", () => {
 });
 
 describe("checkLinkWithGithubApi() with URL variants", () => {
-  for (const url of [
+  it.effect.each([
     "https://github.com/o/r/issues",
     "https://github.com/o/r/issues/",
     "https://github.com/o/r/discussions",
@@ -270,16 +292,14 @@ describe("checkLinkWithGithubApi() with URL variants", () => {
     "https://github.com/o/r/pulls",
     "https://github.com/o/r?tab=readme-ov-file",
     "https://github.com/o/r/?tab=readme-ov-file",
-  ]) {
-    it.effect(`checks ${url} as the repository`, () =>
-      Effect.gen(function* () {
-        const { result, calls } = yield* check(url);
+  ])("checks %s as the repository", (url) =>
+    Effect.gen(function* () {
+      const { result, calls } = yield* check(url);
 
-        expect(result).toEqual(OK);
-        expect(calls).toEqual(['getRepo("o", "r")']);
-      }),
-    );
-  }
+      expect(result).toEqual(OK);
+      expect(calls).toEqual(['getRepo("o", "r")']);
+    }),
+  );
 
   it.effect("ignores the query string of a tree link", () =>
     Effect.gen(function* () {
