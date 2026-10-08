@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -144,25 +144,19 @@ describe("runCli()", () => {
       expect(report.summary).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
     });
 
-    it("--update-baseline without --baseline writes linkcheck.baseline.json in process.cwd(), not in io.cwd", async () => {
-      // Only the globs are resolved against io.cwd, the baseline path is used as is by the file system
-      const processCwd = tempDir();
-      const previous = process.cwd();
-      process.chdir(processCwd);
-      try {
-        expect(
-          await runCli(
-            ["files", "docs/*.md", "--update-baseline", "--output-dir", tempDir()],
-            io(),
-          ),
-        ).toBe(0);
-      } finally {
-        process.chdir(previous);
-      }
-      expect(JSON.parse(readFileSync(join(processCwd, "linkcheck.baseline.json"), "utf8"))).toEqual(
-        { ignore: [{ href: "../nope.md", page: "docs/guide.md" }] },
-      );
-      expect(existsSync(join(FIXTURE, "linkcheck.baseline.json"))).toBe(false);
+    it("--update-baseline writes the default baseline file and reads a relative --baseline in io.cwd, not process.cwd()", async () => {
+      const cwd = tempDir();
+      mkdirSync(join(cwd, "docs"));
+      writeFileSync(join(cwd, "docs/guide.md"), "[broken](../nope.md)\n");
+      const run = (args: string[]) =>
+        runCli(["files", "docs/*.md", "--output-dir", tempDir(), ...args], { ...io(), cwd });
+
+      expect(await run(["--update-baseline"])).toBe(0);
+      expect(JSON.parse(readFileSync(join(cwd, "linkcheck.baseline.json"), "utf8"))).toEqual({
+        ignore: [{ href: "../nope.md", page: "docs/guide.md" }],
+      });
+      // The baseline is found again by its relative path and covers the broken link
+      expect(await run(["--baseline", "linkcheck.baseline.json"])).toBe(0);
     });
 
     it.each([
