@@ -4,6 +4,26 @@ Regular link checkers only look at HTTP status. Docs also use `#anchors` and Git
 
 This checker loads the page and checks that the hash exists. Client-rendered docs are checked in a headless browser.
 
+## What this repo checks
+
+Every day at 03:17 UTC, on every push to main, and on a manual run, [check links](.github/workflows/checkLinks.yaml) checks the three sources below and publishes the reports.
+
+```text
+daily 03:17 UTC, push to main, manual
+  docs.fingerprint.com
+  fingerprintjs READMEs
+  fingerprint.com
+  reports
+    GitHub Pages
+    Actions artifacts, 30 days
+```
+
+- **docs.fingerprint.com.** Every page from the sitemap. [Report](https://fingerprintjs.github.io/docs-link-checker/docs-fingerprint-com.html).
+- **fingerprintjs READMEs.** Public repositories that are still active. [Report](https://fingerprintjs.github.io/docs-link-checker/fingerprintjs-github-readmes.html).
+- **fingerprint.com.** Links to docs.fingerprint.com, dev.fingerprint.com, fingerprint.com, and github.com. [Report](https://fingerprintjs.github.io/docs-link-checker/fingerprint-com.html).
+
+[GitHub Pages](https://fingerprintjs.github.io/docs-link-checker/) updates when all three reports exist. If one report is missing, the previous site stays up. The job fails only when the checker crashes or is misconfigured. Workflow setup is in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## CLI
 
 > [!WARNING]
@@ -57,5 +77,3 @@ jobs:
 ```
 
 Inputs and outputs: [docs/action.md](docs/action.md).
-
-Fingerprint docs, public GitHub READMEs, and fingerprint.com are checked every day. Latest reports: [GitHub Pages](https://fingerprintjs.github.io/docs-link-checker/). Setup: [CONTRIBUTING.md](CONTRIBUTING.md).
