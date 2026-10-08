@@ -1,3 +1,7 @@
+/**
+ * URL hashes (fragments): splitting them off a URL, special fragments that are not anchors, and finding the anchor
+ * a hash points to (in HTML text or as CSS selectors for a live page).
+ */
 import * as cheerio from "cheerio";
 import { isGithubCodeLineLink, safeDecode } from "./github/gh_url";
 import { parseLineAnchor } from "./line_anchor";
@@ -104,4 +108,51 @@ export const isHashInAnchorIndex = (index: AnchorIndex, hash: string): boolean =
   return variants.some(
     (variant) => index.hrefs.has(`#${variant}`) || index.hrefs.has(`#${variant.toLowerCase()}`),
   );
+};
+
+/** The URL without its hash (`https://example.com/page#section` -> `https://example.com/page`) */
+export const stripHash = (href: string): string => {
+  try {
+    const url = new URL(href);
+    url.hash = "";
+    return url.href;
+  } catch {
+    return href;
+  }
+};
+
+/** The URL has a non-empty hash */
+export const hasHash = (href: string): boolean => {
+  try {
+    return new URL(href).hash !== "";
+  } catch {
+    return false;
+  }
+};
+
+// Google Help Center hosts, their `#zippy=` fragments expand accordion sections
+const GOOGLE_HELP_HOSTS = new Set(["support.google.com"]);
+
+/**
+ * Fragments that are not element ids, so they are accepted without looking for an anchor
+ * @param fragment the URL hash without `#`
+ * @param url the full URL (some fragments are only special on some hosts)
+ * @returns a note for the report, or `undefined` for a regular anchor
+ */
+export const getSpecialFragmentNote = (fragment: string, url: string): string | undefined => {
+  if (fragment === "/") {
+    return "Accidental hash";
+  }
+  if (fragment.includes(":~:")) {
+    /**
+     * The link includes a [Text Fragment](https://developer.mozilla.org/en-US/docs/Web/Text_fragments)
+     * Checking this properly is not trivial, let's ignore them for now
+     **/
+    return "Text Fragment";
+  }
+  if (fragment.startsWith("zippy=") && GOOGLE_HELP_HOSTS.has(new URL(url).hostname)) {
+    // Google Help Center: `#zippy=,section` expands accordion sections, there is no element with that id
+    return "Google Help accordion state";
+  }
+  return undefined;
 };

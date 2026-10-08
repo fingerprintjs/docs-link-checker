@@ -1,17 +1,9 @@
 import type { Page, Response as PlaywrightResponse } from "playwright";
 import { withPage } from "./browser";
 import { isGithubCodeLineLink } from "./github/gh_url";
-import { getHashSelectors } from "./hash";
-import {
-  FORBIDDEN_STATUS_CODES,
-  formatServerErrorRetry,
-  USER_AGENT,
-  getServerErrorRetryDelay,
-  OKAY_STATUS_CODES,
-  TRANSIENT_SERVER_ERROR_STATUS_CODES,
-} from "./http";
+import { getHashSelectors, getSpecialFragmentNote } from "./hash";
+import { classifyStatus, getUserAgent, planServerErrorRetry, serverErrorResult } from "./http";
 import { withTimeout } from "./limiter";
-import { getServerErrorResult, getSpecialFragmentNote, shouldSpoofUserAgent } from "./link_common";
 import { getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 
@@ -197,7 +189,7 @@ type NavigationRetry = { pausedUrl: string };
 
 /**
  * One navigation of `checkUrlsOnPageWithPlaywright`. Returns a retry after a 502, 503 or 504 that should be retried
- * (the host of the response is paused for the backoff, see `getServerErrorRetryDelay`).
+ * (the host of the response is paused for the backoff, see `planServerErrorRetry`).
  */
 async function navigateAndCheck(
   urls: string[],
@@ -218,42 +210,41 @@ async function navigateAndCheck(
           waitUntil: "domcontentloaded",
           timeout: PAGE_OPERATION_TIMEOUT,
         });
-        if (response && TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status())) {
-          const status = response.status();
-          const delayMs = getServerErrorRetryDelay(
+        if (!response) {
+          return sameForAll({ ok: false, error: "broken link", status: 0 });
+        }
+        const status = response.status();
+        const statusClass = classifyStatus(status);
+        if (statusClass === "server-error") {
+          // After a redirect, the server error comes from the final URL: back off for its host
+          const failedUrl = response.url() || firstUrl;
+          const delayMs = planServerErrorRetry(
+            failedUrl,
+            status,
             retries,
             response.headers()["retry-after"] ?? null,
           );
           if (delayMs === undefined) {
-            return sameForAll(getServerErrorResult(status, response.statusText()));
+            return sameForAll(serverErrorResult(status, response.statusText()));
           }
-          // After a redirect, the server error comes from the final URL: back off for its host
-          const failedUrl = response.url() || firstUrl;
-          console.log(formatServerErrorRetry(failedUrl, status, delayMs));
-          incrementMetric("serverErrorRetries");
           // The page is closed right away, the retry waits for the pause outside of the page slot
           getHostLimiter().pause(failedUrl, delayMs);
           return { pausedUrl: failedUrl };
         }
 
-        if (response && FORBIDDEN_STATUS_CODES.includes(response.status())) {
+        if (statusClass === "forbidden") {
           return sameForAll({
             ok: false,
             error: "could not check",
-            status: response.status(),
+            status,
             errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
           });
         }
 
-        if (!response || !OKAY_STATUS_CODES.includes(response.status())) {
-          return sameForAll({
-            ok: false,
-            error: "broken link",
-            status: response?.status() ?? 0,
-          });
+        if (statusClass !== "okay") {
+          return sameForAll({ ok: false, error: "broken link", status });
         }
 
-        const status = response.status();
         // The overall budget of the long wait starts with the first check, it includes the regular wait
         const deadline = Date.now() + HASH_FALLBACK_WAIT_TIMEOUT;
         const results = new Map(
@@ -298,7 +289,7 @@ async function navigateAndCheck(
       }
     },
     {
-      userAgent: shouldSpoofUserAgent(firstUrl) ? USER_AGENT : undefined,
+      userAgent: getUserAgent(firstUrl),
       timeout: PAGE_OPERATION_TIMEOUT,
     },
   );

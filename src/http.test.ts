@@ -1,13 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkLinkWithFetch } from "./fetch_check";
 import { getReadmeLinks } from "./github/gh_get_links";
-import {
-  fetchWithHostLimit,
-  getServerErrorRetryDelay,
-  MAX_RATE_LIMIT_RETRIES,
-  MAX_REDIRECTS,
-  MAX_SERVER_ERROR_RETRIES,
-} from "./http";
+import { fetchWithHostLimit, planServerErrorRetry } from "./http";
 import { getLinksFromPages, parseLinksFromPage } from "./page";
 import { getHostLimiter, withRun } from "./run";
 
@@ -73,7 +67,8 @@ describe("fetchWithHostLimit()", () => {
       const result = await fetchWithHostLimit("https://limited.example.com/", {}, text);
 
       expect(result).toMatchObject({ status: 429, data: "slow down" });
-      expect(fetchMock).toHaveBeenCalledTimes(MAX_RATE_LIMIT_RETRIES + 1);
+      // The request, then 2 retries
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     }));
 
   it("does not retry a 429 without a usable Retry-After", () =>
@@ -141,8 +136,9 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
       );
 
       expect(response.status).toBe(503);
-      expect(fetchMock).toHaveBeenCalledTimes(MAX_SERVER_ERROR_RETRIES + 1);
-      expect(cancelled).toBe(MAX_SERVER_ERROR_RETRIES + 1);
+      // The request, then 2 retries
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(cancelled).toBe(3);
     }));
 
   it("respects Retry-After (longer than the backoff) and pauses the host for queued requests", () =>
@@ -199,15 +195,17 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     }));
 
-  it("getServerErrorRetryDelay() is bounded: backoff, Retry-After as a minimum, at most 10s", () => {
-    expect(getServerErrorRetryDelay(0, null)).toBe(2000);
-    expect(getServerErrorRetryDelay(1, null)).toBe(5000);
-    expect(getServerErrorRetryDelay(2, null)).toBeUndefined();
-    expect(getServerErrorRetryDelay(0, "0")).toBe(2000);
-    expect(getServerErrorRetryDelay(0, "7")).toBe(7000);
-    expect(getServerErrorRetryDelay(1, "10")).toBe(10_000);
-    expect(getServerErrorRetryDelay(0, "11")).toBeUndefined();
-    expect(getServerErrorRetryDelay(0, "invalid")).toBe(2000);
+  it("planServerErrorRetry() is bounded: backoff, Retry-After as a minimum, at most 10s", () => {
+    const delay = (retries: number, retryAfter: string | null) =>
+      planServerErrorRetry("https://busy.example.com/", 503, retries, retryAfter);
+    expect(delay(0, null)).toBe(2000);
+    expect(delay(1, null)).toBe(5000);
+    expect(delay(2, null)).toBeUndefined();
+    expect(delay(0, "0")).toBe(2000);
+    expect(delay(0, "7")).toBe(7000);
+    expect(delay(1, "10")).toBe(10_000);
+    expect(delay(0, "11")).toBeUndefined();
+    expect(delay(0, "invalid")).toBe(2000);
   });
 });
 
@@ -268,14 +266,14 @@ describe("fetchWithHostLimit() redirects", () => {
       expect(maxActive).toBe(2);
     }));
 
-  it("gives up after MAX_REDIRECTS redirects", () =>
+  it("gives up after 10 redirects", () =>
     withRun({ hostConcurrency: 2 }, async () => {
       const fetchMock = stubFetch((url) => redirect(`${url}x`, 302));
 
       await expect(fetchWithHostLimit("https://loop.example.com/", {}, text)).rejects.toThrow(
         "Too many redirects",
       );
-      expect(fetchMock).toHaveBeenCalledTimes(MAX_REDIRECTS + 1);
+      expect(fetchMock).toHaveBeenCalledTimes(11);
     }));
 
   it("reports too many redirects as a broken link in link checks", () =>
@@ -317,7 +315,7 @@ describe("fetchWithHostLimit() redirects", () => {
       await expect(fetchWithHostLimit("https://self.example.com/", {}, text)).rejects.toThrow(
         "Too many redirects",
       );
-      expect(fetchMock).toHaveBeenCalledTimes(MAX_REDIRECTS + 1);
+      expect(fetchMock).toHaveBeenCalledTimes(11);
     }));
 });
 

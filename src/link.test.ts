@@ -147,8 +147,8 @@ vi.mock("playwright", () => ({
 }));
 
 import { checkLinkWithFetch } from "./fetch_check";
+import { getSpecialFragmentNote } from "./hash";
 import { checkLinks, interleaveByHost, shouldRecheckWithPlaywright } from "./link";
-import { getSpecialFragmentNote } from "./link_common";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { getHostLimiter, getRunContext, withRun } from "./run";
 
@@ -641,14 +641,14 @@ describe("checkLinkWithPlaywright() hash check", () => {
     expect(took).toBe(15_000);
   });
 
-  it("reports a forbidden page with its body", async () => {
-    playwrightState.status = 403;
+  it.each([401, 403])("reports a %s page with its body", async (status) => {
+    playwrightState.status = status;
 
     const result = await checkLinkWithPlaywright("https://example.com/docs#a");
 
     expect(result).toEqual({
       ok: false,
-      status: 403,
+      status,
       error: "could not check",
       errorDetail: " Forbidden page",
     });
