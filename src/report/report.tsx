@@ -365,7 +365,7 @@ function renderReportToHTMLFile(
 
 export const DEFAULT_OUTPUT_DIR = "results";
 
-/** Paths of the JSON and HTML reports of a site (`dev.fingerprint.com` -> `results/dev-fingerprint-com.json`) */
+/** Paths of the JSON and HTML reports of a site (`docs.fingerprint.com` -> `results/docs-fingerprint-com.json`) */
 export const getReportPaths = (siteName: string, outputDir = DEFAULT_OUTPUT_DIR) => {
   const normalizedSitename = siteName.replace(/\W/g, "-").toLowerCase();
   return {

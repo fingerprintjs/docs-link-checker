@@ -17,7 +17,7 @@ npx "github:fingerprintjs/docs-link-checker#main" files "**/*.md"
 
 ```sh
 # Website, from its sitemap
-docs-link-checker site https://dev.fingerprint.com
+docs-link-checker site https://docs.fingerprint.com
 
 # Public READMEs of a GitHub org (needs GH_TOKEN)
 docs-link-checker github-org fingerprintjs

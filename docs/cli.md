@@ -18,7 +18,7 @@ In this repository, `pnpm cli` runs the same CLI.
 
 ```sh
 # All pages of a website (from its sitemap)
-docs-link-checker site https://dev.fingerprint.com
+docs-link-checker site https://docs.fingerprint.com
 # Only links starting with one of the prefixes
 docs-link-checker site https://fingerprint.com --include https://fingerprint.com --include https://github.com
 # README files of all public, non-archived repositories of a GitHub organization (needs GH_TOKEN)
@@ -56,7 +56,7 @@ Environment variables are the defaults.
 
 - `GH_TOKEN` (environment variable or `.env` file) is used to check GitHub links with the API. `github-org` requires it, the other commands fall back to a browser without it.
 - Exit codes: `0` no links to fix (or not failing), `1` links to fix or the check crashed, `2` invalid arguments or baseline file.
-- Reports are saved to `<output-dir>/<name>.json` and `.html` (for example `results/dev-fingerprint-com.html`, `results/local-files.html`).
+- Reports are saved to `<output-dir>/<name>.json` and `.html` (for example `results/docs-fingerprint-com.html`, `results/local-files.html`).
 - In GitHub Actions, the CLI appends a summary to `GITHUB_STEP_SUMMARY` and writes the `links-to-fix`, `report-path` and `report-html-path` step outputs to `GITHUB_OUTPUT`.
 
 ## Baseline file

@@ -34,7 +34,7 @@
 ## This repo
 
 - Daily checks: `.github/workflows/checkLinks.yaml`
-- PR sampling and fail-on-broken: `env` comments in that workflow
+- PR sampling: `LINK_CHECK_SAMPLE_RATE` in `.github/workflows/checkLinks.yaml` (full run on main/schedule)
 - Reports: [GitHub Pages](https://fingerprintjs.github.io/docs-link-checker/)
 - Action selftest: `.github/workflows/action-selftest.yaml` on `test/action-fixture/`
 - `linkcheck.baseline.json` ignores hosts that login-wall or block bots
