@@ -72,7 +72,11 @@ export class OrgListError extends Data.TaggedError("OrgListError")<{
 
 export class BrowserLaunchError extends Data.TaggedError("BrowserLaunchError")<{
   readonly cause: unknown;
-}> {}
+}> {
+  override get message() {
+    return getErrorMessage(this.cause);
+  }
+}
 
 /** The browser disconnected during a page operation */
 export class BrowserCrashed extends Data.TaggedError("BrowserCrashed")<{

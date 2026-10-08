@@ -11,7 +11,6 @@
   // TEMPORARY, remove in STEP 3: exports whose users are the STEP 2 implementations
   "ignoreIssues": {
     "src/baseline.ts": ["exports"],
-    "src/browser.ts": ["exports"],
     "src/errors.ts": ["exports"],
     "src/github_actions.ts": ["exports"],
     "src/github/gh_get_links.ts": ["exports", "types"],
