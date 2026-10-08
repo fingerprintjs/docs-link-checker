@@ -3,6 +3,7 @@
 // npx/tsx defaults to React.createElement unless the factory is in this file.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+// oxlint-disable-next-line eslint/no-unused-vars -- @jsxFrag and tsconfig jsxFragmentFactory
 import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";

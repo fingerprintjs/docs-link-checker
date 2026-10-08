@@ -72,7 +72,9 @@ describe("getReadmesFromOrg()", () => {
     const readmes = await getReadmesFromOrg("org");
     expect(readmes).toHaveLength(8);
     expect(
-      readmes.some((readme) => readme.sourcePath.includes("fingerprint-pro-segment-source-function")),
+      readmes.some((readme) =>
+        readme.sourcePath.includes("fingerprint-pro-segment-source-function"),
+      ),
     ).toBe(false);
   });
 
