@@ -1,13 +1,12 @@
 /**
  * Links of website pages and the filter of links that are not worth checking.
- * STUB: `getLinksFromPages` is implemented by the PIPELINE group.
  */
+import * as cheerio from "cheerio";
 import { Effect } from "effect";
-import type { Fetch } from "./http";
-import type { HostLimiter } from "./limiter";
-import type { Metrics } from "./metrics";
+import { HttpStatusError } from "./errors";
+import { fetchLimited, USER_AGENT } from "./http";
 import type { Link } from "./types";
-import type { ItemError } from "./utils";
+import { processAll } from "./utils";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
 const isHttpUrl = (href: string) => {
@@ -58,11 +57,59 @@ export const filterOutIrrelevantLinks = (links: ReadonlyArray<Link>): Link[] => 
   );
 };
 
-export const getLinksFromPages: (args: {
+/**
+ * Parses links from a single page. Relative links are resolved against `pageUrl` (the sitemap URL), not the
+ * redirected URL. Fails if the page can't be fetched, so it shows up in the extraction errors instead of
+ * silently having no links.
+ */
+const parseLinksFromPage = Effect.fn("page.parseLinksFromPage")(function* (pageUrl: string) {
+  const response = yield* fetchLimited(pageUrl, { headers: { "User-Agent": USER_AGENT } }, (res) =>
+    res.ok ? res.text() : Promise.resolve(""),
+  );
+  if (response.status < 200 || response.status >= 300) {
+    return yield* new HttpStatusError({
+      url: pageUrl,
+      status: response.status,
+      message: `Could not fetch ${pageUrl}, status: ${response.status}`,
+    });
+  }
+
+  const $ = cheerio.load(response.data, { baseURI: pageUrl });
+  const links: Link[] = [];
+  $("a").each((_index, anchor) => {
+    const href = anchor.attribs.href;
+    if (href) {
+      // Resolves both absolute and relative links (relative to pageUrl)
+      links.push({ href: new URL(href, pageUrl).href, text: $(anchor).text(), page: pageUrl });
+    }
+  });
+  return filterOutIrrelevantLinks(links);
+});
+
+/**
+ * Links of all pages, filtered with `linkFilter` if given. A page that fails is an error entry,
+ * the other pages are still read.
+ */
+export const getLinksFromPages = Effect.fn("page.getLinksFromPages")(function* ({
+  pages,
+  linkFilter,
+}: {
   readonly pages: ReadonlyArray<string>;
   readonly linkFilter?: (link: Link) => boolean;
-}) => Effect.Effect<
-  { links: Link[]; errors: ItemError<string>[] },
-  never,
-  Fetch | HostLimiter | Metrics
-> = () => Effect.die("not implemented");
+}) {
+  yield* Effect.logInfo(`Retrieving links from ${pages.length} pages...`);
+  const { results, errors } = yield* processAll({ items: pages, process: parseLinksFromPage });
+
+  const allLinks = results.flat();
+  yield* Effect.logInfo(`Extracted ${allLinks.length} links.`);
+  const links = linkFilter ? allLinks.filter(linkFilter) : allLinks;
+  if (linkFilter) {
+    yield* Effect.logInfo(
+      `Filtered away ${allLinks.length - links.length} links using the provided links filter. Continuing with ${links.length} links...`,
+    );
+  }
+  if (errors.length > 0) {
+    yield* Effect.logInfo(`Retrieving links failed for ${errors.length} pages.`);
+  }
+  return { links, errors };
+});

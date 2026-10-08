@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { filterOutIrrelevantLinks } from "./page";
+import { it } from "@effect/vitest";
+import { Effect, Logger, LogLevel } from "effect";
+import { describe, expect } from "vitest";
+import { filterOutIrrelevantLinks, getLinksFromPages } from "./page";
+import { type FetchHandler, fakeFetch } from "./test/fake_fetch";
+import { testRunLayer } from "./test/layers";
 
 const link = (href: string) => ({ href, text: "text", page: "https://example.com/page" });
 
@@ -55,9 +59,74 @@ describe("filterOutIrrelevantLinks()", () => {
   });
 });
 
-// TODO(STEP 2, PIPELINE group): port these tests
 describe("getLinksFromPages()", () => {
-  it.todo(
+  const provide = <A, E, R>(handler: FetchHandler, effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provide(testRunLayer({ fetch: fakeFetch(handler).layer })),
+      Effect.provide(Logger.minimumLogLevel(LogLevel.None)),
+    );
+
+  it.effect(
     "reports a page that still fails after the retries as an extraction error (not silently empty)",
+    () =>
+      provide(
+        (url) =>
+          url.endsWith("/limited")
+            ? new Response(null, { status: 429, headers: { "Retry-After": "0" } })
+            : new Response('<a href="https://example.com/target">Target</a>', { status: 200 }),
+        Effect.gen(function* () {
+          const { links, errors } = yield* getLinksFromPages({
+            pages: ["https://docs.example.com/limited", "https://docs.example.com/ok"],
+          });
+
+          expect(links).toHaveLength(1);
+          expect(errors).toHaveLength(1);
+          expect(errors[0]?.item).toBe("https://docs.example.com/limited");
+          expect(String(errors[0]?.error)).toContain("status: 429");
+        }),
+      ),
+  );
+
+  it.effect("resolves relative links against the page and drops irrelevant ones", () =>
+    provide(
+      () =>
+        new Response(
+          '<a href="/abs">A</a><a href="rel">R</a><a href="mailto:a@b.com">M</a><a>No href</a>',
+          { status: 200 },
+        ),
+      Effect.gen(function* () {
+        const { links, errors } = yield* getLinksFromPages({
+          pages: ["https://docs.example.com/dir/page"],
+        });
+
+        expect(errors).toEqual([]);
+        expect(links).toEqual([
+          {
+            href: "https://docs.example.com/abs",
+            text: "A",
+            page: "https://docs.example.com/dir/page",
+          },
+          {
+            href: "https://docs.example.com/dir/rel",
+            text: "R",
+            page: "https://docs.example.com/dir/page",
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("keeps only the links accepted by the link filter", () =>
+    provide(
+      () => new Response('<a href="https://a.com/1">1</a><a href="https://b.com/2">2</a>'),
+      Effect.gen(function* () {
+        const { links } = yield* getLinksFromPages({
+          pages: ["https://docs.example.com/page"],
+          linkFilter: (found) => found.href.startsWith("https://b.com"),
+        });
+
+        expect(links.map((found) => found.href)).toEqual(["https://b.com/2"]);
+      }),
+    ),
   );
 });

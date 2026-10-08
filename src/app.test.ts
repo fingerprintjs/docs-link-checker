@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, Exit, Logger, LogLevel } from "effect";
+import { Effect, Logger, LogLevel } from "effect";
 import { describe, expect } from "vitest";
 import { liveRunLayer } from "./app";
 import { Fetch } from "./http";
@@ -26,11 +26,9 @@ describe("liveRunLayer()", () => {
   );
 
   it.effect("provides every service checkLinks needs", () =>
-    // Stub of `checkLinks` dies: reaching it proves that the layer satisfies its requirements
     checkLinks({ links: [] }).pipe(
       Effect.provide(liveRunLayer({ hostConcurrency: 2 })),
-      Effect.exit,
-      Effect.map((exit) => expect(Exit.isFailure(exit)).toBe(true)),
+      Effect.map((results) => expect(results).toEqual([])),
       Effect.provide(Logger.minimumLogLevel(LogLevel.None)),
     ),
   );
