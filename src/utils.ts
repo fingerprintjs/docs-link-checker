@@ -30,7 +30,7 @@ const describeItem = (item: unknown): string => {
   return JSON.stringify(item);
 };
 
-export const formatConcurrentErrors = <T>(errors: ConcurrentError<T>[]) =>
+const formatConcurrentErrors = <T>(errors: ConcurrentError<T>[]) =>
   errors
     .map((error) => `  - ${describeItem(error.item)}: ${getErrorMessage(error.error)}`)
     .join("\n");

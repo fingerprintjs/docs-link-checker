@@ -4,7 +4,7 @@ import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
 import { timePhase } from "../run";
 import type { Link, LinkWithResult } from "../types";
-import { formatConcurrentErrors, parallelProcess, sampleItems } from "../utils";
+import { parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_cache";
 import { getMyOctokit } from "./github_client";
@@ -118,7 +118,7 @@ export const resolveReadmeHref = (href: string, page: string): string => {
 /** Downloads README files (limited per host) and extracts their links */
 export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
-  const { results, errors } = await parallelProcess({
+  const { results } = await parallelProcess({
     items: files,
     processFn: async (file) => {
       const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
@@ -135,11 +135,6 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
     },
   });
 
-  if (errors.length > 0) {
-    console.error(
-      `Errors fetching files and extracting links: ${errors.length}\n${formatConcurrentErrors(errors)}`,
-    );
-  }
   const links = results.flat();
   console.log(`Extracted ${links.length} links from ${files.length} files.`);
   return links;

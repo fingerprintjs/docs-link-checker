@@ -5,7 +5,7 @@
 - Node.js version is defined in `.nvmrc` (and `engines.node`), pnpm version in the `packageManager` field of `package.json` (use `corepack enable` or install the matching pnpm).
 - The project is ESM (`"type": "module"`). TypeScript runs directly with `tsx` (link checks) and vitest (tests), `tsc` only type-checks.
 - `pnpm install`, `pnpm run tsc`, `pnpm test` (single run) or `pnpm run test:watch`.
-- In this repository, `pnpm cli` runs the [CLI](README.md#cli) (`tsx src/cli.ts`). It takes the same arguments as the `docs-link-checker` bin.
+- In this repository, `pnpm cli` runs the [CLI](README.md#cli) (`bin/docs-link-checker.js`). It takes the same arguments as the `docs-link-checker` bin.
 
 ## Format and lint
 
