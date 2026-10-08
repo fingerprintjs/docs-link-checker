@@ -1,5 +1,10 @@
+/** @jsx h */
+/** @jsxFrag Fragment */
+// npx/tsx defaults to React.createElement unless the factory is in this file.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+// oxlint-disable-next-line eslint/no-unused-vars -- Fragment is used via @jsxFrag / tsconfig jsxFragmentFactory
+import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
@@ -213,10 +218,23 @@ const getLinkCellUrl = (link: LinkWithResult, options: RenderOptions): string | 
   return getLocalLinkUrl(options.sourceBaseUrl, link.page, link.href);
 };
 
-const LinkCell = ({ link, options }: { link: LinkWithResult; options: RenderOptions }) => {
-  const content = (
+const LinkCell = ({
+  link,
+  options,
+  showText = true,
+}: {
+  link: LinkWithResult;
+  options: RenderOptions;
+  /** False when occurrences of this URL use different anchor texts (those are shown next to each page) */
+  showText?: boolean;
+}) => {
+  const content = showText ? (
     <>
       🔗"{link.text}" ➡️ <HrefRenderer link={link} />
+    </>
+  ) : (
+    <>
+      🔗 <HrefRenderer link={link} />
     </>
   );
   const url = getLinkCellUrl(link, options);
@@ -273,6 +291,137 @@ const LinksTable = ({
   </table>
 );
 
+type IgnoredGroup = {
+  /** First occurrence. Its result and reason represent the group. */
+  link: IgnoredLink;
+  occurrences: IgnoredLink[];
+};
+
+const LOCAL_LINK_BASE = "https://local.invalid/";
+
+/**
+ * What the ignored link points at.
+ * An http(s) href is itself. Anything else is resolved against the page it was found on, the same way
+ * `checkLocalLink` resolves it: `missing.md` in `a/README.md` and `b/README.md` are different files.
+ */
+const ignoredTargetKey = (link: { href: string; page: string }): string => {
+  if (isHttpUrl(link.href)) {
+    return link.href;
+  }
+  try {
+    if (isHttpUrl(link.page)) {
+      return new URL(link.href, link.page).href;
+    }
+    const url = link.href.startsWith("/")
+      ? new URL(link.href.replace(/^\/+/, ""), LOCAL_LINK_BASE)
+      : new URL(link.href, new URL(encodePath(link.page), LOCAL_LINK_BASE));
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return JSON.stringify([link.page, link.href]);
+  }
+};
+
+const ignoredGroupKey = (link: IgnoredLink): string =>
+  JSON.stringify([
+    ignoredTargetKey(link),
+    link.result.ok ? "ok" : link.result.error,
+    link.result.ok ? "" : (link.result.status ?? ""),
+    link.ignoreReason ?? "",
+  ]);
+
+// One row per target, error, status, and ignore reason.
+// errorDetail stays out of the key. A Cloudflare challenge page changes on every request, so it would split the group into one row per page.
+const groupIgnoredLinks = (links: IgnoredLink[]): IgnoredGroup[] => {
+  const groups = new Map<string, IgnoredGroup>();
+  for (const link of links) {
+    const key = ignoredGroupKey(link);
+    const group = groups.get(key);
+    if (group) {
+      group.occurrences.push(link);
+    } else {
+      groups.set(key, { link, occurrences: [link] });
+    }
+  }
+  return [...groups.values()];
+};
+
+const IgnoredPages = ({
+  links,
+  options,
+  showText,
+}: {
+  links: IgnoredLink[];
+  options: RenderOptions;
+  showText: boolean;
+}) => {
+  const page = (link: IgnoredLink) => (
+    <>
+      <PageCell link={link} options={options} />
+      {showText ? <> 🔗"{link.text}"</> : null}
+    </>
+  );
+  const only = links[0];
+  if (links.length === 1 && only) {
+    return page(only);
+  }
+  return (
+    <details>
+      <summary>{links.length} occurrences</summary>
+      <ul className="list-disc pl-5 mt-2">
+        {links.map((link, index) => (
+          // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
+          <li key={index}>{page(link)}</li>
+        ))}
+      </ul>
+    </details>
+  );
+};
+
+const IgnoredLinksTable = ({
+  groups,
+  options,
+}: {
+  groups: IgnoredGroup[];
+  options: RenderOptions;
+}) => (
+  <table className="border-collapse border border-gray-300 mb-6">
+    <thead>
+      <tr className="bg-gray-100">
+        <th className="py-2 px-4 border-b text-left">Link</th>
+        <th className="py-2 px-4 border-b text-left">Result</th>
+        <th className="py-2 px-4 border-b text-left">Pages</th>
+      </tr>
+    </thead>
+    <tbody>
+      {groups.map((group, index) => {
+        const sameText = group.occurrences.every((item) => item.text === group.link.text);
+        return (
+          // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
+          <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
+            <td className="py-2 px-4 border-b break-all sm:break-words">
+              <LinkCell link={group.link} options={options} showText={sameText} />
+              <button
+                type="button"
+                data-copy-href={group.link.href}
+                className="ml-2 hover:bg-gray-200 rounded p-1"
+                title="Copy link to clipboard"
+              >
+                📋
+              </button>
+            </td>
+            <td className="py-2 px-4 border-b">
+              <ResultRenderer link={group.link} />
+            </td>
+            <td className="py-2 px-4 border-b break-all sm:break-words">
+              <IgnoredPages links={group.occurrences} options={options} showText={!sameText} />
+            </td>
+          </tr>
+        );
+      })}
+    </tbody>
+  </table>
+);
+
 const JSONReportRenderer = ({
   report,
   options,
@@ -286,6 +435,8 @@ const JSONReportRenderer = ({
     ...report.networkErrors,
     ...report.couldNotCheck,
   ];
+  const ignoredGroups = groupIgnoredLinks(report.ignored);
+  const uniqueIgnoredLinks = new Set(report.ignored.map((link) => ignoredTargetKey(link))).size;
   return (
     <div className="overflow-x-auto min-w-[720px] max-w-[1280px] mx-auto px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">Link Check Report for {report.siteName}</h1>
@@ -305,10 +456,16 @@ const JSONReportRenderer = ({
 
       <LinksTable links={allBrokenLinks} options={options} />
 
-      {report.ignored.length > 0 ? (
+      {ignoredGroups.length > 0 ? (
         <section data-section="ignored">
           <h2 className="text-xl font-semibold mb-3">Ignored (matched the baseline file)</h2>
-          <LinksTable links={report.ignored} options={options} />
+          {uniqueIgnoredLinks < report.ignored.length ? (
+            <p className="mb-3 text-gray-600">
+              {uniqueIgnoredLinks} unique {uniqueIgnoredLinks === 1 ? "link" : "links"} (
+              {report.ignored.length} occurrences)
+            </p>
+          ) : null}
+          <IgnoredLinksTable groups={ignoredGroups} options={options} />
         </section>
       ) : null}
     </div>
@@ -360,7 +517,7 @@ function renderReportToHTMLFile(
 
 export const DEFAULT_OUTPUT_DIR = "results";
 
-/** Paths of the JSON and HTML reports of a site (`dev.fingerprint.com` -> `results/dev-fingerprint-com.json`) */
+/** Paths of the JSON and HTML reports of a site (`docs.fingerprint.com` -> `results/docs-fingerprint-com.json`) */
 export const getReportPaths = (siteName: string, outputDir = DEFAULT_OUTPUT_DIR) => {
   const normalizedSitename = siteName.replace(/\W/g, "-").toLowerCase();
   return {

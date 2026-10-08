@@ -18,14 +18,19 @@ const state = vi.hoisted(() => ({
   routeHandler: null as null | ((route: unknown) => Promise<void>),
   // Make the next navigation fail: "crash" closes the browser, "error" is a navigation error (e.g. DNS)
   nextGotoFailure: null as "crash" | "error" | null,
-  failLaunch: false,
+  failLaunch: false as false | "missing" | "other",
+  installs: 0,
+  failInstall: false,
 }));
 
 vi.mock("playwright", () => {
   const launch = async () => {
     state.launches++;
-    if (state.failLaunch) {
+    if (state.failLaunch === "missing") {
       throw new Error("browserType.launch: Executable doesn't exist");
+    }
+    if (state.failLaunch === "other") {
+      throw new Error("browserType.launch: Failed to launch: Target closed");
     }
     let connected = true;
     const disconnectedHandlers: Array<() => void> = [];
@@ -92,6 +97,17 @@ vi.mock("playwright", () => {
   return { chromium: { launch: vi.fn(launch) } };
 });
 
+vi.mock("node:child_process", () => ({
+  spawnSync: vi.fn(() => {
+    state.installs++;
+    if (state.failInstall) {
+      return { status: 1, error: new Error("playwright install failed") };
+    }
+    state.failLaunch = false;
+    return { status: 0 };
+  }),
+}));
+
 import { PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
@@ -118,6 +134,8 @@ beforeEach(async () => {
     routeHandler: null,
     nextGotoFailure: null,
     failLaunch: false,
+    installs: 0,
+    failInstall: false,
   });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -232,7 +250,7 @@ describe("shared browser", () => {
   });
 
   it("reports browser launch failures as unexpected errors (not broken links)", async () => {
-    state.failLaunch = true;
+    state.failLaunch = "other";
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(null, { status: 403 })),
@@ -252,10 +270,40 @@ describe("shared browser", () => {
     ).toBe(true);
     expect(
       results.every(
-        (result) =>
-          !result.result.ok && result.result.errorDetail?.includes("Executable doesn't exist"),
+        (result) => !result.result.ok && result.result.errorDetail?.includes("Failed to launch"),
       ),
     ).toBe(true);
+    expect(state.installs).toBe(0);
+  });
+
+  it("installs Chromium when the browser executable is missing and retries the launch", async () => {
+    state.failLaunch = "missing";
+
+    const result = await checkLinkWithPlaywright("https://example.com/after-install");
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(state.installs).toBe(1);
+    expect(state.launches).toBe(2);
+    expect(state.visited).toEqual(["https://example.com/after-install"]);
+  });
+
+  it("reports a missing browser as an unexpected error when Chromium install fails", async () => {
+    state.failLaunch = "missing";
+    state.failInstall = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
+
+    const [checked] = await checkLinks({ links: [link("https://blocked.example.com/a")] });
+
+    expect(checked?.result).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+      errorDetail: "playwright install failed",
+    });
+    expect(state.installs).toBe(1);
+    expect(state.launches).toBe(1);
   });
 });
 

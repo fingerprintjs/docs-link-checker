@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import pLimit from "p-limit";
 import { type Browser, chromium, type Page, type Request, type Route } from "playwright";
 import { getBrowserSlot, incrementMetric } from "./run";
@@ -111,9 +114,37 @@ const createResourceBlocker = () => {
 
 const pageSlots = pLimit(PLAYWRIGHT_CONCURRENCY_LIMIT);
 
+const isMissingBrowserExecutable = (error: unknown) =>
+  error instanceof Error && error.message.includes("Executable doesn't exist");
+
+const installPlaywrightChromium = () => {
+  console.log("Playwright Chromium is missing, installing...");
+  // This package's `playwright` CLI, not a different version from `npx playwright`
+  const cli = join(
+    dirname(createRequire(import.meta.url).resolve("playwright/package.json")),
+    "cli.js",
+  );
+  const result = spawnSync(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
+  if (result.status !== 0) {
+    throw (
+      result.error ??
+      new Error(`playwright install chromium failed (exit ${String(result.status)})`)
+    );
+  }
+};
+
 const launchBrowser = async (): Promise<Browser> => {
   incrementMetric("browserLaunches");
-  return chromium.launch({ headless: true, ...LAUNCH_OPTIONS });
+  try {
+    return await chromium.launch({ headless: true, ...LAUNCH_OPTIONS });
+  } catch (error) {
+    if (!isMissingBrowserExecutable(error)) {
+      throw error;
+    }
+    installPlaywrightChromium();
+    incrementMetric("browserLaunches");
+    return chromium.launch({ headless: true, ...LAUNCH_OPTIONS });
+  }
 };
 
 /**

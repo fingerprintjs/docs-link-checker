@@ -39,6 +39,18 @@
     {
       "pattern": "http://www.allaboutcookies.org/**",
       "reason": "Blocks automated clients (403), works in a browser"
+    },
+    {
+      "pattern": "https://twitter.com/**",
+      "reason": "Blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://x.com/**",
+      "reason": "Blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://*.x.com/**",
+      "reason": "Blocks automated clients with a Cloudflare challenge (403)"
     }
   ]
 }

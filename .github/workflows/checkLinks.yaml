@@ -17,18 +17,18 @@ permissions:
   contents: read
 
 env:
-  # On pull requests, broken links in external docs must not fail the check (CI should reflect this repo's health).
-  # On push to main and manual runs, broken links fail the run.
-  FAIL_ON_BROKEN_LINKS: ${{ github.event_name != 'pull_request' }}
+  # Broken links in external sites are reported (summary, artifacts, Pages) but never fail the workflow.
+  # Jobs fail only when the checker crashes or misconfigures (exit code 1/2 for those cases).
+  FAIL_ON_BROKEN_LINKS: "false"
   # On pull requests, check only a deterministic 10% sample of pages/READMEs to keep CI fast. Check everything otherwise.
   LINK_CHECK_SAMPLE_RATE: ${{ github.event_name == 'pull_request' && '0.1' || '1' }}
-  DEV_REPORT: dev-fingerprint-com.html
+  DOCS_REPORT: docs-fingerprint-com.html
   GITHUB_REPORT: fingerprintjs-github-readmes.html
   WEB_REPORT: fingerprint-com.html
 
 jobs:
   docs:
-    name: dev.fingerprint.com
+    name: docs.fingerprint.com
     timeout-minutes: 15
     runs-on: ubuntu-latest
 
@@ -49,8 +49,8 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ${{ env.DEV_REPORT }}
-          path: results/${{ env.DEV_REPORT }}
+          name: ${{ env.DOCS_REPORT }}
+          path: results/${{ env.DOCS_REPORT }}
           retention-days: 30
 
   githubReadmes:
@@ -167,7 +167,7 @@ jobs:
           mkdir -p reports
           REPORT_ITEMS=""
           MISSING=""
-          for entry in "${DEV_REPORT}|dev.fingerprint.com Report" "${GITHUB_REPORT}|GitHub READMEs Report" "${WEB_REPORT}|fingerprint.com Report"; do
+          for entry in "${DOCS_REPORT}|docs.fingerprint.com Report" "${GITHUB_REPORT}|GitHub READMEs Report" "${WEB_REPORT}|fingerprint.com Report"; do
             file="${entry%%|*}"
             title="${entry#*|}"
             if [ -f "reports/${file}" ]; then

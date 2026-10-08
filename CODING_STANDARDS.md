@@ -28,7 +28,7 @@
 - Keep short, use simplified technical english
 - Focus on WHY (WHAT, HOW must be obvious from the code itself)
 - Write like a terse note to a self or teammate, no m-dashed essays
-- Prefer bullet points over long `;` chains
+- Prefer bullet points over long paragraphs or `;` chains
 - Avoid ambiguous jargon (seam, boundary, gate, envelope, wire shapes, ...), be plain, precise, specific
 - No provenance needed, do not overfit comments to current change: docs must stand alone, make sense later without PR/conversation context. Think of what the general long-term purpose of the doc/comment is.
 - Module files begin with short overview comment explaining purpose and links to relevant docs

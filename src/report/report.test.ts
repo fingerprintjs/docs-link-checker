@@ -83,6 +83,7 @@ describe("renderReportToHTML() with ignored links", () => {
     expect(section.find("tbody tr").length).toBe(1);
     expect(section.text()).toContain("docs/a.md:7");
     expect(section.text()).toContain("Ignored: <i>known</i>");
+    expect(section.text()).not.toContain("unique");
     expect(section.find("i").length).toBe(0);
     expect($ignored("table").first().text()).toContain("https://broken.com/");
     expect($ignored("table").first().text()).not.toContain("https://ignored.com/");
@@ -90,6 +91,136 @@ describe("renderReportToHTML() with ignored links", () => {
 
   it("has no ignored section without ignored links", () => {
     expect($("[data-section=ignored]").length).toBe(0);
+  });
+
+  it("groups ignored links that share a URL, error, and reason", () => {
+    const couldNotCheck: LinkWithResult["result"] = {
+      ok: false,
+      error: "could not check",
+      status: 403,
+      errorDetail: "<html>challenge</html>",
+    };
+    const groupedReport = getJSONReport({
+      siteName: "site",
+      links: [
+        {
+          href: "https://twitter.com/x",
+          page: "https://docs.example.com/a",
+          text: "x",
+          result: couldNotCheck,
+        },
+        {
+          href: "https://twitter.com/x",
+          page: "https://docs.example.com/b",
+          text: "x",
+          result: { ...couldNotCheck, errorDetail: "<html>other nonce</html>" },
+        },
+        {
+          href: "https://twitter.com/x",
+          page: "https://docs.example.com/c",
+          text: "follow",
+          result: couldNotCheck,
+        },
+        {
+          href: "https://twitter.com/x",
+          page: "docs/local.md",
+          text: "x",
+          line: 4,
+          result: { ok: false, error: "broken link", status: 404, errorDetail: "missing" },
+        },
+        {
+          href: "https://other.example/",
+          page: "https://docs.example.com/d",
+          text: "Other",
+          result: couldNotCheck,
+        },
+      ],
+      baseline: createBaseline([
+        { pattern: "https://twitter.com/**", reason: "bot wall" },
+        { href: "https://other.example/", reason: "known" },
+      ]),
+    });
+    expect(groupedReport.summary.ignored).toBe(5);
+    const $grouped = cheerio.load(renderReportToHTML(groupedReport));
+    const section = $grouped("[data-section=ignored]");
+    const rows = section.find("tbody tr");
+
+    expect(rows.length).toBe(3);
+    expect(section.text()).toContain("2 unique links (5 occurrences)");
+
+    const twitter = rows.eq(0);
+    expect(
+      twitter.find("summary").filter((_, el) => $grouped(el).text() === "3 occurrences"),
+    ).toHaveLength(1);
+    expect(twitter.find("ul li").length).toBe(3);
+    expect(twitter.text()).toContain("https://docs.example.com/a");
+    expect(twitter.text()).toContain("https://docs.example.com/c");
+    expect(twitter.text()).toContain('"follow"');
+    expect(twitter.find("pre")).toHaveLength(1);
+    expect(twitter.find("pre").text()).toBe("<html>challenge</html>");
+    expect(twitter.find("button[data-copy-href]")).toHaveLength(1);
+
+    const twitterBroken = rows.eq(1);
+    expect(twitterBroken.text()).toContain("docs/local.md:4");
+    expect(twitterBroken.text()).toContain("broken link");
+    expect(twitterBroken.find("ul")).toHaveLength(0);
+    expect(twitterBroken.find("pre").text()).toBe("missing");
+
+    const other = rows.eq(2);
+    expect(other.find("ul")).toHaveLength(0);
+    expect(other.text()).toContain('"Other"');
+    expect(other.text()).toContain("Ignored: known");
+    expect(other.find("button[data-copy-href]").attr("data-copy-href")).toBe(
+      "https://other.example/",
+    );
+  });
+
+  it("resolves a relative link against its file before grouping", () => {
+    const broken = {
+      ok: false as const,
+      error: "broken link" as const,
+      errorDetail: "File not found",
+    };
+    const localIgnored = getJSONReport({
+      siteName: "local files",
+      links: [
+        {
+          href: "missing.md",
+          page: "a/README.md",
+          text: "missing",
+          result: { ...broken, errorDetail: "missing in a" },
+        },
+        {
+          href: "missing.md",
+          page: "b/README.md",
+          text: "missing",
+          result: { ...broken, errorDetail: "missing in b" },
+        },
+        { href: "../gone.md", page: "docs/guide.md", text: "gone", line: 2, result: broken },
+        { href: "gone.md", page: "README.md", text: "gone", result: broken },
+        { href: "gone.md", page: "README.md", text: "gone again", line: 9, result: broken },
+      ],
+      baseline: createBaseline([{ pattern: "**" }]),
+    });
+    const $local = cheerio.load(renderReportToHTML(localIgnored));
+    const rows = $local("[data-section=ignored] tbody tr");
+
+    expect(rows).toHaveLength(3);
+    expect($local("[data-section=ignored]").text()).toContain("3 unique links (5 occurrences)");
+
+    const byDetail = (detail: string) =>
+      rows.filter((_, row) => $local(row).text().includes(detail));
+    expect(byDetail("missing in a")).toHaveLength(1);
+    expect(byDetail("missing in a").text()).toContain("a/README.md");
+    expect(byDetail("missing in b").text()).toContain("b/README.md");
+
+    const gone = byDetail("File not found");
+    expect(gone).toHaveLength(1);
+    expect(
+      gone.find("summary").filter((_, el) => $local(el).text() === "3 occurrences"),
+    ).toHaveLength(1);
+    expect(gone.text()).toContain("docs/guide.md:2");
+    expect(gone.text()).toContain("README.md:9");
   });
 });
 

@@ -9,6 +9,9 @@ import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_api";
 import { getMyOctokit } from "./github_client";
 
+/** Deprecated integrations: READMEs are unmaintained and would only add noise to org-wide checks. */
+const GITHUB_ORG_EXCLUDED_REPOS = new Set(["fingerprint-pro-segment-source-function"]);
+
 export interface MdFile {
   sourcePath: string;
   downloadUrl: string;
@@ -23,7 +26,7 @@ async function getOrgRepos(orgName: string) {
   });
 
   return repos
-    .filter((repo) => repo.archived === false)
+    .filter((repo) => repo.archived === false && !GITHUB_ORG_EXCLUDED_REPOS.has(repo.name))
     .map((repo) => ({
       full_name: repo.full_name,
       owner: { login: repo.owner.login },
