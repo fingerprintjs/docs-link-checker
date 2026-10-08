@@ -9,7 +9,7 @@ import { getMyOctokit } from "./github_client";
  */
 
 /** HTTP status of a failed GitHub API request, `undefined` without a response (network error, no `GH_TOKEN`) */
-const getApiErrorStatus = (error: unknown): number | undefined =>
+export const getApiErrorStatus = (error: unknown): number | undefined =>
   typeof error === "object" &&
   error !== null &&
   "status" in error &&

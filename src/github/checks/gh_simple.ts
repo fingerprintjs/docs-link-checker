@@ -1,6 +1,12 @@
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { cachedRequest, getApiErrorResult, getRepoCached, isNotFoundApiError } from "../gh_api";
+import {
+  cachedRequest,
+  getApiErrorResult,
+  getApiErrorStatus,
+  getRepoCached,
+  isNotFoundApiError,
+} from "../gh_api";
 import { getMyOctokit } from "../github_client";
 
 /**
@@ -41,16 +47,22 @@ export const checkIfOwnerExists = (owner: string): Promise<LinkCheckResult> =>
     `User or organization ${owner} not found`,
   );
 
-export const checkGitHubCommitLink = (
+export const checkGitHubCommitLink = async (
   owner: string,
   repo: string,
   pathParts: string[],
 ): Promise<LinkCheckResult> => {
   const [, commit = ""] = pathParts;
-  return checkExists(
-    getMyOctokit().repos.getCommit({ owner, repo, ref: commit }),
-    "Commit not found",
-  );
+  const { error } = await tryCatch(getMyOctokit().repos.getCommit({ owner, repo, ref: commit }));
+  if (!error) {
+    return OK;
+  }
+  // Unknown SHA: GitHub answers 422 "No commit found for SHA", not 404. Only true for this endpoint, so 422 is not
+  // treated as "not found" globally (see `isNotFoundApiError`).
+  if (getApiErrorStatus(error) === 422) {
+    return brokenLink("Commit not found", 422);
+  }
+  return getApiErrorResult(error, "Commit not found");
 };
 
 export const checkGitHubPullRequestLink = (
@@ -91,7 +103,10 @@ export const checkGitHubIssueLink = (
 
 /** `true` for a GraphQL "Could not resolve to a Repository/Discussion" (NOT_FOUND) error */
 const isGraphqlNotFound = (error: unknown): boolean => {
-  const { errors, message } = (error ?? {}) as { errors?: { type?: string }[]; message?: string };
+  const { errors, message } = (error ?? {}) as {
+    errors?: { type?: string }[];
+    message?: string;
+  };
   return (
     errors?.some((e) => e.type === "NOT_FOUND") === true ||
     /Could not resolve to a (Discussion|Repository)/.test(message ?? "")

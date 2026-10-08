@@ -23,14 +23,19 @@ describe("checkIfOwnerExists", () => {
 });
 
 describe("checkGitHubCommitLink", () => {
-  it("reports a commit SHA that does not exist as unexpected error, not broken link", async () => {
-    // GitHub answers 422 "No commit found for SHA", not 404, and only a 404 is a broken link (see `isNotFoundApiError`)
+  it("reports a commit SHA that does not exist as broken link", async () => {
+    // GitHub answers 422 "No commit found for SHA" instead of 404
     const result = await checkGitHubCommitLink("fingerprintjs", "fingerprintjs", [
       "commit",
       "0000000000000000000000000000000000000000",
     ]);
 
-    expect(result).toMatchObject({ ok: false, error: "unexpected error" });
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 422,
+      errorDetail: "Commit not found",
+    });
   });
 
   it("reports a commit of a repository that does not exist as broken link", async () => {
@@ -52,7 +57,11 @@ describe("checkGitHubDiscussionLink", () => {
   it("reports a discussion of a repository that does not exist as broken link", async () => {
     const result = await checkGitHubDiscussionLink("fingerprintjs", "nonexistent-repo", 1);
 
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+    });
   });
 });
 
@@ -72,6 +81,10 @@ describe("checkGitHubReleaseLink", () => {
       "latest",
     ]);
 
-    expect(result).toMatchObject({ ok: false, error: "broken link", status: 404 });
+    expect(result).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+    });
   });
 });

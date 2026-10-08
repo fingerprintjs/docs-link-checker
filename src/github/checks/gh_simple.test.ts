@@ -5,13 +5,19 @@ const { octokit } = vi.hoisted(() => ({
     graphql: vi.fn(),
     issues: { get: vi.fn() },
     pulls: { get: vi.fn() },
-    repos: { getRelease: vi.fn(), getReleaseByTag: vi.fn(), listReleases: vi.fn() },
+    repos: {
+      getCommit: vi.fn(),
+      getRelease: vi.fn(),
+      getReleaseByTag: vi.fn(),
+      listReleases: vi.fn(),
+    },
   },
 }));
 
 vi.mock("../github_client", () => ({ getMyOctokit: () => octokit }));
 
 import {
+  checkGitHubCommitLink,
   checkGitHubDiscussionLink,
   checkGitHubIssueLink,
   checkGitHubPullRequestLink,
@@ -30,6 +36,7 @@ beforeEach(() => {
     octokit.graphql,
     octokit.issues.get,
     octokit.pulls.get,
+    octokit.repos.getCommit,
     octokit.repos.getRelease,
     octokit.repos.getReleaseByTag,
     octokit.repos.listReleases,
@@ -39,11 +46,46 @@ beforeEach(() => {
   }
 });
 
+describe("checkGitHubCommitLink()", () => {
+  const check = () => checkGitHubCommitLink("o", "r", ["commit", "0".repeat(40)]);
+
+  it("is OK for an existing commit", async () => {
+    expect(await check()).toEqual(OK);
+  });
+
+  it.each([
+    ["404", 404],
+    // GitHub answers an unknown SHA with 422 "No commit found for SHA"
+    ["422", 422],
+  ])("reports a %s as broken link", async (_, status) => {
+    octokit.repos.getCommit.mockRejectedValue(Object.assign(new Error("nope"), { status }));
+    expect(await check()).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status,
+      errorDetail: "Commit not found",
+    });
+  });
+
+  it("reports a rate limit (403) as unexpected error", async () => {
+    octokit.repos.getCommit.mockRejectedValue(
+      Object.assign(new Error("rate limit"), { status: 403 }),
+    );
+    expect(await check()).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+      status: 403,
+    });
+  });
+});
+
 describe("checkGitHubDiscussionLink()", () => {
   const check = () => checkGitHubDiscussionLink("owner", "repo", 9);
 
   it("is OK for an existing discussion", async () => {
-    octokit.graphql.mockResolvedValue({ repository: { discussion: { id: "D_1" } } });
+    octokit.graphql.mockResolvedValue({
+      repository: { discussion: { id: "D_1" } },
+    });
     expect(await check()).toEqual(OK);
   });
 
@@ -60,7 +102,11 @@ describe("checkGitHubDiscussionLink()", () => {
     ["message only", new Error("Could not resolve to a Repository with the name 'a/b'.")],
   ])("is a broken link for a %s", async (_, error) => {
     octokit.graphql.mockRejectedValue(error);
-    expect(await check()).toMatchObject({ ok: false, error: "broken link", status: 404 });
+    expect(await check()).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 404,
+    });
   });
 
   it.each([
@@ -70,7 +116,10 @@ describe("checkGitHubDiscussionLink()", () => {
     ["other GraphQL error", graphqlError("Something went wrong", "INTERNAL")],
   ])("is an unexpected error for a %s", async (_, error) => {
     octokit.graphql.mockRejectedValue(error);
-    expect(await check()).toMatchObject({ ok: false, error: "unexpected error" });
+    expect(await check()).toMatchObject({
+      ok: false,
+      error: "unexpected error",
+    });
   });
 });
 
@@ -104,13 +153,17 @@ describe("checkGitHubReleaseLink()", () => {
   const release = (...parts: string[]) => checkGitHubReleaseLink("o", "r", ["releases", ...parts]);
 
   it("accepts an asset that is part of the release", async () => {
-    octokit.repos.getReleaseByTag.mockResolvedValue({ data: { assets: [{ name: "a.zip" }] } });
+    octokit.repos.getReleaseByTag.mockResolvedValue({
+      data: { assets: [{ name: "a.zip" }] },
+    });
 
     expect(await release("download", "v1", "a.zip")).toEqual(OK);
   });
 
   it("reports an asset that is not part of the release as broken link", async () => {
-    octokit.repos.getReleaseByTag.mockResolvedValue({ data: { assets: [{ name: "a.zip" }] } });
+    octokit.repos.getReleaseByTag.mockResolvedValue({
+      data: { assets: [{ name: "a.zip" }] },
+    });
 
     expect(await release("download", "v1", "b.zip")).toEqual({
       ok: false,
