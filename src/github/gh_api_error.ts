@@ -1,7 +1,7 @@
 import type { LinkCheckResult } from "../types";
 
 /** HTTP status of a failed GitHub API request, `undefined` without a response (network error, no `GH_TOKEN`) */
-export const getApiErrorStatus = (error: unknown): number | undefined =>
+const getApiErrorStatus = (error: unknown): number | undefined =>
   typeof error === "object" &&
   error !== null &&
   "status" in error &&

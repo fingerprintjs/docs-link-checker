@@ -1,12 +1,10 @@
-import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import { fetchWithHostLimit } from "../http";
 import { checkLinks } from "../link";
 import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
-import { DEFAULT_OUTPUT_DIR, getJSONReport, saveReport } from "../report/report";
-import { type RunConfig, timePhase, withRun } from "../run";
-import type { Link } from "../types";
-import { formatConcurrentErrors, parallelProcess, sampleItems } from "../utils";
+import { timePhase } from "../run";
+import type { Link, LinkWithResult } from "../types";
+import { parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
 import { getRepoCached } from "./gh_cache";
 import { getMyOctokit } from "./github_client";
@@ -120,7 +118,7 @@ export const resolveReadmeHref = (href: string, page: string): string => {
 /** Downloads README files (limited per host) and extracts their links */
 export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   console.log(`\nRetrieving links from ${files.length} files...`);
-  const { results, errors } = await parallelProcess({
+  const { results } = await parallelProcess({
     items: files,
     processFn: async (file) => {
       const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
@@ -137,11 +135,6 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
     },
   });
 
-  if (errors.length > 0) {
-    console.error(
-      `Errors fetching files and extracting links: ${errors.length}\n${formatConcurrentErrors(errors)}`,
-    );
-  }
   const links = results.flat();
   console.log(`Extracted ${links.length} links from ${files.length} files.`);
   return links;
@@ -150,52 +143,18 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
 /** Report name of an organization (`fingerprintjs` -> `fingerprintjs-github-readmes.html`) */
 export const getGithubOrgSiteName = (org: string) => `${org} GitHub readmes`;
 
-export type CheckReadmesOptions = RunConfig & {
-  /** Share of README files to check (0-1), defaults to `LINK_CHECK_SAMPLE_RATE` */
-  sampleRate?: number;
-  /** Failing links matching the baseline are reported as ignored */
-  baseline?: Baseline;
-  /** Where to save the JSON and HTML reports, `false` to not save them. Default `results` */
-  outputDir?: string | false;
-};
-
 /**
  * Checks links in README files of all public repositories of a GitHub organization.
- * Runs as a single run (see `withRun`): GitHub API responses are cached, the browser is closed at the end.
+ * Must run inside `runCommand` (`src/cli.ts`): GitHub API responses are cached per run.
  */
-export const checkReadmesInGithubOrg = (
+export const checkReadmesInGithubOrg = async (
   org: string,
-  {
-    sampleRate,
-    baseline = EMPTY_BASELINE,
-    outputDir = DEFAULT_OUTPUT_DIR,
-    hostConcurrency,
-  }: CheckReadmesOptions = {},
-) =>
-  withRun({ hostConcurrency }, async () => {
-    const startTime = performance.now();
+  { sampleRate }: { sampleRate?: number } = {},
+): Promise<LinkWithResult[]> => {
+  const fingerprintPublicReadmes = await timePhase("List README files", () =>
+    getReadmesFromOrg(org, sampleRate),
+  );
 
-    const fingerprintPublicReadmes = await timePhase("List README files", () =>
-      getReadmesFromOrg(org, sampleRate),
-    );
-
-    const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
-    const filteredLinks = filterOutIrrelevantLinks(links);
-
-    const results = await checkLinks({ links: filteredLinks, fetchConcurrencyLimit: 20 });
-
-    const report = getJSONReport({
-      links: results,
-      siteName: getGithubOrgSiteName(org),
-      baseline,
-    });
-
-    if (outputDir !== false) {
-      saveReport(report, outputDir);
-    }
-    console.log(report.summary);
-
-    console.log(`\nFinished in ${(performance.now() - startTime) / 1000} seconds.`);
-
-    return report;
-  });
+  const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
+  return checkLinks({ links: filterOutIrrelevantLinks(links), fetchConcurrencyLimit: 20 });
+};

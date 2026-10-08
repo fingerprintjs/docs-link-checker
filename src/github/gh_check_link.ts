@@ -11,12 +11,7 @@ import {
   checkIfRepositoryExists,
 } from "./checks/gh_simple";
 import { checkGitHubTreeLink } from "./checks/gh_tree";
-import {
-  getGithubPathSegments,
-  isGithubReservedRoute,
-  isGithubUrl,
-  isGithubWikiLink,
-} from "./gh_url";
+import { getGithubPathSegments } from "./gh_url";
 
 /** Sections whose index page (`/owner/repo/issues`) exists for every repository */
 const SECTIONS_WITH_INDEX_PAGE = new Set(["issues", "discussions", "releases", "pulls"]);
@@ -49,14 +44,11 @@ const SECTION_CHECKS = new Map<string, SectionCheck>([
  * Because using `fetch` run into rate limit issues really fast
  * @param url A GitHub link to a public repository, for example:
  * https://github.com/fingerprintjs/fingerprintjs-pro-angular/blob/main/README.md#documentation
+ * Callers must route wiki links, GitHub's own pages and non-GitHub URLs elsewhere (see `getInitialCheckMethod`).
  *
  * @returns LinkCheckResult
  */
 export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResult> => {
-  if (!isGithubUrl(url)) {
-    throw new Error("Not a GitHub URL");
-  }
-
   // Parse the GitHub URL. Segments are decoded (`%40` -> `@`), Octokit encodes them again in the API request.
   const githubUrl = new URL(url);
   const [owner, repo, ...pathParts] = getGithubPathSegments(githubUrl);
@@ -64,11 +56,6 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   // `https://github.com/` itself
   if (!owner) {
     return { ok: true, status: 200 };
-  }
-
-  // GitHub's own pages (`/features`, `/topics/x`...), not an account: check the page itself
-  if (isGithubReservedRoute(url)) {
-    return checkLinkWithFetch(url);
   }
 
   // `https://github.com/owner` (with or without a trailing slash): a user or an organization, not a repository
@@ -94,11 +81,6 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
   // If nothings follows the section path segment, just check that the repository exists
   if (sectionParts.length === 0 && SECTIONS_WITH_INDEX_PAGE.has(section)) {
     return checkIfRepositoryExists(owner, repo);
-  }
-
-  // Wikis are not available through the API
-  if (isGithubWikiLink(url)) {
-    return checkLinkWithFetch(url);
   }
 
   const checkSection = SECTION_CHECKS.get(section);

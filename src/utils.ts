@@ -6,31 +6,31 @@ import { getErrorMessage } from "./utils/errors";
 const PROGRESS_LOG_INTERVAL = 30000;
 
 /**
- * Human-readable description of an item that failed processing (used in error logs).
+ * Human-readable description of an item that failed processing:
+ * - a link: `href` and the page it is on
+ * - a README file: `sourcePath`
+ * - a GitHub repository: `full_name` (`owner/repo`)
  */
-export const describeItem = (item: unknown): string => {
-  if (typeof item === "string") {
-    return item;
+const describeItem = (item: unknown): string => {
+  if (typeof item !== "object" || !item) {
+    return String(item);
   }
-  if (item && typeof item === "object") {
-    if ("href" in item && typeof item.href === "string") {
-      return "page" in item && typeof item.page === "string"
-        ? `${item.href} (on ${item.page})`
-        : item.href;
-    }
-    try {
-      // JSON.stringify returns undefined when toJSON() returns undefined
-      const json = JSON.stringify(item);
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the types say `string`, but JSON.stringify returns undefined when toJSON() returns undefined
-      return json ?? Object.prototype.toString.call(item);
-    } catch {
-      return Object.prototype.toString.call(item);
-    }
+  if ("href" in item && typeof item.href === "string") {
+    return "page" in item && typeof item.page === "string"
+      ? `${item.href} (on ${item.page})`
+      : item.href;
   }
-  return String(item);
+  if ("sourcePath" in item && typeof item.sourcePath === "string") {
+    return item.sourcePath;
+  }
+  if ("full_name" in item && typeof item.full_name === "string") {
+    return item.full_name;
+  }
+  // Items of all callers are plain data
+  return JSON.stringify(item);
 };
 
-export const formatConcurrentErrors = <T>(errors: ConcurrentError<T>[]) =>
+const formatConcurrentErrors = <T>(errors: ConcurrentError<T>[]) =>
   errors
     .map((error) => `  - ${describeItem(error.item)}: ${getErrorMessage(error.error)}`)
     .join("\n");

@@ -5,7 +5,7 @@
 - Node.js version is defined in `.nvmrc` (and `engines.node`), pnpm version in the `packageManager` field of `package.json` (use `corepack enable` or install the matching pnpm).
 - The project is ESM (`"type": "module"`). TypeScript runs directly with `tsx` (link checks) and vitest (tests), `tsc` only type-checks.
 - `pnpm install`, `pnpm run tsc`, `pnpm test` (single run) or `pnpm run test:watch`.
-- In this repository, `pnpm cli` runs the [CLI](README.md#cli) (`tsx src/cli.ts`). It takes the same arguments as the `docs-link-checker` bin.
+- In this repository, `pnpm cli` runs the [CLI](README.md#cli) (`bin/docs-link-checker.js`). It takes the same arguments as the `docs-link-checker` bin.
 
 ## Format and lint
 
@@ -28,7 +28,7 @@ The package scripts used by the workflow (`pnpm run checkLinks:docs`, `checkLink
 
 ## Code map
 
-`src/cli.ts` (CLI), `src/website.ts` (`site`), `src/github/gh_get_links.ts` (`github-org`), `src/local_files.ts` (`files`), `src/link.ts` (`checkLinks`, the shared checking pipeline), `src/fetch_check.ts` and `src/playwright_check.ts` (single link checks), `src/baseline.ts`, `src/report/report.tsx` (JSON and HTML reports), `src/github_actions.ts` (job summary, annotations, step outputs), `action.yml` (reusable action).
+`src/cli.ts` (CLI, shared run/report/summary steps), `src/website.ts` (`site` link collection), `src/github/gh_get_links.ts` (`github-org`), `src/local_files.ts` (`files`), `src/link.ts` (`checkLinks`, the shared checking pipeline), `src/fetch_check.ts` and `src/playwright_check.ts` (single link checks), `src/baseline.ts`, `src/report/report.tsx` (JSON and HTML reports), `src/github_actions.ts` (job summary, annotations, step outputs), `action.yml` (reusable action).
 
 ## How checks run
 

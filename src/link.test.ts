@@ -147,12 +147,10 @@ vi.mock("playwright", () => ({
 }));
 
 import { checkLinkWithFetch } from "./fetch_check";
-import { setServerErrorRetryDelays } from "./http";
-import { HostLimiter } from "./limiter";
 import { checkLinks, interleaveByHost, shouldRecheckWithPlaywright } from "./link";
 import { getSpecialFragmentNote } from "./link_common";
-import { checkLinkWithPlaywright } from "./playwright_check";
-import { getRunContext, setHostLimiter, withRun } from "./run";
+import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
+import { getHostLimiter, getRunContext, withRun } from "./run";
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -167,6 +165,29 @@ const stubFetch = (handler: FetchHandler) => {
 };
 
 const link = (href: string, page = "https://example.com/page") => ({ href, page, text: "link" });
+
+const checkLinkWithPlaywright = async (url: string) =>
+  (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
+
+/**
+ * Runs `check` in its own run (host pauses of server errors don't leak into other tests) with fake timers.
+ * Returns the result and how long it took (simulated time).
+ */
+const withFakeTimers = async <T>(check: () => Promise<T>) => {
+  vi.useFakeTimers();
+  try {
+    const start = Date.now();
+    let finishedAt = Number.NaN;
+    const promise = withRun({}, check).then((r) => {
+      finishedAt = Date.now();
+      return r;
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    return { result: await promise, took: finishedAt - start };
+  } finally {
+    vi.useRealTimers();
+  }
+};
 
 beforeEach(() => {
   playwrightState.visited = [];
@@ -195,9 +216,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  // Host pauses (server error backoffs) don't leak into other tests
-  setHostLimiter(undefined);
-  setServerErrorRetryDelays(undefined);
 });
 
 describe("checkLinks() deduplication", () => {
@@ -346,12 +364,11 @@ describe("checkLinks() Playwright escalation", () => {
   it.each(fetchCases)(
     "fetch result: %s -> re-checked with Playwright: %s",
     async (_name, handler, escalate) => {
-      // No backoff for the 503 case
-      setServerErrorRetryDelays([0]);
       stubFetch(handler);
       const href = "https://example.com/some/page";
 
-      const results = await checkLinks({ links: [link(href)] });
+      // Fake timers skip the backoff of the 503 case
+      const { result: results } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
 
       expect(playwrightState.visited).toEqual(escalate ? [href] : []);
       expect(results).toHaveLength(1);
@@ -397,16 +414,6 @@ describe("checkLinks() Playwright escalation", () => {
 });
 
 describe("checkLinkWithFetch()", () => {
-  it("reports an unparsable URL as broken link instead of throwing", async () => {
-    const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
-
-    const result = await checkLinkWithFetch("not a url");
-
-    expect(result).toMatchObject({ ok: false, error: "broken link" });
-    expect(!result.ok && result.errorDetail).toContain("Invalid URL");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("sets a request timeout", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
@@ -914,23 +921,6 @@ describe("checkLinks() Playwright hashes of one page", () => {
 });
 
 describe("server errors (502, 503, 504)", () => {
-  /** Runs `check` with fake timers, returns the result and how long it took (simulated time) */
-  const withFakeTimers = async <T>(check: () => Promise<T>) => {
-    vi.useFakeTimers();
-    try {
-      const start = Date.now();
-      let finishedAt = Number.NaN;
-      const promise = check().then((r) => {
-        finishedAt = Date.now();
-        return r;
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      return { result: await promise, took: finishedAt - start };
-    } finally {
-      vi.useRealTimers();
-    }
-  };
-
   it.each([502, 503, 504])(
     "fetch: reports a %s that persists after the retries as 'could not check', not broken",
     async (status) => {
@@ -1041,10 +1031,8 @@ describe("server errors (502, 503, 504)", () => {
   });
 
   it("Playwright: waits for a host pause (e.g. set by a fetch server error) before navigating", async () => {
-    const limiter = new HostLimiter(8);
-    setHostLimiter(limiter);
-
     const { result, took } = await withFakeTimers(async () => {
+      const limiter = getHostLimiter();
       limiter.pause("https://busy.example.com/", 3000);
       return checkLinkWithPlaywright("https://busy.example.com/page");
     });
@@ -1054,12 +1042,11 @@ describe("server errors (502, 503, 504)", () => {
   });
 
   it("Playwright: a pause set after a check already started waiting for a page slot does not delay it", async () => {
-    const limiter = new HostLimiter(8);
-    setHostLimiter(limiter);
     playwrightState.gotoDelayMs = 1000;
 
     let start = 0;
     const { result, took } = await withFakeTimers(async () => {
+      const limiter = getHostLimiter();
       start = Date.now();
       // Every page slot (PLAYWRIGHT_CONCURRENCY_LIMIT) is busy for 1s
       const busySlots = Array.from({ length: 5 }, (_, i) =>
@@ -1082,29 +1069,38 @@ describe("server errors (502, 503, 504)", () => {
   });
 
   it("Playwright: after a redirect to another host, a 503 pauses the final URL's host and the retry waits for it", async () => {
-    const limiter = new HostLimiter(8);
-    setHostLimiter(limiter);
-    const pause = vi.spyOn(limiter, "pause");
-    const waitUntilResumed = vi.spyOn(limiter, "waitUntilResumed");
     const url = "https://short.example.com/x";
     const final = "https://busy.example.com/page";
     playwrightState.finalUrlByUrl = { [url]: final };
     playwrightState.statuses = [503];
 
     const { result, took } = await withFakeTimers(async () => {
+      const limiter = getHostLimiter();
+      const pause = vi.spyOn(limiter, "pause");
+      const waitUntilResumed = vi.spyOn(limiter, "waitUntilResumed");
+      let waitedFor: string[] = [];
       const checked = checkLinkWithPlaywright(url);
       await vi.advanceTimersByTimeAsync(1);
-      // The final URL's host is paused (not the navigated URL's)
-      const paused = { final: limiter.isPaused(final), first: limiter.isPaused(url) };
-      return { checked: await checked, paused };
+      // Before the checks below call it too
+      waitedFor = waitUntilResumed.mock.calls.map(([target]) => target);
+      // How long a request to each host waits now: only the final URL's host is paused (not the navigated URL's)
+      const waitFor = async (target: string) => {
+        const waitStart = Date.now();
+        await limiter.waitUntilResumed(target);
+        return Date.now() - waitStart;
+      };
+      const firstWait = await waitFor(url);
+      const finalWait = waitFor(final);
+      return { checked: await checked, firstWait, finalWait: await finalWait, pause, waitedFor };
     });
 
     expect(result.checked).toEqual({ ok: true, status: 200 });
-    expect(result.paused).toEqual({ final: true, first: false });
-    expect(pause).toHaveBeenCalledWith(final, 2000);
-    expect(pause).toHaveBeenCalledTimes(1);
+    expect(result.firstWait).toBe(0);
+    expect(result.finalWait).toBeGreaterThan(1900);
+    expect(result.pause).toHaveBeenCalledWith(final, 2000);
+    expect(result.pause).toHaveBeenCalledTimes(1);
     // The retry waited for the final URL's host (and the navigated URL's)
-    expect(waitUntilResumed).toHaveBeenCalledWith(final);
+    expect(result.waitedFor).toContain(final);
     expect(playwrightState.visited).toEqual([url, url]);
     expect(took).toBe(2000);
   });

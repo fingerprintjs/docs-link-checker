@@ -91,8 +91,11 @@ vi.mock("playwright", () => {
 
 import { getBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
-import { checkLinkWithPlaywright } from "./playwright_check";
+import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { closeRunBrowser, withRun } from "./run";
+
+const checkLinkWithPlaywright = async (url: string) =>
+  (await checkUrlsOnPageWithPlaywright([url])).get(url)!;
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeItem, getSampleRate, parallelProcess, sampleItems } from "./utils";
+import { getSampleRate, parallelProcess, sampleItems } from "./utils";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -61,12 +61,22 @@ describe("parallelProcess() error logging", () => {
     expect(output).not.toContain("[object Object]");
   });
 
-  it("describeItem() handles strings, links and other objects", () => {
-    expect(describeItem("https://example.com")).toBe("https://example.com");
-    expect(describeItem({ href: "https://a.com" })).toBe("https://a.com");
-    expect(describeItem({ name: "repo" })).toBe('{"name":"repo"}');
-    expect(describeItem(42)).toBe("42");
-    expect(describeItem({ toJSON: () => undefined })).toBe("[object Object]");
+  it.each([
+    { item: { full_name: "org/repo", name: "repo" }, expected: "org/repo" },
+    {
+      item: { sourcePath: "https://github.com/org/repo/blob/main/README.md" },
+      expected: "https://github.com/org/repo/blob/main/README.md",
+    },
+  ])("names the failed $expected", async ({ item, expected }) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await parallelProcess({
+      items: [item],
+      processFn: async () => {
+        throw new Error("Something exploded");
+      },
+    });
+    const output = errorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(output).toContain(`${expected}: Something exploded`);
   });
 });
 

@@ -9,7 +9,7 @@ export type RunConfig = {
 type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
 
 /**
- * State of a single link-check run (`checkWebsite`, `checkReadmesInGithubOrg` or a standalone `checkLinks`):
+ * State of a single link-check run (a CLI command or a standalone `checkLinks`):
  * in-memory caches, metrics, the per-host limiter and the shared browser.
  */
 export type RunContext = {
@@ -43,11 +43,6 @@ const getContext = (): RunContext => getRunContext() ?? (defaultContext ??= crea
 
 /** The per-host limiter of the current run (or the default context outside of any run) */
 export const getHostLimiter = (): HostLimiter => getContext().hostLimiter;
-
-/** Only for tests: replace (or reset to a fresh default) the host limiter of the current run or default context */
-export const setHostLimiter = (limiter: HostLimiter | undefined) => {
-  getContext().hostLimiter = limiter ?? new HostLimiter(DEFAULT_HOST_CONCURRENCY);
-};
 
 /** Slot holding the shared browser of the current run (or the default context), see `src/browser.ts` */
 export const getBrowserSlot = (): BrowserSlot => getContext().browser;

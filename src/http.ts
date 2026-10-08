@@ -13,42 +13,20 @@ export const FORBIDDEN_STATUS_CODES = [403, 401];
 // Retried with a backoff (see `getServerErrorRetryDelay`), reported as "could not check" if it persists.
 export const TRANSIENT_SERVER_ERROR_STATUS_CODES = [502, 503, 504];
 
-// Spoofed user agents to bypass some websites restrictions
-
-const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
-
-const userAgents = [
-  DEFAULT_USER_AGENT,
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:110.0) Gecko/20100101 Firefox/110.0",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/109.0",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Android 14; Mobile; rv:110.0) Gecko/110.0 Firefox/110.0",
-  "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36",
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/537.36",
-  "Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-];
-
-export const getRandomUserAgent = (): string =>
-  userAgents[Math.floor(Math.random() * userAgents.length)] ?? DEFAULT_USER_AGENT;
+// Desktop Chrome user agent, some websites refuse requests from unknown clients.
+// One fixed value (not rotated) so runs are repeatable. Update the Chrome version now and then.
+export const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
 // How many times a request is retried after a 429 with `Retry-After`
 export const MAX_RATE_LIMIT_RETRIES = 2;
 // How many times a request (or a Playwright navigation) is retried after a 502, 503 or 504
 export const MAX_SERVER_ERROR_RETRIES = 2;
 // Backoff before each server error retry, when the response has no (shorter) `Retry-After`
-const DEFAULT_SERVER_ERROR_RETRY_DELAYS = [2000, 5000];
+const SERVER_ERROR_RETRY_DELAYS = [2000, 5000];
 // Longest wait before a server error retry: a longer `Retry-After` is not waited for, the request gives up.
 // Bounds the added wait per request to `MAX_SERVER_ERROR_RETRIES * MAX_SERVER_ERROR_RETRY_DELAY` (20s).
 export const MAX_SERVER_ERROR_RETRY_DELAY = 10000;
-
-let serverErrorRetryDelays = DEFAULT_SERVER_ERROR_RETRY_DELAYS;
-/** Only for tests: replace (or reset with `undefined`) the server error backoff */
-export const setServerErrorRetryDelays = (delays: number[] | undefined) => {
-  serverErrorRetryDelays = delays ?? DEFAULT_SERVER_ERROR_RETRY_DELAYS;
-};
 
 /**
  * Delay before the next retry of a transient server error (`TRANSIENT_SERVER_ERROR_STATUS_CODES`), `undefined` to give
@@ -63,7 +41,8 @@ export const getServerErrorRetryDelay = (
   if (retries >= MAX_SERVER_ERROR_RETRIES) {
     return undefined;
   }
-  const backoff = serverErrorRetryDelays[Math.min(retries, serverErrorRetryDelays.length - 1)] ?? 0;
+  const backoff =
+    SERVER_ERROR_RETRY_DELAYS[Math.min(retries, SERVER_ERROR_RETRY_DELAYS.length - 1)] ?? 0;
   const retryAfterMs = parseRetryAfter(retryAfter);
   if (retryAfterMs !== undefined && retryAfterMs > MAX_SERVER_ERROR_RETRY_DELAY) {
     return undefined;
@@ -90,8 +69,8 @@ export type LimitedResponse<T> = {
 };
 
 export type LimitedRequestOptions = {
-  /** Default `GET` */
-  method?: string;
+  /** Default `GET`, kept across redirects */
+  method?: "GET" | "HEAD";
   headers?: HeadersInit;
   /** Timeout of each request (each redirect hop), default `FETCH_TIMEOUT` */
   timeoutMs?: number;
@@ -108,25 +87,10 @@ const discardBody = async (response: Response) => {
   }
 };
 
-/**
- * Method for the next request after a redirect (fetch spec): 303 switches to GET (except HEAD),
- * 301 and 302 switch POST to GET, anything else keeps the method.
- */
-export const getRedirectMethod = (status: number, method: string): string => {
-  const upper = method.toUpperCase();
-  if (status === 303 && upper !== "GET" && upper !== "HEAD") {
-    return "GET";
-  }
-  if ((status === 301 || status === 302) && upper === "POST") {
-    return "GET";
-  }
-  return method;
-};
-
 type HopResult<T> =
   | { type: "retry" }
   | { type: "server-error-retry" }
-  | { type: "redirect"; location: string; status: number }
+  | { type: "redirect"; location: string }
   | { type: "final"; response: Omit<LimitedResponse<T>, "url"> };
 
 /**
@@ -149,19 +113,17 @@ export const fetchWithHostLimit = async <T>(
 ): Promise<LimitedResponse<T>> => {
   const hostLimiter = getHostLimiter();
   let currentUrl = url;
-  let currentMethod = method;
   let redirects = 0;
   let rateLimitRetries = 0;
   let serverErrorRetryCount = 0;
 
   for (;;) {
     const requestUrl = currentUrl;
-    const requestMethod = currentMethod;
     const result = await hostLimiter.run(requestUrl, async (): Promise<HopResult<T>> => {
       // Counted per actual request (every redirect hop and retry)
       incrementMetric("httpRequests");
       const response = await fetch(requestUrl, {
-        method: requestMethod,
+        method,
         headers,
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
@@ -170,7 +132,7 @@ export const fetchWithHostLimit = async <T>(
         const location = response.headers.get("Location");
         // An empty Location is a valid (relative) target, it resolves to the current URL
         if (REDIRECT_STATUS_CODES.has(response.status) && location !== null) {
-          return { type: "redirect", location, status: response.status };
+          return { type: "redirect", location };
         }
         if (response.status === 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
           const retryAfter = response.headers.get("Retry-After");
@@ -227,7 +189,6 @@ export const fetchWithHostLimit = async <T>(
         }
         redirects++;
         currentUrl = new URL(result.location, currentUrl).href;
-        currentMethod = getRedirectMethod(result.status, currentMethod);
         break;
     }
   }

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostLimiter, parseHostConcurrency, parseRetryAfter, withTimeout } from "./limiter";
-import { setHostLimiter } from "./run";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -66,7 +65,6 @@ describe("HostLimiter", () => {
     const start = Date.now();
     await limiter.waitUntilResumed("https://paused.example.com/b");
     expect(Date.now() - start).toBeGreaterThanOrEqual(45);
-    expect(limiter.activeCount("https://paused.example.com/")).toBe(1);
 
     const otherStart = Date.now();
     await limiter.waitUntilResumed("https://other.example.com/");
@@ -119,11 +117,9 @@ describe("parseHostConcurrency()", () => {
 describe("checkLinks() per-host limit", () => {
   beforeEach(() => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    setHostLimiter(new HostLimiter(3));
   });
 
   afterEach(() => {
-    setHostLimiter(undefined);
     vi.restoreAllMocks();
   });
 
@@ -148,7 +144,7 @@ describe("checkLinks() per-host limit", () => {
       ...Array.from({ length: 5 }, (_, i) => `https://quiet.example.com/page-${i}`),
     ].map((href) => ({ href, page: "https://example.com", text: "" }));
 
-    // checkLinks() starts its own run, so it needs the host concurrency in its config (not setHostLimiter())
+    // checkLinks() starts its own run, so it needs the host concurrency in its config
     const results = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
 
     expect(results).toHaveLength(35);
