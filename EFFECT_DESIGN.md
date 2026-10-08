@@ -902,3 +902,9 @@ Non-test lines of `src/` (+ nothing else changes). Main 5205, port 5536 (the por
 - Tests of stubbed modules are skeleton files: main's `describe` / test titles as `it.todo` (cannot be `it.skip`: the old bodies do not type check against the new signatures). A group replaces the `it.todo` lines of its files with real tests. `vitest/warn-todo` is off in `.oxlintrc.jsonc` until the last skeleton is gone. Files with real tests and `it.todo` blocks mixed: `baseline.test.ts`, `github_actions.test.ts`, `github/gh_get_links.test.ts`, `link.test.ts`, `page.test.ts`.
 - `knip.jsonc` (was `knip.json`, needs comments) ignores the stub files, the exports only STEP 2 uses and the dependencies only STEP 2 uses (`commander`, `@octokit/*`, `@effect/platform-node-shared`). STEP 3 deletes those entries.
 - `bench/bench.ts` and `checks/gh_rate_limit.ts` were adapted minimally (`runLive`, `Metrics.snapshot`, `GitHub.getRateLimit`). `pnpm bench --base <main worktree>` copies `bench.ts` into the base checkout, where `../src/app` does not exist: the CLI group must make the round script work against main (e.g. a main-compatible fallback) or STEP 3 compares in another way.
+
+### STEP 2 notes
+
+- BROWSER: `BrowserLaunchError` got a `message` getter (`getErrorMessage(cause)`, like `PlaywrightError`): the pipeline reports `error.message` as `errorDetail` ("Failed to launch ...").
+- BROWSER: `BrowserCrashed` is not used. `withPage` keeps the crash as a flag of one attempt and surfaces the original error of the second attempt without a cast.
+- BROWSER: `src/test/fake_chromium.ts` exports `makeFakeChromiumState()` (mutable state object a test sets and reads) next to `fakeChromium(state)`. Its waits use the Effect clock of the test that builds the layer, so build it inside `it.effect`.
