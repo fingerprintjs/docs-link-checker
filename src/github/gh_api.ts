@@ -1,4 +1,5 @@
-import { incrementMetric, runCached } from "../run";
+// TODO(effect): convert
+import { incrementMetric, runCached } from "../effect_compat";
 import type { LinkCheckResult } from "../types";
 import { getMyOctokit } from "./github_client";
 

@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { Octokit } from "@octokit/rest";
-import { incrementMetric } from "../run";
+// TODO(effect): convert
+import { incrementMetric } from "../effect_compat";
 
 // Optional local .env, existing env vars win (https://nodejs.org/api/process.html#processloadenvfilepath)
 if (existsSync(".env")) {

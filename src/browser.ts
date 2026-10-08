@@ -1,17 +1,11 @@
-import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { Effect } from "effect";
 import pLimit from "p-limit";
-import { type Browser, chromium, type Page, type Request, type Route } from "playwright";
-import { getBrowserSlot, incrementMetric } from "./run";
+import type { Browser, Page, Request, Route } from "playwright";
+import { runEffect } from "./effect_compat";
+import { BrowserSlot } from "./run";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
-
-const LAUNCH_OPTIONS = {
-  // Potentially helps avoid some bot detection checks
-  args: ["--disable-blink-features=AutomationControlled"],
-};
 
 // Heavy resources that are never needed to check if a page (or an anchor on it) exists
 const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font"]);
@@ -114,73 +108,9 @@ const createResourceBlocker = () => {
 
 const pageSlots = pLimit(PLAYWRIGHT_CONCURRENCY_LIMIT);
 
-const isMissingBrowserExecutable = (error: unknown) =>
-  error instanceof Error && error.message.includes("Executable doesn't exist");
-
-const installPlaywrightChromium = () => {
-  console.log("Playwright Chromium is missing, installing...");
-  // This package's `playwright` CLI, not a different version from `npx playwright`
-  const cli = join(
-    dirname(createRequire(import.meta.url).resolve("playwright/package.json")),
-    "cli.js",
-  );
-  const result = spawnSync(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
-  if (result.status !== 0) {
-    throw (
-      result.error ??
-      new Error(`playwright install chromium failed (exit ${String(result.status)})`)
-    );
-  }
-};
-
-const launchBrowser = async (): Promise<Browser> => {
-  incrementMetric("browserLaunches");
-  try {
-    return await chromium.launch({ headless: true, ...LAUNCH_OPTIONS });
-  } catch (error) {
-    if (!isMissingBrowserExecutable(error)) {
-      throw error;
-    }
-    installPlaywrightChromium();
-    incrementMetric("browserLaunches");
-    return chromium.launch({ headless: true, ...LAUNCH_OPTIONS });
-  }
-};
-
-/**
- * Returns the shared browser of the current run (or the default context outside of any run), launching it on first
- * use. Concurrent callers share the same launch.
- */
-const getBrowser = (): Promise<Browser> => {
-  const slot = getBrowserSlot();
-  if (!slot.promise) {
-    const promise = launchBrowser().then(
-      (browser) => {
-        if (slot.promise === promise) {
-          slot.browser = browser;
-        }
-        return browser;
-      },
-      (error) => {
-        // Launch failed, try again next time
-        if (slot.promise === promise) {
-          slot.promise = undefined;
-        }
-        throw error;
-      },
-    );
-    slot.promise = promise;
-  }
-  return slot.promise;
-};
-
-/** Forgets `browser` if it is still the current one of its slot (so the next check launches a new one) */
-const forgetBrowser = (slot: ReturnType<typeof getBrowserSlot>, browser: Browser) => {
-  if (slot.browser === browser) {
-    slot.browser = undefined;
-    slot.promise = undefined;
-  }
-};
+// TODO(effect): convert, use `BrowserSlot` directly
+const getBrowser = (): Promise<Browser> =>
+  runEffect(Effect.flatMap(BrowserSlot, (slot) => slot.get));
 
 type WithPageOptions = {
   userAgent?: string;
@@ -223,7 +153,6 @@ const withSharedBrowserPage = async <T>(
   fn: (page: Page) => Promise<T>,
   options: WithPageOptions,
 ): Promise<T> => {
-  const slot = getBrowserSlot();
   for (let attempt = 0; ; attempt++) {
     const browser = await getBrowser();
     try {
@@ -231,8 +160,8 @@ const withSharedBrowserPage = async <T>(
     } catch (error) {
       if (attempt === 0 && !browser.isConnected()) {
         console.warn(`Browser disconnected (${String(error)}), relaunching and retrying once...`);
-        forgetBrowser(slot, browser);
-        await browser.close().catch(() => {});
+        // Closes it and makes the next `getBrowser` launch a new one
+        await runEffect(Effect.flatMap(BrowserSlot, (slot) => slot.discard(browser)));
         continue;
       }
       throw error;

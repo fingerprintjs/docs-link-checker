@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// TODO(effect): convert
+import { getHostLimiter, getRunContext, withRun } from "./effect_compat";
 import type { LinkCheckResult } from "./types";
 
 /**
@@ -129,7 +131,6 @@ vi.mock("playwright", () => ({
 import { checkLinkWithFetch } from "./fetch_check";
 import { checkLinks, interleaveByHost } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { getHostLimiter, getRunContext, withRun } from "./run";
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
@@ -374,12 +375,6 @@ describe("checkLinks() Playwright escalation", () => {
 
 describe("checkLinkWithFetch()", () => {
   it("reports a request that never answers as broken link after the timeout", async () => {
-    // Node's `AbortSignal.timeout` ignores fake timers, this one uses them
-    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(new DOMException("timed out", "TimeoutError")), ms);
-      return controller.signal;
-    });
     // Only rejects when its signal aborts, like a real hanging request
     stubFetch(
       (_url, init) =>
@@ -861,26 +856,35 @@ describe("server errors (502, 503, 504)", () => {
     playwrightState.finalUrlByUrl = { [url]: final };
     playwrightState.statuses = [503];
 
-    const { result, took } = await withFakeTimers(async () => {
-      const limiter = getHostLimiter();
-      const checked = checkLinkWithPlaywright(url);
-      await vi.advanceTimersByTimeAsync(1);
-      // How long a request to each host waits now: only the final URL's host is paused (not the navigated URL's)
-      const waitFor = async (target: string) => {
-        const waitStart = Date.now();
-        await limiter.waitUntilResumed(target);
-        return Date.now() - waitStart;
-      };
-      const firstWait = await waitFor(url);
-      const finalWait = waitFor(final);
-      return { checked: await checked, firstWait, finalWait: await finalWait };
-    });
-
+    // Drives the clock itself: the pause must be observed while the retry still waits for it
+    vi.useFakeTimers();
+    let result: { checked: LinkCheckResult; firstWait: number; finalWait: number; took: number };
+    try {
+      result = await withRun({}, async () => {
+        const limiter = getHostLimiter();
+        const start = Date.now();
+        const checked = checkLinkWithPlaywright(url).then((r) => ({ r, took: Date.now() - start }));
+        await vi.advanceTimersByTimeAsync(1);
+        // How long a request to each host waits now: only the final URL's host is paused (not the navigated URL's)
+        const waitFor = async (target: string) => {
+          const waitStart = Date.now();
+          await limiter.waitUntilResumed(target);
+          return Date.now() - waitStart;
+        };
+        const firstWait = await waitFor(url);
+        const finalWait = waitFor(final);
+        await vi.advanceTimersByTimeAsync(10_000);
+        const { r, took } = await checked;
+        return { checked: r, took, firstWait, finalWait: await finalWait };
+      });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(result.checked).toEqual({ ok: true, status: 200 });
     expect(result.firstWait).toBe(0);
     expect(result.finalWait).toBeGreaterThan(1900);
     expect(playwrightState.visited).toEqual([url, url]);
-    expect(took).toBe(2000);
+    expect(result.took).toBe(2000);
   });
 });
 

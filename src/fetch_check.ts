@@ -1,3 +1,5 @@
+// TODO(effect): convert
+import { fetchWithHostLimit, incrementMetric } from "./effect_compat";
 import {
   type AnchorIndex,
   buildAnchorIndex,
@@ -6,8 +8,7 @@ import {
   isHashInAnchorIndex,
   stripHash,
 } from "./hash";
-import { classifyStatus, fetchWithHostLimit, getUserAgent, serverErrorResult } from "./http";
-import { incrementMetric } from "./run";
+import { classifyStatus, getUserAgent, serverErrorResult } from "./http";
 import type { LinkCheckResult } from "./types";
 
 /**

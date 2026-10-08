@@ -1,6 +1,7 @@
+// TODO(effect): convert
+import { timePhase } from "./effect_compat";
 import { checkLinks } from "./link";
 import { getLinksFromPages } from "./page";
-import { timePhase } from "./run";
 import { getWebsitePages } from "./sitemap";
 import type { Link, LinkWithResult } from "./types";
 import { sampleItems } from "./utils";

@@ -5,7 +5,8 @@ const loadModules = async () => {
   vi.resetModules();
   const [{ getMyOctokit }, { getRunContext, withRun }] = await Promise.all([
     import("./github_client"),
-    import("../run"),
+    // TODO(effect): convert
+    import("../effect_compat"),
   ]);
   return { getMyOctokit, getRunContext, withRun };
 };

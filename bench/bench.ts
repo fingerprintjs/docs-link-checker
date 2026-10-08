@@ -26,8 +26,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+// TODO(effect): convert
+import { getRunContext, withRun } from "../src/effect_compat";
 import { checkLinks } from "../src/link";
-import { getRunContext, type RunMetrics, withRun } from "../src/run";
+import type { RunMetrics } from "../src/run";
 import corpus from "./corpus.json";
 
 // `outcomes`: href -> "ok" or the error kind

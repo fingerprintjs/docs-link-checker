@@ -1,10 +1,15 @@
 import type { Page, Response as PlaywrightResponse } from "playwright";
 import { withPage } from "./browser";
+// TODO(effect): convert
+import {
+  getHostLimiter,
+  incrementMetric,
+  planServerErrorRetry,
+  withTimeout,
+} from "./effect_compat";
 import { isGithubCodeLineLink } from "./github/gh_url";
 import { getHashSelectors, getSpecialFragmentNote } from "./hash";
-import { classifyStatus, getUserAgent, planServerErrorRetry, serverErrorResult } from "./http";
-import { withTimeout } from "./limiter";
-import { getHostLimiter, incrementMetric } from "./run";
+import { classifyStatus, getUserAgent, serverErrorResult } from "./http";
 import type { LinkCheckResult } from "./types";
 
 // Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own

@@ -1,6 +1,5 @@
-import pLimit, { type LimitFunction } from "p-limit";
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// Per-host request limits, see https://effect.website/docs/concurrency/semaphore/
+import { Clock, Context, Effect, Layer } from "effect";
 
 /** An item whose processing threw, with what was thrown */
 export type ConcurrentError<T> = { item: T; error: unknown };
@@ -24,71 +23,82 @@ export const parseHostConcurrency = (value: string | undefined): number => {
   return limit;
 };
 
-type HostState = { limit: LimitFunction; pausedUntil: number };
-
-/** Waits until the pause of the host ends (a pause can be extended while waiting) */
-const waitForPause = async (state: HostState) => {
-  while (state.pausedUntil > Date.now()) {
-    await sleep(state.pausedUntil - Date.now());
-  }
-};
+type HostState = { semaphore: Effect.Semaphore; pausedUntil: number };
 
 /**
- * Limits concurrent requests per hostname (one p-limit queue per host).
- * A host can also be paused (e.g. after a 429 with `Retry-After`), new requests to it wait until the pause ends.
+ * Per-host concurrency limit and pause (service, one semaphore per hostname).
+ * A host can be paused (e.g. after a 429 with `Retry-After`), new requests to it wait until the pause ends.
+ * Time comes from `Clock`, so tests can control it.
  */
-export class HostLimiter {
-  private readonly hosts = new Map<string, HostState>();
+export class HostLimiter extends Context.Tag("HostLimiter")<
+  HostLimiter,
+  {
+    readonly limitPerHost: number;
+    /** Runs `effect` once a slot for the URL's host is free (and the host is not paused). Interruption frees the slot. */
+    readonly run: <A, E, R>(url: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+    /**
+     * Waits until the URL's host is no longer paused, without taking a slot. For requests that are not limited per
+     * host but should still back off (Playwright navigations).
+     */
+    readonly waitUntilResumed: (url: string) => Effect.Effect<void>;
+    /** Pauses new requests to the URL's host for `ms` milliseconds */
+    readonly pause: (url: string, ms: number) => Effect.Effect<void>;
+  }
+>() {
+  static layer = (limitPerHost: number) =>
+    Layer.sync(HostLimiter, () => makeHostLimiter(limitPerHost));
+}
 
-  constructor(private readonly limitPerHost: number) {}
+const makeHostLimiter = (limitPerHost: number): Context.Tag.Service<HostLimiter> => {
+  const hosts = new Map<string, HostState>();
 
-  private getHost(url: string): HostState | undefined {
-    let hostname: string;
-    try {
-      hostname = new URL(url).hostname;
-    } catch {
-      // Invalid URL, the request itself will fail, no need to limit it
+  const getHost = (url: string): HostState | undefined => {
+    const hostname = URL.canParse(url) ? new URL(url).hostname : undefined;
+    // Invalid URL, the request itself will fail, no need to limit it
+    if (hostname === undefined) {
       return undefined;
     }
-    let state = this.hosts.get(hostname);
+    let state = hosts.get(hostname);
     if (!state) {
-      state = { limit: pLimit(this.limitPerHost), pausedUntil: 0 };
-      this.hosts.set(hostname, state);
+      state = { semaphore: Effect.unsafeMakeSemaphore(limitPerHost), pausedUntil: 0 };
+      hosts.set(hostname, state);
     }
     return state;
-  }
+  };
 
-  /** Runs `fn` once a slot for the URL's host is free (and the host is not paused) */
-  async run<T>(url: string, fn: () => Promise<T>): Promise<T> {
-    const state = this.getHost(url);
-    if (!state) {
-      return fn();
-    }
-    return state.limit(async () => {
-      await waitForPause(state);
-      return fn();
+  // A pause can be extended while waiting, so check again after each sleep
+  const waitForPause = (state: HostState) =>
+    Effect.gen(function* () {
+      for (;;) {
+        const now = yield* Clock.currentTimeMillis;
+        if (state.pausedUntil <= now) {
+          return;
+        }
+        yield* Effect.sleep(state.pausedUntil - now);
+      }
     });
-  }
 
-  /**
-   * Waits until the URL's host is no longer paused, without taking a slot. For requests that are not limited per host
-   * but should still back off (Playwright navigations).
-   */
-  async waitUntilResumed(url: string): Promise<void> {
-    const state = this.getHost(url);
-    if (state) {
-      await waitForPause(state);
-    }
-  }
-
-  /** Pauses new requests to the URL's host for `ms` milliseconds */
-  pause(url: string, ms: number) {
-    const state = this.getHost(url);
-    if (state) {
-      state.pausedUntil = Math.max(state.pausedUntil, Date.now() + ms);
-    }
-  }
-}
+  return {
+    limitPerHost,
+    run: (url, effect) => {
+      const state = getHost(url);
+      return state
+        ? state.semaphore.withPermits(1)(Effect.zipRight(waitForPause(state), effect))
+        : effect;
+    },
+    waitUntilResumed: (url) => {
+      const state = getHost(url);
+      return state ? waitForPause(state) : Effect.void;
+    },
+    pause: (url, ms) =>
+      Effect.gen(function* () {
+        const state = getHost(url);
+        if (state) {
+          state.pausedUntil = Math.max(state.pausedUntil, (yield* Clock.currentTimeMillis) + ms);
+        }
+      }),
+  };
+};
 
 /**
  * Parses the `Retry-After` header (delay in seconds or an HTTP date) into milliseconds.
@@ -106,15 +116,4 @@ export const parseRetryAfter = (value: string | null, now = Date.now()): number 
     return undefined;
   }
   return Math.max(0, date - now);
-};
-
-/**
- * Rejects if `promise` does not settle within `ms` milliseconds (the underlying work is not cancelled).
- */
-export const withTimeout = <T>(promise: Promise<T>, ms: number, message: string): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 };

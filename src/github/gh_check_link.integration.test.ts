@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { closeRunBrowser } from "../run";
+// TODO(effect): convert
+import { closeRunBrowser } from "../effect_compat";
 import { checkLinkWithGithubApi } from "./gh_check_link";
 
 // Checks outside of a run share one browser, close it when done

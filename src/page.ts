@@ -1,5 +1,7 @@
 import * as cheerio from "cheerio";
-import { fetchWithHostLimit, USER_AGENT } from "./http";
+// TODO(effect): convert
+import { fetchWithHostLimit } from "./effect_compat";
+import { USER_AGENT } from "./http";
 import type { Link } from "./types";
 import { parallelProcess } from "./utils";
 

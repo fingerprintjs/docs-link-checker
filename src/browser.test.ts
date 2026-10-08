@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// TODO(effect): convert
+import { closeRunBrowser, withRun } from "./effect_compat";
 
 /**
  * Offline tests for the shared browser (`browser.ts`) with a fake Playwright.
@@ -112,7 +114,6 @@ vi.mock("node:child_process", () => ({
 import { PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { closeRunBrowser, withRun } from "./run";
 
 const launchBrowser = () => withPage(async () => {}, { timeout: 1000 });
 

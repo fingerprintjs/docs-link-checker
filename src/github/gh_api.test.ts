@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// TODO(effect): convert
+import { getRunContext, withRun } from "../effect_compat";
 
 const { octokit } = vi.hoisted(() => ({
   octokit: { repos: { get: vi.fn(), getContent: vi.fn() } },
@@ -6,7 +8,6 @@ const { octokit } = vi.hoisted(() => ({
 
 vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 
-import { getRunContext, withRun } from "../run";
 import { checkLinkWithGithubApi } from "./gh_check_link";
 
 const delayed = <T>(value: T, ms = 10) =>

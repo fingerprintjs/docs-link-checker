@@ -202,7 +202,8 @@ describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
       mockRefs(["heads/a/b/c/d/e", "heads/a/b/x", "tags/a/b"]);
       mockFileAt("a/b/c/d/e", "src/f.ts", "one\n");
 
-      const { withRun } = await import("../../run");
+      // TODO(effect): convert
+      const { withRun } = await import("../../effect_compat");
       await withRun({}, async () => {
         expect(await checkBlob("a/b/c/d/e/src/f.ts", "#L1")).toEqual({ ok: true, status: 200 });
         expect(await checkBlob("a/b/c/d/e/src/f.ts")).toEqual({ ok: true, status: 200 });

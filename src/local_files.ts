@@ -1,13 +1,14 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { glob } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+// TODO(effect): convert
+import { timePhase } from "./effect_compat";
 import { safeDecode } from "./github/gh_url";
 import { decodeHash } from "./hash";
 import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
 import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "./markdown";
 import { filterOutIrrelevantLinks } from "./page";
-import { timePhase } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { compareStrings, sampleItems } from "./utils";
 

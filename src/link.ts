@@ -1,12 +1,12 @@
 import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./browser";
+// TODO(effect): convert
+import { incrementMetric, timePhase, withRun, withTimeout } from "./effect_compat";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
 import { hasHash, stripHash } from "./hash";
 import { TASK_TIMEOUT } from "./http";
-import { withTimeout } from "./limiter";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { incrementMetric, timePhase, withRun } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { CONCURRENCY_LIMIT, parallelProcess } from "./utils";
 import { getErrorMessage } from "./utils/errors";

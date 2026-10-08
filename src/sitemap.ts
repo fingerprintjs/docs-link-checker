@@ -1,5 +1,7 @@
 import * as cheerio from "cheerio";
-import { fetchWithHostLimit, USER_AGENT } from "./http";
+// TODO(effect): convert
+import { fetchWithHostLimit } from "./effect_compat";
+import { USER_AGENT } from "./http";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;

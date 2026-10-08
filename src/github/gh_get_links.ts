@@ -1,8 +1,8 @@
-import { fetchWithHostLimit } from "../http";
+// TODO(effect): convert
+import { fetchWithHostLimit, timePhase } from "../effect_compat";
 import { checkLinks } from "../link";
 import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
-import { timePhase } from "../run";
 import type { Link, LinkWithResult } from "../types";
 import { parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";

@@ -1,4 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
+// TODO(effect): convert
+import { closeRunBrowser, getRunContext, withRun } from "./effect_compat";
 import { checkLinkWithFetch } from "./fetch_check";
 import { checkLinks } from "./link";
 import {
@@ -7,7 +9,6 @@ import {
   HASH_WAIT_TIMEOUT,
   PAGE_OPERATION_TIMEOUT,
 } from "./playwright_check";
-import { closeRunBrowser, getRunContext, withRun } from "./run";
 
 const checkLinkWithPlaywright = async (url: string) =>
   (await checkUrlsOnPageWithPlaywright([url])).get(url)!;

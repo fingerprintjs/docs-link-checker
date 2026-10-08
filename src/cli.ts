@@ -10,6 +10,8 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
+// TODO(effect): convert
+import { withRun } from "./effect_compat";
 import { checkReadmesInGithubOrg, getGithubOrgSiteName } from "./github/gh_get_links";
 import {
   describeResult,
@@ -28,7 +30,6 @@ import {
   type LinkCheckReport,
   saveReport,
 } from "./report/report";
-import { withRun } from "./run";
 import type { LinkWithResult } from "./types";
 import { getSampleRate } from "./utils";
 import { getErrorMessage } from "./utils/errors";

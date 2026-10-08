@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// TODO(effect): convert
+import { withRun } from "./effect_compat";
 import { getLinksFromPages, filterOutIrrelevantLinks } from "./page";
-import { withRun } from "./run";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
