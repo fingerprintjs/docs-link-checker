@@ -1,7 +1,9 @@
-/** @jsxImportSource preact */
-// npx loads this file from node_modules, where tsx ignores tsconfig `jsxImportSource`.
+/** @jsx h */
+/** @jsxFrag Fragment */
+// npx/tsx defaults to React.createElement unless the factory is in this file.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
