@@ -297,15 +297,39 @@ type IgnoredGroup = {
   occurrences: IgnoredLink[];
 };
 
+const LOCAL_LINK_BASE = "https://local.invalid/";
+
+/**
+ * What the ignored link points at.
+ * An http(s) href is itself. Anything else is resolved against the page it was found on, the same way
+ * `checkLocalLink` resolves it: `missing.md` in `a/README.md` and `b/README.md` are different files.
+ */
+const ignoredTargetKey = (link: { href: string; page: string }): string => {
+  if (isHttpUrl(link.href)) {
+    return link.href;
+  }
+  try {
+    if (isHttpUrl(link.page)) {
+      return new URL(link.href, link.page).href;
+    }
+    const url = link.href.startsWith("/")
+      ? new URL(link.href.replace(/^\/+/, ""), LOCAL_LINK_BASE)
+      : new URL(link.href, new URL(encodePath(link.page), LOCAL_LINK_BASE));
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return JSON.stringify([link.page, link.href]);
+  }
+};
+
 const ignoredGroupKey = (link: IgnoredLink): string =>
   JSON.stringify([
-    link.href,
+    ignoredTargetKey(link),
     link.result.ok ? "ok" : link.result.error,
     link.result.ok ? "" : (link.result.status ?? ""),
     link.ignoreReason ?? "",
   ]);
 
-// One row per URL, error, status, and ignore reason.
+// One row per target, error, status, and ignore reason.
 // errorDetail stays out of the key. A Cloudflare challenge page changes on every request, so it would split the group into one row per page.
 const groupIgnoredLinks = (links: IgnoredLink[]): IgnoredGroup[] => {
   const groups = new Map<string, IgnoredGroup>();
@@ -342,7 +366,7 @@ const IgnoredPages = ({
   }
   return (
     <details>
-      <summary>{links.length} pages</summary>
+      <summary>{links.length} occurrences</summary>
       <ul className="list-disc pl-5 mt-2">
         {links.map((link, index) => (
           // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
@@ -412,6 +436,7 @@ const JSONReportRenderer = ({
     ...report.couldNotCheck,
   ];
   const ignoredGroups = groupIgnoredLinks(report.ignored);
+  const uniqueIgnoredLinks = new Set(report.ignored.map((link) => ignoredTargetKey(link))).size;
   return (
     <div className="overflow-x-auto min-w-[720px] max-w-[1280px] mx-auto px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">Link Check Report for {report.siteName}</h1>
@@ -434,9 +459,9 @@ const JSONReportRenderer = ({
       {ignoredGroups.length > 0 ? (
         <section data-section="ignored">
           <h2 className="text-xl font-semibold mb-3">Ignored (matched the baseline file)</h2>
-          {ignoredGroups.length < report.ignored.length ? (
+          {uniqueIgnoredLinks < report.ignored.length ? (
             <p className="mb-3 text-gray-600">
-              {ignoredGroups.length} unique {ignoredGroups.length === 1 ? "link" : "links"} (
+              {uniqueIgnoredLinks} unique {uniqueIgnoredLinks === 1 ? "link" : "links"} (
               {report.ignored.length} occurrences)
             </p>
           ) : null}

@@ -146,11 +146,11 @@ describe("renderReportToHTML() with ignored links", () => {
     const rows = section.find("tbody tr");
 
     expect(rows.length).toBe(3);
-    expect(section.text()).toContain("3 unique links (5 occurrences)");
+    expect(section.text()).toContain("2 unique links (5 occurrences)");
 
     const twitter = rows.eq(0);
     expect(
-      twitter.find("summary").filter((_, el) => $grouped(el).text() === "3 pages"),
+      twitter.find("summary").filter((_, el) => $grouped(el).text() === "3 occurrences"),
     ).toHaveLength(1);
     expect(twitter.find("ul li").length).toBe(3);
     expect(twitter.text()).toContain("https://docs.example.com/a");
@@ -173,6 +173,54 @@ describe("renderReportToHTML() with ignored links", () => {
     expect(other.find("button[data-copy-href]").attr("data-copy-href")).toBe(
       "https://other.example/",
     );
+  });
+
+  it("resolves a relative link against its file before grouping", () => {
+    const broken = {
+      ok: false as const,
+      error: "broken link" as const,
+      errorDetail: "File not found",
+    };
+    const localIgnored = getJSONReport({
+      siteName: "local files",
+      links: [
+        {
+          href: "missing.md",
+          page: "a/README.md",
+          text: "missing",
+          result: { ...broken, errorDetail: "missing in a" },
+        },
+        {
+          href: "missing.md",
+          page: "b/README.md",
+          text: "missing",
+          result: { ...broken, errorDetail: "missing in b" },
+        },
+        { href: "../gone.md", page: "docs/guide.md", text: "gone", line: 2, result: broken },
+        { href: "gone.md", page: "README.md", text: "gone", result: broken },
+        { href: "gone.md", page: "README.md", text: "gone again", line: 9, result: broken },
+      ],
+      baseline: createBaseline([{ pattern: "**" }]),
+    });
+    const $local = cheerio.load(renderReportToHTML(localIgnored));
+    const rows = $local("[data-section=ignored] tbody tr");
+
+    expect(rows).toHaveLength(3);
+    expect($local("[data-section=ignored]").text()).toContain("3 unique links (5 occurrences)");
+
+    const byDetail = (detail: string) =>
+      rows.filter((_, row) => $local(row).text().includes(detail));
+    expect(byDetail("missing in a")).toHaveLength(1);
+    expect(byDetail("missing in a").text()).toContain("a/README.md");
+    expect(byDetail("missing in b").text()).toContain("b/README.md");
+
+    const gone = byDetail("File not found");
+    expect(gone).toHaveLength(1);
+    expect(
+      gone.find("summary").filter((_, el) => $local(el).text() === "3 occurrences"),
+    ).toHaveLength(1);
+    expect(gone.text()).toContain("docs/guide.md:2");
+    expect(gone.text()).toContain("README.md:9");
   });
 });
 
