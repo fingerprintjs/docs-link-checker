@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkGitHubTreeLink } from "./gh_tree";
+import { checkGitHubTreeLink } from "./gh_content";
 
 describe("checkGitHubTreeLink", () => {
   it("should return success for an existing branch without path", async () => {

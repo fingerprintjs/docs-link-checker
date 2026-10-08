@@ -2,21 +2,11 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import pLimit from "p-limit";
-import { type Browser, chromium, type Page, type Route } from "playwright";
+import { type Browser, chromium, type Page, type Request, type Route } from "playwright";
 import { getBrowserSlot, incrementMetric } from "./run";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
-
-// Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own
-export const PAGE_OPERATION_TIMEOUT = 30000;
-// How long a hash is waited for after the page loaded (client-side rendered anchors)
-export const HASH_WAIT_TIMEOUT = 3000;
-// A hash still missing after HASH_WAIT_TIMEOUT is waited for longer, together with the other hashes of its page.
-// This is the overall budget of the page, counted from the first check (HASH_WAIT_TIMEOUT included): a missing
-// anchor takes all of it.
-// E.g. Mintlify docs expand collapsed sections and add their ids several seconds after hydration.
-export const HASH_FALLBACK_WAIT_TIMEOUT = 15000;
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
@@ -68,38 +58,25 @@ const getHostname = (url: string | undefined): string | undefined => {
   }
 };
 
-export type RequestInfo = {
-  resourceType: string;
-  url: string;
-  /** The top-level document navigation (the link being checked) is never blocked */
-  isMainFrameNavigation: boolean;
-  /**
-   * URL of the checked page (main frame). If the page itself is hosted by a blocked vendor (e.g. segment.com docs),
-   * requests to that vendor's hosts are its own resources and are not blocked.
-   */
-  pageUrl?: string;
-};
-
-/**
- * Decides if a request made by a page should be aborted (pure function, used by the Playwright route handler).
- */
-export const shouldBlockRequest = ({
-  resourceType,
-  url,
-  isMainFrameNavigation,
-  pageUrl,
-}: RequestInfo): boolean => {
-  if (isMainFrameNavigation) {
+/** Decides if a request made by a page should be aborted */
+const shouldBlockRequest = (
+  request: Request,
+  isMainFrame: boolean,
+  pageUrl: string | undefined,
+): boolean => {
+  // The link being checked is never blocked
+  if (isMainFrame) {
     return false;
   }
   // Images, media and fonts never add anchors, whoever hosts them
-  if (BLOCKED_RESOURCE_TYPES.has(resourceType)) {
+  if (BLOCKED_RESOURCE_TYPES.has(request.resourceType())) {
     return true;
   }
-  const hostname = getHostname(url);
+  const hostname = getHostname(request.url());
   if (hostname === undefined) {
     return false;
   }
+  // If the page itself is hosted by a blocked vendor (e.g. segment.com docs), its own hosts are not blocked
   const pageHostname = getHostname(pageUrl);
   return BLOCKED_HOSTS.some(
     (host) =>
@@ -108,8 +85,7 @@ export const shouldBlockRequest = ({
   );
 };
 
-const isMainFrameNavigation = (route: Route): boolean => {
-  const request = route.request();
+const isMainFrameNavigation = (request: Request): boolean => {
   if (!request.isNavigationRequest()) {
     return false;
   }
@@ -121,33 +97,18 @@ const isMainFrameNavigation = (route: Route): boolean => {
   }
 };
 
-/**
- * Route handler blocking heavy resources of a page.
- * @param pageUrl URL of the checked page (see `RequestInfo.pageUrl`)
- */
-export const blockHeavyResources = async (route: Route, pageUrl?: string) => {
-  const request = route.request();
-  const block = shouldBlockRequest({
-    resourceType: request.resourceType(),
-    url: request.url(),
-    isMainFrameNavigation: isMainFrameNavigation(route),
-    pageUrl,
-  });
-  // The page might already be closed, ignore errors
-  await (block ? route.abort("blockedbyclient") : route.continue()).catch(() => {});
-};
-
-/**
- * Route handler for one browser context: remembers the URL of the latest main frame navigation
- * (including redirects), so the page's own resources are recognised.
- */
-export const createResourceBlocker = () => {
+/** Route handler for one browser context, remembers the latest main frame URL (including redirects) */
+const createResourceBlocker = () => {
   let pageUrl: string | undefined;
   return async (route: Route) => {
-    if (isMainFrameNavigation(route)) {
-      pageUrl = route.request().url();
+    const request = route.request();
+    const isMainFrame = isMainFrameNavigation(request);
+    if (isMainFrame) {
+      pageUrl = request.url();
     }
-    await blockHeavyResources(route, pageUrl);
+    const block = shouldBlockRequest(request, isMainFrame, pageUrl);
+    // The page might already be closed, ignore errors
+    await (block ? route.abort("blockedbyclient") : route.continue()).catch(() => {});
   };
 };
 
@@ -190,7 +151,7 @@ const launchBrowser = async (): Promise<Browser> => {
  * Returns the shared browser of the current run (or the default context outside of any run), launching it on first
  * use. Concurrent callers share the same launch.
  */
-export const getBrowser = (): Promise<Browser> => {
+const getBrowser = (): Promise<Browser> => {
   const slot = getBrowserSlot();
   if (!slot.promise) {
     const promise = launchBrowser().then(
@@ -223,12 +184,14 @@ const forgetBrowser = (slot: ReturnType<typeof getBrowserSlot>, browser: Browser
 
 type WithPageOptions = {
   userAgent?: string;
+  /** Timeout of every page operation (navigation, wait...), so each check is bounded on its own */
+  timeout: number;
 };
 
 const runWithNewPage = async <T>(
   browser: Browser,
   fn: (page: Page) => Promise<T>,
-  userAgent?: string,
+  { userAgent, timeout }: WithPageOptions,
 ) => {
   const context = await browser.newContext({ userAgent });
   try {
@@ -236,10 +199,9 @@ const runWithNewPage = async <T>(
     const blocker = createResourceBlocker();
     await context.route("**/*", (route) => blocker(route));
     const page = await context.newPage();
-    // Every page operation is bounded (navigations, waits...), even if a caller passes no timeout. Response bodies have
-    // no Playwright timeout, callers bound them (see `readResponseText` in link.ts)
-    page.setDefaultTimeout(PAGE_OPERATION_TIMEOUT);
-    page.setDefaultNavigationTimeout(PAGE_OPERATION_TIMEOUT);
+    // Response bodies have no Playwright timeout, callers bound them (see `readResponseText` in playwright_check.ts)
+    page.setDefaultTimeout(timeout);
+    page.setDefaultNavigationTimeout(timeout);
     return await fn(page);
   } finally {
     await context.close().catch(() => {});
@@ -254,18 +216,18 @@ const runWithNewPage = async <T>(
  */
 export const withPage = async <T>(
   fn: (page: Page) => Promise<T>,
-  { userAgent }: WithPageOptions = {},
-): Promise<T> => pageSlots(() => withSharedBrowserPage(fn, userAgent));
+  options: WithPageOptions,
+): Promise<T> => pageSlots(() => withSharedBrowserPage(fn, options));
 
 const withSharedBrowserPage = async <T>(
   fn: (page: Page) => Promise<T>,
-  userAgent?: string,
+  options: WithPageOptions,
 ): Promise<T> => {
   const slot = getBrowserSlot();
   for (let attempt = 0; ; attempt++) {
     const browser = await getBrowser();
     try {
-      return await runWithNewPage(browser, fn, userAgent);
+      return await runWithNewPage(browser, fn, options);
     } catch (error) {
       if (attempt === 0 && !browser.isConnected()) {
         console.warn(`Browser disconnected (${String(error)}), relaunching and retrying once...`);

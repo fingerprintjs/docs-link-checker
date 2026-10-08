@@ -7,16 +7,15 @@ const { octokit } = vi.hoisted(() => ({
 vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 
 import { getRunContext, withRun } from "../run";
-import { checkGitHubBlobLink } from "./checks/gh_blob";
-import { checkIfRepositoryExists } from "./checks/gh_simple";
-import { getContentCached, getRepoCached } from "./gh_cache";
+import { checkLinkWithGithubApi } from "./gh_check_link";
 
 const delayed = <T>(value: T, ms = 10) =>
   new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
 const content = (markdown: string) => ({
   data: { type: "file", content: Buffer.from(markdown).toString("base64") },
 });
-const params = { owner: "owner", repo: "repo", ref: "main", path: "README.md" };
+const FILE_URL = "https://github.com/owner/repo/blob/main/README.md";
+const REPO_URL = "https://github.com/owner/repo";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -32,26 +31,26 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("GitHub API cache", () => {
-  it("dedupes concurrent calls for the same (owner, repo, ref, path) within a run", async () => {
+describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
+  it("dedupes concurrent checks of the same file within a run", async () => {
     await withRun({}, async () => {
-      const responses = await Promise.all(
-        Array.from({ length: 10 }, () => getContentCached(params)),
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () => checkLinkWithGithubApi(FILE_URL)),
       );
-      expect(new Set(responses).size).toBe(1);
+      expect(results.every((result) => result.ok)).toBe(true);
       // Later calls are cached too
-      await getContentCached(params);
+      await checkLinkWithGithubApi(FILE_URL);
     });
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(1);
   });
 
-  it("caches different refs and paths separately", async () => {
+  it("caches different refs, paths and repositories separately", async () => {
     await withRun({}, async () => {
       await Promise.all([
-        getContentCached(params),
-        getContentCached({ ...params, ref: "develop" }),
-        getContentCached({ ...params, path: "docs/README.md" }),
-        getContentCached({ ...params, repo: "other" }),
+        checkLinkWithGithubApi(FILE_URL),
+        checkLinkWithGithubApi("https://github.com/owner/repo/blob/develop/README.md"),
+        checkLinkWithGithubApi("https://github.com/owner/repo/blob/main/docs/README.md"),
+        checkLinkWithGithubApi("https://github.com/owner/other/blob/main/README.md"),
       ]);
     });
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(4);
@@ -60,23 +59,23 @@ describe("GitHub API cache", () => {
   it("caches repositories (case-insensitive)", async () => {
     await withRun({}, async () => {
       await Promise.all([
-        getRepoCached("owner", "repo"),
-        getRepoCached("Owner", "Repo"),
-        getRepoCached("owner", "repo"),
+        checkLinkWithGithubApi(REPO_URL),
+        checkLinkWithGithubApi("https://github.com/Owner/Repo"),
+        checkLinkWithGithubApi(REPO_URL),
       ]);
     });
     expect(octokit.repos.get).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache outside of a run", async () => {
-    await getContentCached(params);
-    await getContentCached(params);
+    await checkLinkWithGithubApi(FILE_URL);
+    await checkLinkWithGithubApi(FILE_URL);
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
   });
 
   it("does not share the cache between runs", async () => {
-    await withRun({}, () => getContentCached(params));
-    await withRun({}, () => getContentCached(params));
+    await withRun({}, () => checkLinkWithGithubApi(FILE_URL));
+    await withRun({}, () => checkLinkWithGithubApi(FILE_URL));
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
   });
 
@@ -87,17 +86,17 @@ describe("GitHub API cache", () => {
     );
 
     await withRun({}, async () => {
-      expect(await checkIfRepositoryExists("owner", "gone")).toMatchObject({
-        ok: false,
-        status: 404,
-      });
-      expect(await checkIfRepositoryExists("owner", "gone")).toMatchObject({
-        ok: false,
-        status: 404,
-      });
-
-      await expect(getContentCached(params)).rejects.toThrow("Server Error");
-      await expect(getContentCached(params)).rejects.toThrow("Server Error");
+      for (let i = 0; i < 2; i++) {
+        expect(await checkLinkWithGithubApi("https://github.com/owner/gone")).toMatchObject({
+          ok: false,
+          status: 404,
+        });
+        expect(await checkLinkWithGithubApi(FILE_URL)).toMatchObject({
+          ok: false,
+          error: "unexpected error",
+          status: 502,
+        });
+      }
     });
     expect(octokit.repos.get).toHaveBeenCalledTimes(1);
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
@@ -110,7 +109,7 @@ describe("GitHub API cache", () => {
 
       await withRun({}, async () => {
         for (let i = 0; i < 2; i++) {
-          expect(await checkIfRepositoryExists("owner", "repo")).toMatchObject({
+          expect(await checkLinkWithGithubApi(REPO_URL)).toMatchObject({
             ok: false,
             error: "unexpected error",
             status,
@@ -124,16 +123,7 @@ describe("GitHub API cache", () => {
   it("checks many hashes of the same file with one API request", async () => {
     const hashes = ["", "#title", "#usage", "#missing"];
     const results = await withRun({}, () =>
-      Promise.all(
-        hashes.map((hash) =>
-          checkGitHubBlobLink(
-            new URL(`https://github.com/owner/repo/blob/main/README.md${hash}`),
-            "owner",
-            "repo",
-            ["blob", "main", "README.md"],
-          ),
-        ),
-      ),
+      Promise.all(hashes.map((hash) => checkLinkWithGithubApi(`${FILE_URL}${hash}`))),
     );
 
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(1);
@@ -143,9 +133,9 @@ describe("GitHub API cache", () => {
   it("counts cache hits in the run metrics (requests are counted by the Octokit client)", async () => {
     await withRun({}, async () => {
       await Promise.all([
-        getContentCached(params),
-        getContentCached(params),
-        getRepoCached("owner", "repo"),
+        checkLinkWithGithubApi(FILE_URL),
+        checkLinkWithGithubApi(FILE_URL),
+        checkLinkWithGithubApi(REPO_URL),
       ]);
       expect(getRunContext()!.metrics.counters).toMatchObject({ githubCacheHits: 1 });
     });

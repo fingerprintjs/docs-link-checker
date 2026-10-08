@@ -1,7 +1,6 @@
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { getApiErrorResult, isNotFoundApiError } from "../gh_api_error";
-import { getRepoCached, getUserCached } from "../gh_cache";
+import { cachedRequest, getApiErrorResult, getRepoCached, isNotFoundApiError } from "../gh_api";
 import { getMyOctokit } from "../github_client";
 
 /**
@@ -34,7 +33,13 @@ export const checkIfRepositoryExists = (owner: string, repo: string): Promise<Li
 
 /** `GET /users/{owner}` works for both a user and an organization (`https://github.com/owner`) */
 export const checkIfOwnerExists = (owner: string): Promise<LinkCheckResult> =>
-  checkExists(getUserCached(owner), `User or organization ${owner} not found`);
+  checkExists(
+    // Users and organizations, names are case-insensitive
+    cachedRequest(["user", owner.toLowerCase()], (octokit) =>
+      octokit.users.getByUsername({ username: owner }),
+    ),
+    `User or organization ${owner} not found`,
+  );
 
 export const checkGitHubCommitLink = (
   owner: string,

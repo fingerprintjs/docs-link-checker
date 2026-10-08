@@ -4,7 +4,7 @@ const { octokit } = vi.hoisted(() => ({ octokit: { graphql: vi.fn() } }));
 
 vi.mock("../github_client", () => ({ getMyOctokit: () => octokit }));
 
-import { checkGitHubDiscussionLink } from "./gh_simple";
+import { checkLinkWithGithubApi } from "../gh_check_link";
 
 // GraphQL answers a missing repository or discussion with errors in a 200 response
 const graphqlError = (message: string, type?: string) =>
@@ -14,10 +14,13 @@ beforeEach(() => {
   octokit.graphql.mockReset();
 });
 
-describe("checkGitHubDiscussionLink()", () => {
+describe("checkLinkWithGithubApi() with discussion links", () => {
   it("is OK for an existing discussion", async () => {
     octokit.graphql.mockResolvedValue({ repository: { discussion: { id: "D_1" } } });
-    expect(await checkGitHubDiscussionLink("owner", "repo", 1)).toEqual({ ok: true, status: 200 });
+    expect(await checkLinkWithGithubApi("https://github.com/owner/repo/discussions/1")).toEqual({
+      ok: true,
+      status: 200,
+    });
   });
 
   it.each([
@@ -36,7 +39,9 @@ describe("checkGitHubDiscussionLink()", () => {
     ],
   ])("is a broken link for a %s", async (_, error) => {
     octokit.graphql.mockRejectedValue(error);
-    expect(await checkGitHubDiscussionLink("owner", "repo", 9)).toMatchObject({
+    expect(
+      await checkLinkWithGithubApi("https://github.com/owner/repo/discussions/9"),
+    ).toMatchObject({
       ok: false,
       error: "broken link",
       status: 404,
@@ -50,7 +55,9 @@ describe("checkGitHubDiscussionLink()", () => {
     ["other GraphQL error", graphqlError("Something went wrong", "INTERNAL")],
   ])("is an unexpected error for a %s", async (_, error) => {
     octokit.graphql.mockRejectedValue(error);
-    expect(await checkGitHubDiscussionLink("owner", "repo", 1)).toMatchObject({
+    expect(
+      await checkLinkWithGithubApi("https://github.com/owner/repo/discussions/1"),
+    ).toMatchObject({
       ok: false,
       error: "unexpected error",
     });

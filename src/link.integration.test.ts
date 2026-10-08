@@ -1,9 +1,12 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { HASH_FALLBACK_WAIT_TIMEOUT, HASH_WAIT_TIMEOUT, PAGE_OPERATION_TIMEOUT } from "./browser";
 import { checkLinkWithFetch } from "./fetch_check";
-import { MAX_SERVER_ERROR_RETRIES, MAX_SERVER_ERROR_RETRY_DELAY } from "./http";
 import { checkLinks } from "./link";
-import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
+import {
+  checkUrlsOnPageWithPlaywright,
+  HASH_FALLBACK_WAIT_TIMEOUT,
+  HASH_WAIT_TIMEOUT,
+  PAGE_OPERATION_TIMEOUT,
+} from "./playwright_check";
 import { closeRunBrowser, getRunContext, withRun } from "./run";
 
 const checkLinkWithPlaywright = async (url: string) =>
@@ -12,9 +15,9 @@ const checkLinkWithPlaywright = async (url: string) =>
 // Checks outside of a run share one browser, close it when done
 afterAll(closeRunBrowser);
 
-// Retries of a navigation answered with 502/503/504 (GitHub under load): the waits, plus the navigations
-const SERVER_ERROR_RETRY_TIME =
-  MAX_SERVER_ERROR_RETRIES * (MAX_SERVER_ERROR_RETRY_DELAY + PAGE_OPERATION_TIMEOUT);
+// Retries of a navigation answered with 502/503/504 (GitHub under load): up to 2 retries, each waiting at most 10s
+// (see http.ts), plus the navigation
+const SERVER_ERROR_RETRY_TIME = 2 * (10000 + PAGE_OPERATION_TIMEOUT);
 
 // Worst case of a missing anchor: the navigation (and its retries), then the late anchor wait (a missing GitHub code
 // line: the wait for the code view plus the wait for the line), plus a margin

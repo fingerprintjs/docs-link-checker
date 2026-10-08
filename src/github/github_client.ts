@@ -29,7 +29,7 @@ const onRateLimited =
     return false;
   };
 
-export const throttleOptions = {
+const throttleOptions = {
   onRateLimit: onRateLimited("Request quota exhausted"),
   onSecondaryRateLimit: onRateLimited("SecondaryRateLimit detected"),
 } satisfies ThrottleOptions;

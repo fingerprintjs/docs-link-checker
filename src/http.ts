@@ -1,40 +1,71 @@
+/**
+ * HTTP for link checks, shared by the fetch and the Playwright checks:
+ * - `fetchWithHostLimit`: requests limited per host, with redirects and retries of 429 and 502, 503, 504
+ * - `classifyStatus` and the server error helpers: one decision of what a status means and when to retry,
+ *   so both check methods treat statuses the same way
+ * - `USER_AGENT` and `TASK_TIMEOUT`
+ */
 import { parseRetryAfter } from "./limiter";
 import { getHostLimiter, incrementMetric } from "./run";
+import type { LinkCheckResult } from "./types";
 
 // GitHub web rate limit makes you wait 60 seconds after 500 requests
 export const TASK_TIMEOUT = 80000;
 // Timeout of a single fetch request
 const FETCH_TIMEOUT = 20000;
 
-export const OKAY_STATUS_CODES = [200, 301, 302, 303, 307, 308];
+const OKAY_STATUS_CODES = new Set([200, 301, 302, 303, 307, 308]);
 // Some websites have ReCaptcha or other anti-scraping measures that prevent us from checking their links, let's ignore/collect them separately
-export const FORBIDDEN_STATUS_CODES = [403, 401];
+const FORBIDDEN_STATUS_CODES = new Set([403, 401]);
 // The server is overloaded or restarting (or rate limiting, like github.com under load), says nothing about the link.
-// Retried with a backoff (see `getServerErrorRetryDelay`), reported as "could not check" if it persists.
-export const TRANSIENT_SERVER_ERROR_STATUS_CODES = [502, 503, 504];
+// Retried with a backoff (see `planServerErrorRetry`), reported as "could not check" if it persists.
+const TRANSIENT_SERVER_ERROR_STATUS_CODES = new Set([502, 503, 504]);
+
+/**
+ * What a status means for a link check. Callers decide what to do with `forbidden` (the fetch check reports it as
+ * a broken link and lets the Playwright re-check decide, Playwright reports "could not check").
+ */
+export const classifyStatus = (status: number): "okay" | "forbidden" | "server-error" | "other" => {
+  if (OKAY_STATUS_CODES.has(status)) {
+    return "okay";
+  }
+  if (FORBIDDEN_STATUS_CODES.has(status)) {
+    return "forbidden";
+  }
+  if (TRANSIENT_SERVER_ERROR_STATUS_CODES.has(status)) {
+    return "server-error";
+  }
+  return "other";
+};
 
 // Desktop Chrome user agent, some websites refuse requests from unknown clients.
 // One fixed value (not rotated) so runs are repeatable. Update the Chrome version now and then.
 export const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
+/** `USER_AGENT`, or `undefined` for sites that block you when the user agent is spoofed (android.com) */
+export const getUserAgent = (url: string): string | undefined =>
+  url.includes("android.com") ? undefined : USER_AGENT;
+
 // How many times a request is retried after a 429 with `Retry-After`
-export const MAX_RATE_LIMIT_RETRIES = 2;
+const MAX_RATE_LIMIT_RETRIES = 2;
 // How many times a request (or a Playwright navigation) is retried after a 502, 503 or 504
-export const MAX_SERVER_ERROR_RETRIES = 2;
+const MAX_SERVER_ERROR_RETRIES = 2;
 // Backoff before each server error retry, when the response has no (shorter) `Retry-After`
 const SERVER_ERROR_RETRY_DELAYS = [2000, 5000];
 // Longest wait before a server error retry: a longer `Retry-After` is not waited for, the request gives up.
 // Bounds the added wait per request to `MAX_SERVER_ERROR_RETRIES * MAX_SERVER_ERROR_RETRY_DELAY` (20s).
-export const MAX_SERVER_ERROR_RETRY_DELAY = 10000;
+const MAX_SERVER_ERROR_RETRY_DELAY = 10000;
 
 /**
- * Delay before the next retry of a transient server error (`TRANSIENT_SERVER_ERROR_STATUS_CODES`), `undefined` to give
- * up: after `MAX_SERVER_ERROR_RETRIES` retries, or when `Retry-After` asks for more than `MAX_SERVER_ERROR_RETRY_DELAY`.
- * A `Retry-After` is respected (never retried sooner), the backoff is the minimum.
+ * Decides if a request (or navigation) that got a 502, 503 or 504 is retried. If so, logs it and returns the delay
+ * to wait; `undefined` to give up: after `MAX_SERVER_ERROR_RETRIES` retries, or when `Retry-After` asks for more
+ * than `MAX_SERVER_ERROR_RETRY_DELAY`. A `Retry-After` is respected (never retried sooner), the backoff is the minimum.
  * @param retries retries done so far
  */
-export const getServerErrorRetryDelay = (
+export const planServerErrorRetry = (
+  url: string,
+  status: number,
   retries: number,
   retryAfter: string | null,
 ): number | undefined => {
@@ -47,18 +78,26 @@ export const getServerErrorRetryDelay = (
   if (retryAfterMs !== undefined && retryAfterMs > MAX_SERVER_ERROR_RETRY_DELAY) {
     return undefined;
   }
-  return Math.min(Math.max(backoff, retryAfterMs ?? 0), MAX_SERVER_ERROR_RETRY_DELAY);
+  const delayMs = Math.min(Math.max(backoff, retryAfterMs ?? 0), MAX_SERVER_ERROR_RETRY_DELAY);
+  console.log(`Server error ${status} (${url}), retrying after ${Math.ceil(delayMs / 1000)}s...`);
+  incrementMetric("serverErrorRetries");
+  return delayMs;
 };
 
-/** Log message for a request (or navigation) retried after a server error */
-export const formatServerErrorRetry = (url: string, status: number, delayMs: number) =>
-  `Server error ${status} (${url}), retrying after ${Math.ceil(delayMs / 1000)}s...`;
+/** Result for a 502, 503 or 504 that persisted after the retries: it says nothing about the link */
+export const serverErrorResult = (status: number, statusText: string): LinkCheckResult => ({
+  ok: false,
+  error: "could not check",
+  status,
+  errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
+});
+
 // Redirects followed per request (like `fetch`, which gives up after 20; 10 is plenty for real links)
-export const MAX_REDIRECTS = 10;
+const MAX_REDIRECTS = 10;
 
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
-export type LimitedResponse<T> = {
+type LimitedResponse<T> = {
   status: number;
   statusText: string;
   headers: Headers;
@@ -68,7 +107,7 @@ export type LimitedResponse<T> = {
   data: T;
 };
 
-export type LimitedRequestOptions = {
+type LimitedRequestOptions = {
   /** Default `GET`, kept across redirects */
   method?: "GET" | "HEAD";
   headers?: HeadersInit;
@@ -100,7 +139,7 @@ type HopResult<T> =
  * - A 429 with a usable `Retry-After` pauses the whole host *before* the slot is released (so no queued request to
  *   that host starts during the pause), then the request is retried, at most `MAX_RATE_LIMIT_RETRIES` times.
  * - A 502, 503 or 504 is retried too (at most `MAX_SERVER_ERROR_RETRIES` times), after a backoff or the
- *   `Retry-After` delay (see `getServerErrorRetryDelay`). The host is paused in the same way, so concurrent requests to an overloaded host
+ *   `Retry-After` delay (see `planServerErrorRetry`). The host is paused in the same way, so concurrent requests to an overloaded host
  *   back off as well.
  * - The final response (possibly still a 429 or 5xx) is returned. `read` consumes what it needs of the body inside the slot,
  *   any unread body (also of redirect and 429 responses) is cancelled before the slot is released.
@@ -145,14 +184,14 @@ export const fetchWithHostLimit = async <T>(
             return { type: "retry" };
           }
         }
-        if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-          const delayMs = getServerErrorRetryDelay(
+        if (classifyStatus(response.status) === "server-error") {
+          const delayMs = planServerErrorRetry(
+            requestUrl,
+            response.status,
             serverErrorRetryCount,
             response.headers.get("Retry-After"),
           );
           if (delayMs !== undefined) {
-            console.log(formatServerErrorRetry(requestUrl, response.status, delayMs));
-            incrementMetric("serverErrorRetries");
             // Like a 429: the whole host backs off while the slot is still held
             hostLimiter.pause(requestUrl, delayMs);
             return { type: "server-error-retry" };

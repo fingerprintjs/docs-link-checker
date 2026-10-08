@@ -1,17 +1,12 @@
-import { type AnchorIndex, buildAnchorIndex, isHashInAnchorIndex } from "./hash";
 import {
-  fetchWithHostLimit,
-  USER_AGENT,
-  OKAY_STATUS_CODES,
-  TRANSIENT_SERVER_ERROR_STATUS_CODES,
-} from "./http";
-import {
-  getServerErrorResult,
+  type AnchorIndex,
+  buildAnchorIndex,
   getSpecialFragmentNote,
   hasHash,
-  shouldSpoofUserAgent,
+  isHashInAnchorIndex,
   stripHash,
-} from "./link_common";
+} from "./hash";
+import { classifyStatus, fetchWithHostLimit, getUserAgent, serverErrorResult } from "./http";
 import { incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 
@@ -45,8 +40,9 @@ const fetchPage = async (
   { needBody }: { needBody: boolean },
 ): Promise<FetchedPage> => {
   const headers = new Headers();
-  if (shouldSpoofUserAgent(url)) {
-    headers.set("User-Agent", USER_AGENT);
+  const userAgent = getUserAgent(url);
+  if (userAgent) {
+    headers.set("User-Agent", userAgent);
   }
 
   try {
@@ -55,7 +51,7 @@ const fetchPage = async (
     const response = await fetchWithHostLimit(url, { headers }, async (res) =>
       // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
       // An error page body is kept for the error detail.
-      needBody || !OKAY_STATUS_CODES.includes(res.status) ? res.text() : "",
+      needBody || classifyStatus(res.status) !== "okay" ? res.text() : "",
     );
 
     // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
@@ -74,11 +70,13 @@ const fetchPage = async (
     }
 
     // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
-    if (TRANSIENT_SERVER_ERROR_STATUS_CODES.includes(response.status)) {
-      return { ok: false, result: getServerErrorResult(response.status, response.statusText) };
+    const statusClass = classifyStatus(response.status);
+    if (statusClass === "server-error") {
+      return { ok: false, result: serverErrorResult(response.status, response.statusText) };
     }
 
-    if (!OKAY_STATUS_CODES.includes(response.status)) {
+    // 401 and 403 are broken here on purpose: they are re-checked with Playwright, which reports "could not check"
+    if (statusClass !== "okay") {
       return {
         ok: false,
         result: {
