@@ -61,7 +61,7 @@ Environment variables are the defaults.
 
 ## Baseline file
 
-A baseline (ignore) file lists known false positives and accepted broken links. Failing links that match an entry are reported in a separate "ignored" section of the report and don't count towards `totalLinksToFix` (they don't fail the run).
+A baseline (ignore) file lists known false positives and accepted broken links. Failing links that match an entry are reported in a separate "ignored" section of the report and don't count towards `totalLinksToFix` (they don't fail the run). The HTML report puts ignored links that share a URL, error, status, and reason on one row, and lists the pages under it.
 
 ```json
 {
