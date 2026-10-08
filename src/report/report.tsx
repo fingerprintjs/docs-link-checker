@@ -1,3 +1,5 @@
+/** @jsxImportSource preact */
+// npx loads this file from node_modules, where tsx ignores tsconfig `jsxImportSource`.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "preact-render-to-string";

@@ -12,7 +12,7 @@ pnpm add -D "github:fingerprintjs/docs-link-checker#main"
 pnpm exec docs-link-checker files "**/*.md" --update-baseline
 ```
 
-The install also installs Playwright, which downloads its browsers. Run the command in the directory you want to check. Globs, root-relative links, the baseline file, and the report directory are resolved against the current directory.
+The first run that needs a browser installs Playwright's Chromium (cached afterwards). Run the command in the directory you want to check. Globs, root-relative links, the baseline file, and the report directory are resolved against the current directory.
 
 In this repository, `pnpm cli` runs the same CLI.
 
