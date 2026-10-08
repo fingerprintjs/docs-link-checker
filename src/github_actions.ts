@@ -1,24 +1,10 @@
-import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Data, Effect } from "effect";
+import type { FileSystem } from "@effect/platform";
+import type { PlatformError } from "@effect/platform/Error";
+import { Effect } from "effect";
+import type { ActionsEnv } from "./config";
 import { getLinksToFix, type LinkCheckReport } from "./report/report";
 import type { LinkWithResult } from "./types";
-
-/** A GitHub Actions file (job summary, outputs) could not be written, or an output value is invalid */
-class GithubActionsError extends Data.TaggedError("GithubActionsError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
-
-const append = (file: string, text: string) =>
-  Effect.tryPromise({
-    try: () => appendFile(file, text),
-    catch: (cause) =>
-      new GithubActionsError({
-        message: `Could not write ${file}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        cause,
-      }),
-  });
 
 /** How many links to fix are listed in the job summary table */
 const SUMMARY_TABLE_LIMIT = 50;
@@ -111,19 +97,16 @@ export const renderJobSummary = (
 };
 
 /**
- * Appends the job summary to `summaryFile` (the value of `GITHUB_STEP_SUMMARY`, pass `env.GITHUB_STEP_SUMMARY`).
- * The file is an explicit argument without a default: an `undefined` value must never fall back to the
- * real `process.env` (tests running in GitHub Actions would write to the job summary of the CI run).
+ * Appends the job summary to `summaryFile` (`ActionsEnv.stepSummary`).
+ * STUB: implemented by the CLI group.
  * @returns `true` if the summary was written
  */
-export const writeJobSummary = (
+export const writeJobSummary: (
   report: LinkCheckReport,
   options: SummaryOptions,
   summaryFile: string | undefined,
-) =>
-  summaryFile
-    ? Effect.as(append(summaryFile, renderJobSummary(report, options)), true)
-    : Effect.succeed(false);
+) => Effect.Effect<boolean, PlatformError, FileSystem.FileSystem> = () =>
+  Effect.die("not implemented");
 
 // https://github.com/actions/toolkit/blob/main/packages/core/src/command.ts
 const escapeCommandData = (value: string) =>
@@ -174,26 +157,15 @@ export const getFileAnnotations = (report: LinkCheckReport): string[] => {
 };
 
 /**
- * Writes `name=value` outputs to `outputFile` (the value of `GITHUB_OUTPUT`, pass `env.GITHUB_OUTPUT`), if set.
- * No default for the same reason as `writeJobSummary`. Fails if a value has more than one line.
+ * Writes `name=value` outputs to `outputFile` (`ActionsEnv.output`), if set.
+ * A multi-line value is a programmer error (`Effect.dieMessage`).
+ * STUB: implemented by the CLI group.
  */
-export const writeGithubOutputs = (
+export const writeGithubOutputs: (
   outputs: Record<string, string | number>,
   outputFile: string | undefined,
-) =>
-  Effect.gen(function* () {
-    if (!outputFile) {
-      return false;
-    }
-    const lines = yield* Effect.forEach(Object.entries(outputs), ([name, value]) => {
-      const text = String(value);
-      return /[\r\n]/.test(text)
-        ? Effect.fail(new GithubActionsError({ message: `Output ${name} must be a single line` }))
-        : Effect.succeed(`${name}=${text}\n`);
-    });
-    yield* append(outputFile, lines.join(""));
-    return true;
-  });
+) => Effect.Effect<boolean, PlatformError, FileSystem.FileSystem> = () =>
+  Effect.die("not implemented");
 
 const REPOSITORY_NAME = /^[\w.-]+\/[\w.-]+$/;
 const COMMIT_SHA = /^[\da-f]{40}(?:[\da-f]{24})?$/;
@@ -203,29 +175,21 @@ const COMMIT_SHA = /^[\da-f]{40}(?:[\da-f]{24})?$/;
  * local files in the HTML report. Only when running in GitHub Actions from the repository root
  * (`cwd` is `GITHUB_WORKSPACE`), so file paths are relative to the repository. All values are validated.
  */
-export const getGithubBlobBaseUrl = (
-  env: Record<string, string | undefined>,
-  cwd: string,
-): string | undefined => {
-  const { GITHUB_ACTIONS, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_WORKSPACE } =
-    env;
-  if (
-    GITHUB_ACTIONS !== "true" ||
-    !GITHUB_WORKSPACE ||
-    resolve(cwd) !== resolve(GITHUB_WORKSPACE)
-  ) {
+export const getGithubBlobBaseUrl = (env: ActionsEnv, cwd: string): string | undefined => {
+  const { actions, serverUrl, repository, sha, workspace } = env;
+  if (actions !== "true" || !workspace || resolve(cwd) !== resolve(workspace)) {
     return undefined;
   }
-  if (!GITHUB_REPOSITORY || !REPOSITORY_NAME.test(GITHUB_REPOSITORY)) return undefined;
-  if (!GITHUB_SHA || !COMMIT_SHA.test(GITHUB_SHA)) return undefined;
+  if (!repository || !REPOSITORY_NAME.test(repository)) return undefined;
+  if (!sha || !COMMIT_SHA.test(sha)) return undefined;
   let server: URL;
   try {
-    server = new URL(GITHUB_SERVER_URL || "https://github.com");
+    server = new URL(serverUrl || "https://github.com");
   } catch {
     return undefined;
   }
   if (server.protocol !== "https:" || server.search || server.hash || server.pathname !== "/") {
     return undefined;
   }
-  return `${server.origin}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/`;
+  return `${server.origin}/${repository}/blob/${sha}/`;
 };

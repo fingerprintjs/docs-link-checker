@@ -1,8 +1,20 @@
-import { Clock, Console, Effect, Either, Ref } from "effect";
-import { getErrorMessage } from "./utils/errors";
+/**
+ * Shared helpers of the check pipelines: bounded concurrent processing with progress and error logs,
+ * deterministic sampling.
+ */
+import { Cause, Clock, Effect, Exit, Ref, Schedule } from "effect";
+import { getErrorMessage } from "./errors";
+
+export const CONCURRENCY_LIMIT = 100;
 
 // Long runs print progress, also in CI where an interactive progress bar would spam the log
-const PROGRESS_LOG_INTERVAL = 30000;
+const PROGRESS_LOG_INTERVAL = "30 seconds";
+
+/** Code unit order (like the default `sort()`), not locale-dependent */
+export const compareStrings = (a: string, b: string): number => Number(a > b) - Number(a < b);
+
+/** An item whose processing failed, with the failure */
+export type ItemError<T> = { readonly item: T; readonly error: unknown };
 
 /**
  * Human-readable description of an item that failed processing:
@@ -29,106 +41,64 @@ const describeItem = (item: unknown): string => {
   return JSON.stringify(item);
 };
 
-/** An item whose processing failed, with its error */
-export type ConcurrentError<T, E> = { item: T; error: E };
-
-const formatConcurrentErrors = <T, E>(errors: ConcurrentError<T, E>[]) =>
-  errors
-    .map((error) => `  - ${describeItem(error.item)}: ${getErrorMessage(error.error)}`)
-    .join("\n");
-
-type ProcessInParallelArgs<T, A, E, R> = {
-  items: T[];
-  processFn: (item: T) => Effect.Effect<A, E, R>;
-  concurrencyLimit?: number;
-};
-
 /**
- * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent fibers, progress logs and error
- * logging. A failing `processFn` does not stop the other items. Interrupting it interrupts the running items.
+ * Runs `process` over `items` with at most `concurrency` running at once. A failing or dying item does not stop the
+ * others (each runs under `Effect.exit`, the error is `Cause.squash` of its cause).
+ * Logs progress every 30s, the failed items and the time taken (also when interrupted).
  * @returns successful results and errors, both in item order
  */
-export const processInParallel = <T, A, E, R>({
-  items,
-  processFn,
-  concurrencyLimit = CONCURRENCY_LIMIT,
-}: ProcessInParallelArgs<T, A, E, R>) =>
-  Effect.gen(function* () {
-    const startTime = yield* Clock.currentTimeMillis;
-    const done = yield* Ref.make(0);
-    // Stopped with the scope, also when the items are interrupted
-    yield* Effect.forkScoped(
-      Effect.forever(
-        Effect.zipRight(
-          Effect.sleep(PROGRESS_LOG_INTERVAL),
-          Effect.flatMap(Ref.get(done), (count) =>
-            Console.log(`Progress: ${count}/${items.length}`),
-          ),
-        ),
-      ),
+export const processAll = Effect.fn("utils.processAll")(function* <T, A, E, R>(args: {
+  readonly items: ReadonlyArray<T>;
+  readonly process: (item: T) => Effect.Effect<A, E, R>;
+  readonly concurrency?: number;
+}) {
+  const { items, process, concurrency = CONCURRENCY_LIMIT } = args;
+  const start = yield* Clock.currentTimeMillis;
+  const done = yield* Ref.make(0);
+
+  const runItem = (item: T) =>
+    process(item).pipe(
+      Effect.exit,
+      Effect.tap(() => Ref.update(done, (count) => count + 1)),
     );
-    const settled = yield* Effect.forEach(
-      items,
-      (item) =>
-        processFn(item).pipe(
-          Effect.either,
-          Effect.ensuring(Ref.update(done, (count) => count + 1)),
-        ),
-      { concurrency: concurrencyLimit },
-    ).pipe(
-      Effect.ensuring(
-        Effect.flatMap(Clock.currentTimeMillis, (end) =>
-          Console.log(`Time taken: ${end - startTime}ms`),
-        ),
-      ),
-    );
+  const logProgress = Ref.get(done).pipe(
+    Effect.flatMap((count) => Effect.logInfo(`Progress: ${count}/${items.length}`)),
+    Effect.schedule(Schedule.spaced(PROGRESS_LOG_INTERVAL)),
+    Effect.forkScoped,
+  );
+  const logTimeTaken = Effect.flatMap(Clock.currentTimeMillis, (end) =>
+    Effect.logInfo(`Time taken: ${end - start}ms`),
+  );
+
+  const run = Effect.gen(function* () {
+    const outcomes = yield* Effect.zipRight(
+      logProgress,
+      Effect.forEach(items, runItem, { concurrency }),
+    ).pipe(Effect.scoped);
 
     const results: A[] = [];
-    const errors: ConcurrentError<T, E>[] = [];
-    for (const [i, item] of items.entries()) {
-      const outcome = settled[i];
-      if (outcome === undefined) {
-        continue;
-      }
-      if (Either.isRight(outcome)) {
-        results.push(outcome.right);
-      } else {
-        errors.push({ item, error: outcome.left });
+    const errors: ItemError<T>[] = [];
+    for (const [index, item] of items.entries()) {
+      const outcome = outcomes[index];
+      if (outcome && Exit.isFailure(outcome)) {
+        errors.push({ item, error: Cause.squash(outcome.cause) });
+      } else if (outcome) {
+        results.push(outcome.value);
       }
     }
+
     if (errors.length > 0) {
-      yield* Console.error(
-        `Errors processing items: ${errors.length}\n${formatConcurrentErrors(errors)}`,
+      yield* Effect.logError(
+        `Errors processing items: ${errors.length}\n${errors
+          .map(({ item, error }) => `  - ${describeItem(item)}: ${getErrorMessage(error)}`)
+          .join("\n")}`,
       );
     }
     return { results, errors };
-  }).pipe(Effect.scoped);
+  });
 
-/**
- * Parses the `LINK_CHECK_SAMPLE_RATE` environment variable (float between 0 and 1, default 1).
- * @throws {Error} if the value is not a number between 0 and 1
- */
-export const getSampleRate = (value = process.env.LINK_CHECK_SAMPLE_RATE): number => {
-  if (value === undefined || value.trim() === "") {
-    return 1;
-  }
-  const rate = Number(value);
-  if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
-    throw new Error(
-      `Invalid LINK_CHECK_SAMPLE_RATE "${value}", expected a number between 0 and 1.`,
-    );
-  }
-  return rate;
-};
-
-type SampleArgs<T> = {
-  items: T[];
-  /** Stable key used to sort the items, so the sample is deterministic */
-  key: (item: T) => string;
-  /** Defaults to `LINK_CHECK_SAMPLE_RATE` (also when `undefined` is passed explicitly) */
-  rate?: number;
-  label?: string;
-};
+  return yield* run.pipe(Effect.ensuring(logTimeTaken));
+});
 
 /**
  * Deterministically picks a sample of `items`: sorts them by `key` and takes evenly spaced items.
@@ -137,27 +107,31 @@ type SampleArgs<T> = {
 export const sampleItems = <T>({
   items,
   key,
-  rate = getSampleRate(),
+  rate,
   label = "pages",
-}: SampleArgs<T>): T[] => {
-  if (rate >= 1 || items.length === 0) {
-    return items;
-  }
-  const sorted = items.toSorted((a, b) => compareStrings(key(a), key(b)));
-  const count = Math.max(1, Math.ceil(sorted.length * rate));
-  const sample: T[] = [];
-  for (let i = 0; i < count; i++) {
-    // count <= sorted.length, so the index is always in range
-    const item = sorted[Math.floor((i * sorted.length) / count)];
-    if (item !== undefined) {
-      sample.push(item);
+}: {
+  readonly items: ReadonlyArray<T>;
+  /** Stable key used to sort the items, so the sample is deterministic */
+  readonly key: (item: T) => string;
+  readonly rate: number;
+  readonly label?: string;
+}): Effect.Effect<T[]> =>
+  Effect.gen(function* () {
+    if (rate >= 1 || items.length === 0) {
+      return [...items];
     }
-  }
-  console.log(`Sampling ${sample.length} of ${items.length} ${label} (sample rate ${rate}).`);
-  return sample;
-};
-
-export const CONCURRENCY_LIMIT = 100;
-
-/** Code unit order (like the default `sort()`), not locale-dependent */
-export const compareStrings = (a: string, b: string): number => Number(a > b) - Number(a < b);
+    const sorted = items.toSorted((a, b) => compareStrings(key(a), key(b)));
+    const count = Math.max(1, Math.ceil(sorted.length * rate));
+    const sample: T[] = [];
+    for (let i = 0; i < count; i++) {
+      // count <= sorted.length, so the index is always in range
+      const item = sorted[Math.floor((i * sorted.length) / count)];
+      if (item !== undefined) {
+        sample.push(item);
+      }
+    }
+    yield* Effect.logInfo(
+      `Sampling ${sample.length} of ${items.length} ${label} (sample rate ${rate}).`,
+    );
+    return sample;
+  });

@@ -1,6 +1,6 @@
 /**
  * Speed benchmark: checks the links of `bench/corpus.json`, optionally A/B against another checkout.
- * See the "Benchmark" section of README.md.
+ * CI: `.github/workflows/benchmark.yaml`.
  *
  *   pnpm bench                     benchmark the current tree
  *   pnpm bench --base <dir>        A/B against another checkout (e.g. a `git worktree` of main)
@@ -27,12 +27,16 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Effect } from "effect";
-import { withApp } from "../src/app_layer";
+import { runLive } from "../src/app";
 import { checkLinks } from "../src/link";
-import { Metrics, type RunMetrics } from "../src/run";
+import { Metrics } from "../src/metrics";
 import corpus from "./corpus.json";
 
 // `outcomes`: href -> "ok" or the error kind
+type RunMetrics = {
+  counters: Record<string, number>;
+  phases: Array<{ name: string; ms: number }>;
+};
 type Round = { totalMs: number; metrics: RunMetrics; outcomes: Record<string, string> };
 type Stat = { median: number; min: number; max: number };
 type Verdict = "better" | "worse" | "same";
@@ -58,19 +62,20 @@ const isRound = (value: unknown): value is Round =>
 const runRound = async (outFile: string) => {
   const start = performance.now();
   const outcomes: Record<string, string> = {};
-  const metrics = await Effect.runPromise(
+  const metrics = await runLive(
     Effect.gen(function* () {
       const results = yield* checkLinks({ links: corpus });
-      const snapshot = yield* Effect.flatMap(Metrics, (m) => m.snapshot);
+      const { counters, phases } = yield* (yield* Metrics).snapshot;
+      const all: RunMetrics = { counters: { ...counters }, phases: [...phases] };
       // Counted like the other counters, so the report shows if a speed change altered results
       for (const { href, result } of results) {
         const outcome = result.ok ? "ok" : result.error;
         outcomes[href] = outcome;
         const name = `result: ${outcome}`;
-        snapshot.counters[name] = (snapshot.counters[name] ?? 0) + 1;
+        all.counters[name] = (all.counters[name] ?? 0) + 1;
       }
-      return snapshot;
-    }).pipe(withApp()),
+      return all;
+    }),
   );
   const round: Round = { totalMs: performance.now() - start, metrics, outcomes };
   writeFileSync(outFile, JSON.stringify(round));

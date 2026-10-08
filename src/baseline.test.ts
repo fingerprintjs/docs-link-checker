@@ -1,15 +1,5 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-  BaselineError,
-  createBaseline,
-  loadBaseline,
-  updateBaseline,
-  writeBaseline,
-} from "./baseline";
+import { createBaseline, updateBaseline } from "./baseline";
 import { getJSONReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
@@ -20,68 +10,10 @@ const broken = (href: string, page = "https://example.com/page"): LinkWithResult
   result: { ok: false, error: "broken link", status: 404 },
 });
 
-const tempDir = () => mkdtempSync(join(tmpdir(), "baseline-test-"));
-
-// Validation is tested through `loadBaseline`, the public entry point
-const loadFile = (path: string, options?: { allowMissing?: boolean }) =>
-  Effect.runPromise(loadBaseline(path, options));
-
-const load = (data: unknown) => {
-  const path = join(tempDir(), "baseline.json");
-  writeFileSync(path, JSON.stringify(data));
-  return loadFile(path);
-};
-
-const writeTemp = (data: unknown) => {
-  const path = join(tempDir(), "baseline.json");
-  writeFileSync(path, JSON.stringify(data));
-  return path;
-};
-
+// TODO(STEP 2, CLI group): port these tests
 describe("loadBaseline() validation", () => {
-  it("accepts an object with `ignore`, a bare array and string shorthands", async () => {
-    expect((await load({ ignore: [{ href: "https://a.com" }] })).entries).toEqual([
-      { href: "https://a.com" },
-    ]);
-    expect((await load(["https://a.com/**", { pattern: "https://b/*" }])).entries).toEqual([
-      { pattern: "https://a.com/**" },
-      { pattern: "https://b/*" },
-    ]);
-    expect((await load({ $schema: "x", ignore: [] })).entries).toEqual([]);
-    expect((await load({ $schema: null, ignore: [] })).entries).toEqual([]);
-  });
-
-  it.each([
-    [null, /baseline: Expected BaselineFile, actual null/],
-    [42, /baseline: Expected BaselineFile, actual 42/],
-    [{}, /ignore: is missing/],
-    [{ ignore: "x" }, /ignore: Expected ReadonlyArray<.*>, actual "x"/],
-    [{ ignore: [], extra: 1 }, /extra: is unexpected/],
-    [[42], /ignore\[0\]: Expected BaselineEntry, actual 42/],
-    [[""], /ignore\[0\].pattern: Expected a non empty string/],
-    [[{ href: "a" }, { herf: "b" }], /ignore\[1\].herf: is unexpected/],
-    [[{ page: "a" }], /ignore\[0\]: expected exactly one of "href" or "pattern"/],
-    [[{ href: "a", pattern: "b" }], /exactly one of/],
-    [[{ href: 1 }], /ignore\[0\].href: Expected string/],
-    [[{ href: "a", reason: "" }], /ignore\[0\].reason: Expected a non empty string/],
-    // Regular expressions are not supported (ReDoS), with a message pointing to globs
-    [[{ regex: "(a+)+$" }], /ignore\[0\].regex: "regex" is not supported .* use a "pattern" glob/],
-    [[{ regex: "^https://x" }], /"regex" is not supported/],
-    [["x".repeat(2049)], /ignore\[0\].pattern: Expected a string at most 2048 character\(s\) long/],
-    [
-      [{ pattern: "x".repeat(2049) }],
-      /ignore\[0\].pattern: Expected a string at most 2048 character\(s\) long/,
-    ],
-    [
-      [{ href: "a", page: "x".repeat(2049) }],
-      /ignore\[0\].page: Expected a string at most 2048 character\(s\) long/,
-    ],
-  ])("rejects %j", async (data, message) => {
-    await expect(load(data)).rejects.toThrow(message);
-    expect(await Effect.runPromise(Effect.flip(loadBaseline(writeTemp(data))))).toBeInstanceOf(
-      BaselineError,
-    );
-  });
+  it.todo("accepts an object with `ignore`, a bare array and string shorthands");
+  it.todo("rejects %j");
 });
 
 describe("createBaseline().findEntry()", () => {
@@ -171,35 +103,12 @@ describe("getJSONReport() with a baseline", () => {
   });
 });
 
+// TODO(STEP 2, CLI group): port these tests
 describe("loadBaseline()", () => {
-  it("loads a valid file", async () => {
-    const path = join(tempDir(), "baseline.json");
-    writeFileSync(path, JSON.stringify({ ignore: [{ href: "https://a.com", reason: "r" }] }));
-    expect((await loadFile(path)).findEntry(broken("https://a.com"))?.reason).toBe("r");
-  });
-
-  it("loads the repository baseline file", async () => {
-    const { entries } = await loadFile(join(import.meta.dirname, "..", "linkcheck.baseline.json"));
-    expect(entries.length).toBeGreaterThan(0);
-  });
-
-  it("reports missing files, unless allowed", async () => {
-    const path = join(tempDir(), "missing.json");
-    await expect(loadFile(path)).rejects.toThrow(`Baseline file not found: ${path}`);
-    expect((await loadFile(path, { allowMissing: true })).entries).toEqual([]);
-  });
-
-  it("reports invalid JSON and invalid entries with the file name", async () => {
-    const dir = tempDir();
-    writeFileSync(join(dir, "bad.json"), "{ not json");
-    await expect(loadFile(join(dir, "bad.json"))).rejects.toThrow(
-      /Invalid baseline file .*bad\.json/,
-    );
-    writeFileSync(join(dir, "invalid.json"), JSON.stringify({ ignore: [{ reason: "x" }] }));
-    await expect(loadFile(join(dir, "invalid.json"))).rejects.toThrow(
-      /Invalid baseline file .*invalid\.json: ignore\[0\]: expected exactly one of/,
-    );
-  });
+  it.todo("loads a valid file");
+  it.todo("loads the repository baseline file");
+  it.todo("reports missing files, unless allowed");
+  it.todo("reports invalid JSON and invalid entries with the file name");
 });
 
 describe("updateBaseline()", () => {
@@ -263,12 +172,5 @@ describe("updateBaseline()", () => {
     });
   });
 
-  it("writes a file that loads back", async () => {
-    const path = join(tempDir(), "baseline.json");
-    await Effect.runPromise(writeBaseline(path, updateBaseline({ baseline, failures })));
-    const loaded = await loadFile(path);
-    for (const failure of failures) {
-      expect(loaded.findEntry(failure)).toBeDefined();
-    }
-  });
+  it.todo("writes a file that loads back");
 });

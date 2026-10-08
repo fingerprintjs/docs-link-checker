@@ -19,6 +19,7 @@ export default defineConfig({
         ...coverageConfigDefaults.exclude,
         "**/*.integration.test.ts",
         "src/__fixtures__/**",
+        "src/test/**",
       ],
       reporter: ["text-summary", "html"],
       thresholds: { statements: 93, branches: 88, functions: 93, lines: 93 },

@@ -1,8 +1,10 @@
 /** @jsx h */
 /** @jsxFrag Fragment */
 // npx/tsx defaults to React.createElement unless the factory is in this file.
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { FileSystem } from "@effect/platform";
+import type { PlatformError } from "@effect/platform/Error";
+import { Effect } from "effect";
 // oxlint-disable-next-line eslint/no-unused-vars -- Fragment is used via @jsxFrag / tsconfig jsxFragmentFactory
 import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
@@ -507,14 +509,6 @@ export function renderReportToHTML(
   `;
 }
 
-function renderReportToHTMLFile(
-  jsonReport: LinkCheckReport,
-  filePath: string,
-  options: RenderOptions = {},
-) {
-  writeFileSync(filePath, renderReportToHTML(jsonReport, options));
-}
-
 export const DEFAULT_OUTPUT_DIR = "results";
 
 /** Paths of the JSON and HTML reports of a site (`docs.fingerprint.com` -> `results/docs-fingerprint-com.json`) */
@@ -527,21 +521,12 @@ export const getReportPaths = (siteName: string, outputDir = DEFAULT_OUTPUT_DIR)
 };
 
 /**
- * Saves the report as JSON and HTML into `outputDir` (created if needed).
+ * Saves the report as JSON and HTML into `outputDir` (created if needed), STUB: implemented by the CLI group.
  * @returns the paths of the saved reports
  */
-export function saveReport(
+export const saveReport: (
   report: LinkCheckReport,
-  outputDir = DEFAULT_OUTPUT_DIR,
-  options: RenderOptions = {},
-) {
-  const paths = getReportPaths(report.siteName, outputDir);
-  mkdirSync(outputDir, { recursive: true });
-
-  writeFileSync(paths.json, JSON.stringify(report, null, 2));
-  console.log(`Saved JSON report to ${paths.json}`);
-
-  renderReportToHTMLFile(report, paths.html, options);
-  console.log(`Saved HTML report to ${paths.html}`);
-  return paths;
-}
+  outputDir?: string,
+  options?: RenderOptions,
+) => Effect.Effect<{ json: string; html: string }, PlatformError, FileSystem.FileSystem> = () =>
+  Effect.die("not implemented");

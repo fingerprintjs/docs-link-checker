@@ -36,6 +36,8 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@effect/platform": "^0.97.2",
+    "@effect/platform-node-shared": "^0.61.1",
     "@octokit/core": "^7.0.8",
     "@octokit/plugin-retry": "^8.1.1",
     "@octokit/plugin-throttling": "^11.0.5",
@@ -55,6 +57,7 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
+    "@effect/vitest": "0.30.0",
     "@types/node": "^24.19.0",
     "@vitest/coverage-v8": "5.0.3",
     "eslint-plugin-sonarjs": "4.2.2",
@@ -68,6 +71,26 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ]
+    ],
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "@effect/vitest>vitest": "5"
+      }
+    },
+    "packageExtensions": {
+      "@effect/platform-node-shared": {
+        "peerDependenciesMeta": {
+          "@effect/rpc": {
+            "optional": true
+          },
+          "@effect/sql": {
+            "optional": true
+          },
+          "@effect/cluster": {
+            "optional": true
+          }
+        }
+      }
+    }
   }
 }

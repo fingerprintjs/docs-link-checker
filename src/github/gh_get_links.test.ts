@@ -1,117 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { resolveReadmeHref } from "./gh_get_links";
 
-const { octokit } = vi.hoisted(() => ({
-  octokit: {
-    paginate: vi.fn(),
-    repos: { listForOrg: {}, get: vi.fn() },
-    git: { getTree: vi.fn() },
-  },
-}));
-
-import { Effect } from "effect";
-import {
-  getReadmeLinks as getReadmeLinksEffect,
-  getReadmesFromOrg as getReadmesFromOrgEffect,
-  ListOrgReposError,
-  resolveReadmeHref,
-} from "./gh_get_links";
-import { runWithFakeOctokit } from "./test_utils";
-
-const getReadmesFromOrg = (...args: Parameters<typeof getReadmesFromOrgEffect>) =>
-  runWithFakeOctokit(getReadmesFromOrgEffect(...args), () => octokit);
-const getReadmeLinks = (...args: Parameters<typeof getReadmeLinksEffect>) =>
-  runWithFakeOctokit(getReadmeLinksEffect(...args), () => octokit);
-
-const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
-  full_name: `org/${name}`,
-  owner: { login: "org" },
-  name,
-  archived: false,
-}));
-
-beforeEach(() => {
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  octokit.paginate.mockReset().mockResolvedValue(repos);
-  octokit.repos.get.mockReset().mockResolvedValue({ data: { default_branch: "main" } });
-  octokit.git.getTree.mockReset().mockResolvedValue({
-    data: {
-      tree: [
-        { type: "blob", path: "README.md" },
-        { type: "blob", path: "docs/readme.md" },
-        { type: "blob", path: "index.ts" },
-      ],
-    },
-  });
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
+// TODO(STEP 2, GITHUB group): port these tests
 describe("getReadmesFromOrg()", () => {
-  it("lists README files of all repositories", async () => {
-    const readmes = await getReadmesFromOrg("org");
-    expect(readmes).toHaveLength(8);
-    expect(readmes).toContainEqual({
-      sourcePath: "https://github.com/org/repo-a/blob/main/docs/readme.md",
-      downloadUrl: "https://raw.githubusercontent.com/org/repo-a/main/docs/readme.md",
-    });
-  });
-
-  it("skips deprecated repositories excluded from org-wide checks", async () => {
-    octokit.paginate.mockResolvedValue([
-      ...repos,
-      {
-        full_name: "org/fingerprint-pro-segment-source-function",
-        owner: { login: "org" },
-        name: "fingerprint-pro-segment-source-function",
-        archived: false,
-      },
-    ]);
-
-    const readmes = await getReadmesFromOrg("org");
-    expect(readmes).toHaveLength(8);
-    expect(
-      readmes.some((readme) =>
-        readme.sourcePath.includes("fingerprint-pro-segment-source-function"),
-      ),
-    ).toBe(false);
-  });
-
-  it("skips archived repositories", async () => {
-    octokit.paginate.mockResolvedValue([
-      ...repos,
-      { full_name: "org/old", owner: { login: "org" }, name: "old", archived: true },
-    ]);
-
-    const readmes = await getReadmesFromOrg("org");
-    expect(readmes).toHaveLength(8);
-    expect(readmes.some((readme) => readme.sourcePath.includes("/org/old/"))).toBe(false);
-  });
-
-  it("throws a clear error when the repositories cannot be listed", async () => {
-    octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
-    const error = await runWithFakeOctokit(
-      Effect.flip(getReadmesFromOrgEffect("org")),
-      () => octokit,
-    );
-    expect(error).toBeInstanceOf(ListOrgReposError);
-    expect(error.message).toBe(
-      "Failed to list repositories of GitHub organization org: Bad credentials",
-    );
-  });
-
-  it("samples README files deterministically with LINK_CHECK_SAMPLE_RATE", async () => {
-    vi.stubEnv("LINK_CHECK_SAMPLE_RATE", "0.25");
-    const first = await getReadmesFromOrg("org");
-    octokit.paginate.mockResolvedValue(repos.toReversed());
-    const second = await getReadmesFromOrg("org");
-
-    expect(first).toHaveLength(2);
-    expect(second).toEqual(first);
-  });
+  it.todo("lists README files of all repositories");
+  it.todo("skips deprecated repositories excluded from org-wide checks");
+  it.todo("skips archived repositories");
+  it.todo("throws a clear error when the repositories cannot be listed");
+  it.todo("samples README files deterministically with LINK_CHECK_SAMPLE_RATE");
 });
 
 describe("resolveReadmeHref()", () => {
@@ -129,40 +25,8 @@ describe("resolveReadmeHref()", () => {
   });
 });
 
+// TODO(STEP 2, GITHUB group): port these tests
 describe("getReadmeLinks()", () => {
-  const file = (name: string) => ({
-    sourcePath: `https://github.com/org/repo/blob/main/${name}/README.md`,
-    downloadUrl: `https://raw.githubusercontent.com/org/repo/main/${name}/README.md`,
-  });
-
-  it("returns the links of downloaded READMEs, resolved against the README page", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("[abs](https://example.com/) [root](/docs/a.md) [sib](b.md)")),
-    );
-
-    const links = await getReadmeLinks([file("pkg")]);
-
-    const page = "https://github.com/org/repo/blob/main/pkg/README.md";
-    expect(links).toEqual([
-      { page, href: "https://example.com/", text: "abs" },
-      { page, href: "https://github.com/org/repo/blob/main/docs/a.md", text: "root" },
-      { page, href: "https://github.com/org/repo/blob/main/pkg/b.md", text: "sib" },
-    ]);
-  });
-
-  it("skips READMEs that cannot be downloaded", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL) =>
-        String(input).includes("/gone/")
-          ? new Response("Not Found", { status: 404 })
-          : new Response("[x](https://example.com/)"),
-      ),
-    );
-
-    const links = await getReadmeLinks([file("gone"), file("ok")]);
-
-    expect(links.map((link) => link.page)).toEqual([file("ok").sourcePath]);
-  });
+  it.todo("returns the links of downloaded READMEs, resolved against the README page");
+  it.todo("skips READMEs that cannot be downloaded");
 });

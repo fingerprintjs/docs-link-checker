@@ -75,7 +75,32 @@
     "no-var": "error",
     "prefer-const": "error",
     "no-else-return": "error",
-    "no-console": "off",
+    // Effect conventions (EFFECT_DESIGN.md "Layers and app wiring"): effects talk to the outside only through
+    // services. Logs: `Effect.log*`, time: `Clock` / `Effect.sleep`, env: `Config`, files: `FileSystem`,
+    // network: the `Fetch` service. Tests helpers, scripts and the bin are exempt, see the override below.
+    "no-console": "error",
+    "no-restricted-globals": [
+      "error",
+      { "name": "fetch", "message": "Use the `Fetch` service (src/http.ts)" },
+      { "name": "setTimeout", "message": "Use `Effect.sleep` / `Effect.timeout`" },
+      { "name": "setInterval", "message": "Use `Schedule`" },
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          { "name": "node:fs", "message": "Use `FileSystem` from @effect/platform" },
+          { "name": "node:fs/promises", "message": "Use `FileSystem` from @effect/platform" },
+          { "name": "fs", "message": "Use `FileSystem` from @effect/platform" },
+        ],
+      },
+    ],
+    "no-restricted-properties": [
+      "error",
+      { "object": "process", "property": "env", "message": "Use `Config`" },
+      { "object": "Date", "property": "now", "message": "Use `Clock.currentTimeMillis`" },
+      { "object": "performance", "property": "now", "message": "Use `Clock`" },
+    ],
     // Sequential awaits are deliberate here (retries, rate limits, shared browser)
     "no-await-in-loop": "off",
     // Covered by `noImplicitReturns` in tsconfig.json, which understands exhaustive switches
@@ -83,11 +108,17 @@
 
     // Tests: no skipped, focused or empty tests
     "vitest/no-disabled-tests": "error",
+    // TEMPORARY: skeleton files keep the titles of main's tests as `it.todo` until STEP 2 ports them (remove with the last skeleton)
+    "vitest/warn-todo": "off",
     "vitest/no-focused-tests": "error",
     "vitest/expect-expect": "error",
     "vitest/no-identical-title": "error",
     "vitest/no-conditional-expect": "error",
-    "vitest/no-standalone-expect": "error",
+    // `it.effect` etc. of @effect/vitest are test blocks too
+    "vitest/no-standalone-expect": [
+      "error",
+      { "additionalTestBlockFunctions": ["it.effect", "it.live", "it.scoped", "it.scopedLive"] },
+    ],
     // `expect(value, message)` is valid in Vitest
     "vitest/valid-expect": ["error", { "maxArgs": 2 }],
     "vitest/valid-title": ["error", { "ignoreTypeOfDescribeName": true }],
@@ -101,6 +132,15 @@
     "vitest/require-mock-type-parameters": "off",
   },
   "overrides": [
+    {
+      "files": ["src/test/**", "bin/**", "bench/**", "checks/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-console": "off",
+        "no-restricted-globals": "off",
+        "no-restricted-imports": "off",
+        "no-restricted-properties": "off",
+      },
+    },
     {
       "files": ["**/*.test.ts", "**/*.test.tsx", "src/test_setup.ts"],
       "rules": {

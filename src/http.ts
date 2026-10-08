@@ -1,17 +1,29 @@
 /**
  * HTTP for link checks, shared by the fetch and the Playwright checks:
- * - `fetchWithHostLimit`: requests limited per host, with redirects and retries of 429 and 502, 503, 504
+ * - `Fetch`: the only reference to `globalThis.fetch`, faked in tests, also given to Octokit
+ * - `fetchLimited`: requests limited per host, with redirects and retries of 429 and 502, 503, 504
  * - `classifyStatus` and the server error helpers: one decision of what a status means and when to retry,
  *   so both check methods treat statuses the same way
  * - `USER_AGENT` and `TASK_TIMEOUT`
- * Timeouts interrupt the request (`Effect.timeout`), which aborts its `fetch` through the `AbortSignal` of
- * `Effect.tryPromise`: https://effect.website/docs/error-management/timing-out/
+ *
+ * The retry loop of `fetchLimited` is explicit instead of `Effect.retry`: the host pause must be set inside the
+ * slot, before it is released, with a delay that depends on the attempt. A schedule computes the delay after the
+ * slot is gone, so a queued request could start in between.
  */
-import { Console, Effect } from "effect";
-import { HostLimiter, parseRetryAfter } from "./limiter";
-import { incrementMetric, type Metrics } from "./run";
+import { Clock, Context, Duration, Effect, Layer, Option } from "effect";
+import { FetchError, TooManyRedirects } from "./errors";
+import { HostLimiter } from "./limiter";
+import { Metrics } from "./metrics";
 import type { LinkCheckResult } from "./types";
-import { FetchError, TimeoutError, TooManyRedirects } from "./utils/errors";
+
+export type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
+
+export class Fetch extends Context.Tag("Fetch")<Fetch, FetchFn>() {
+  // Looked up per call, so tests can still stub the global
+  static readonly layer: Layer.Layer<Fetch> = Layer.succeed(Fetch, (url, init) =>
+    globalThis.fetch(url, init),
+  );
+}
 
 // GitHub web rate limit makes you wait 60 seconds after 500 requests
 export const TASK_TIMEOUT = 80000;
@@ -51,6 +63,24 @@ export const USER_AGENT =
 export const getUserAgent = (url: string): string | undefined =>
   url.includes("android.com") ? undefined : USER_AGENT;
 
+/**
+ * Parses the `Retry-After` header (delay in seconds or an HTTP date) into milliseconds.
+ * Returns `undefined` if the header is missing or invalid. `now` is epoch ms.
+ */
+export const parseRetryAfter = (value: string | null, now: number): number | undefined => {
+  if (value === null || value.trim() === "") {
+    return undefined;
+  }
+  if (/^\d+$/.test(value.trim())) {
+    return parseInt(value.trim(), 10) * 1000;
+  }
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) {
+    return undefined;
+  }
+  return Math.max(0, date - now);
+};
+
 // How many times a request is retried after a 429 with `Retry-After`
 const MAX_RATE_LIMIT_RETRIES = 2;
 // How many times a request (or a Playwright navigation) is retried after a 502, 503 or 504
@@ -63,33 +93,34 @@ const MAX_SERVER_ERROR_RETRY_DELAY = 10000;
 
 /**
  * Decides if a request (or navigation) that got a 502, 503 or 504 is retried. If so, logs it, counts it and returns
- * the delay to wait; `undefined` to give up: after `MAX_SERVER_ERROR_RETRIES` retries, or when `Retry-After` asks
- * for more than `MAX_SERVER_ERROR_RETRY_DELAY`. A `Retry-After` is respected (never retried sooner), the backoff is
+ * the delay to wait; `None` to give up: after `MAX_SERVER_ERROR_RETRIES` retries, or when `Retry-After` asks for
+ * more than `MAX_SERVER_ERROR_RETRY_DELAY`. A `Retry-After` is respected (never retried sooner), the backoff is
  * the minimum.
  * @param retries retries done so far
  */
-export const planServerErrorRetry = (
-  url: string,
-  status: number,
-  retries: number,
-  retryAfter: string | null,
-): Effect.Effect<number | undefined, never, Metrics> =>
+export const planServerErrorRetry = (args: {
+  readonly url: string;
+  readonly status: number;
+  readonly retries: number;
+  readonly retryAfter: string | null;
+}): Effect.Effect<Option.Option<number>, never, Metrics> =>
   Effect.gen(function* () {
-    if (retries >= MAX_SERVER_ERROR_RETRIES) {
-      return undefined;
+    if (args.retries >= MAX_SERVER_ERROR_RETRIES) {
+      return Option.none();
     }
+    const now = yield* Clock.currentTimeMillis;
     const backoff =
-      SERVER_ERROR_RETRY_DELAYS[Math.min(retries, SERVER_ERROR_RETRY_DELAYS.length - 1)] ?? 0;
-    const retryAfterMs = parseRetryAfter(retryAfter);
+      SERVER_ERROR_RETRY_DELAYS[Math.min(args.retries, SERVER_ERROR_RETRY_DELAYS.length - 1)] ?? 0;
+    const retryAfterMs = parseRetryAfter(args.retryAfter, now);
     if (retryAfterMs !== undefined && retryAfterMs > MAX_SERVER_ERROR_RETRY_DELAY) {
-      return undefined;
+      return Option.none();
     }
     const delayMs = Math.min(Math.max(backoff, retryAfterMs ?? 0), MAX_SERVER_ERROR_RETRY_DELAY);
-    yield* Console.log(
-      `Server error ${status} (${url}), retrying after ${Math.ceil(delayMs / 1000)}s...`,
+    yield* Effect.logInfo(
+      `Server error ${args.status} (${args.url}), retrying after ${Math.ceil(delayMs / 1000)}s...`,
     );
-    yield* incrementMetric("serverErrorRetries");
-    return delayMs;
+    yield* (yield* Metrics).increment("serverErrorRetries");
+    return Option.some(delayMs);
   });
 
 /** Result for a 502, 503 or 504 that persisted after the retries: it says nothing about the link */
@@ -105,27 +136,29 @@ const MAX_REDIRECTS = 10;
 
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
-type LimitedResponse<T> = {
-  status: number;
-  statusText: string;
-  headers: Headers;
+export type LimitedResponse<T> = {
+  readonly status: number;
+  readonly statusText: string;
+  readonly headers: Headers;
   /** Final URL, after redirects (like `Response.url`) */
-  url: string;
+  readonly url: string;
   /** What `read` returned for the final response */
-  data: T;
+  readonly data: T;
 };
 
 export type LimitedRequestOptions = {
   /** Default `GET`, kept across redirects */
-  method?: "GET" | "HEAD";
-  headers?: HeadersInit;
+  readonly method?: "GET" | "HEAD";
+  readonly headers?: HeadersInit;
   /** Timeout of each request (each redirect hop), default `FETCH_TIMEOUT` */
-  timeoutMs?: number;
+  readonly timeoutMs?: number;
 };
 
-/** Log message for a rate-limited request that is retried (the header can be seconds or an HTTP date) */
-const formatRateLimitRetry = (url: string, delayMs: number, retryAfter: string | null) =>
-  `Rate limited (${url}), retrying after ${Math.ceil(delayMs / 1000)}s (Retry-After: ${retryAfter})...`;
+type HopResult<T> =
+  | { readonly type: "rate-limit-retry" }
+  | { readonly type: "server-error-retry" }
+  | { readonly type: "redirect"; readonly location: string }
+  | { readonly type: "final"; readonly response: Omit<LimitedResponse<T>, "url"> };
 
 /** Cancels the response body if it was not consumed (frees the connection) */
 const discardBody = (response: Response) =>
@@ -135,150 +168,131 @@ const discardBody = (response: Response) =>
     }
   });
 
-/** Reads the whole body as text, for `fetchWithHostLimit` */
-export const readText = (response: Response) =>
-  Effect.tryPromise({
-    try: () => response.text(),
-    catch: (cause) => new FetchError({ url: response.url, cause }),
-  });
-
-type HopResult<T> =
-  | { type: "retry" }
-  | { type: "server-error-retry" }
-  | { type: "redirect"; location: string }
-  | { type: "final"; response: Omit<LimitedResponse<T>, "url"> };
-
-/** What a request has been through so far (limits of retries and redirects) */
-type RequestProgress = {
-  url: string;
-  redirects: number;
-  rateLimitRetries: number;
-  serverErrorRetries: number;
-};
-
 /**
- * Sends a request limited per host (see `HostLimiter`):
+ * Sends a request limited per host (`HostLimiter`):
  * - Redirects are followed manually (at most `MAX_REDIRECTS`), every hop waits for a slot of *its* host, so requests
  *   redirected from many hosts to the same destination still respect the destination's limit.
  * - A 429 with a usable `Retry-After` pauses the whole host *before* the slot is released (so no queued request to
  *   that host starts during the pause), then the request is retried, at most `MAX_RATE_LIMIT_RETRIES` times.
  * - A 502, 503 or 504 is retried too (at most `MAX_SERVER_ERROR_RETRIES` times), after a backoff or the
- *   `Retry-After` delay (see `planServerErrorRetry`). The host is paused in the same way, so concurrent requests to an overloaded host
- *   back off as well.
- * - The final response (possibly still a 429 or 5xx) is returned. `read` consumes what it needs of the body inside the slot,
- *   any unread body (also of redirect and 429 responses) is cancelled before the slot is released.
- * - Each hop (`fetch` and `read`) is interrupted after `timeoutMs`.
- *
- * Hand-written loop instead of `Effect.retry`: the delay depends on the response (`Retry-After`) and a retry
- * pauses the host, which a `Schedule` cannot see.
- *
- * Fails with `FetchError` (network errors), `TimeoutError`, `TooManyRedirects` or the error of `read`.
+ *   `Retry-After` delay (see `planServerErrorRetry`). The host is paused in the same way, so concurrent requests to
+ *   an overloaded host back off as well.
+ * - The final response (possibly still a 429 or 5xx) is returned. `read` consumes what it needs of the body inside
+ *   the slot, any unread body (also of redirect and 429 responses) is cancelled before the slot is released.
+ * - Each hop has a timeout that covers headers and body, interrupting the effect aborts the request.
  */
-export const fetchWithHostLimit = <T, E>(
+export const fetchLimited = Effect.fn("http.fetchLimited")(function* <T>(
   url: string,
   { method = "GET", headers, timeoutMs = FETCH_TIMEOUT }: LimitedRequestOptions,
-  read: (response: Response) => Effect.Effect<T, E>,
-) =>
-  Effect.gen(function* () {
-    const hostLimiter = yield* HostLimiter;
+  read: (response: Response) => Promise<T>,
+) {
+  const fetch = yield* Fetch;
+  const limiter = yield* HostLimiter;
+  const metrics = yield* Metrics;
 
-    const sendHop = (
-      requestUrl: string,
-      progress: RequestProgress,
-    ): Effect.Effect<HopResult<T>, E | FetchError | TimeoutError, HostLimiter | Metrics> =>
-      Effect.gen(function* () {
-        // Counted per actual request (every redirect hop and retry)
-        yield* incrementMetric("httpRequests");
-        const response = yield* Effect.tryPromise({
-          try: (signal) => fetch(requestUrl, { method, headers, redirect: "manual", signal }),
-          catch: (cause) => new FetchError({ url: requestUrl, cause }),
+  // Decides what to do with the response of one hop, inside the slot
+  const handle = (
+    response: Response,
+    requestUrl: string,
+    retries: { readonly rateLimit: number; readonly serverError: number },
+  ): Effect.Effect<HopResult<T>, FetchError, Metrics> =>
+    Effect.gen(function* () {
+      const location = response.headers.get("Location");
+      // An empty Location is a valid (relative) target, it resolves to the current URL
+      if (REDIRECT_STATUS_CODES.has(response.status) && location !== null) {
+        return { type: "redirect", location };
+      }
+      if (response.status === 429 && retries.rateLimit < MAX_RATE_LIMIT_RETRIES) {
+        const retryAfter = response.headers.get("Retry-After");
+        const retryAfterMs = parseRetryAfter(retryAfter, yield* Clock.currentTimeMillis);
+        if (retryAfterMs !== undefined && retryAfterMs < TASK_TIMEOUT) {
+          // Retry-After is either a number of seconds or an HTTP date, log the parsed delay
+          yield* Effect.logInfo(
+            `Rate limited (${requestUrl}), retrying after ${Math.ceil(retryAfterMs / 1000)}s (Retry-After: ${retryAfter})...`,
+          );
+          // Pause the whole host while still holding the slot
+          yield* limiter.pause(requestUrl, retryAfterMs);
+          return { type: "rate-limit-retry" };
+        }
+      }
+      if (classifyStatus(response.status) === "server-error") {
+        const delayMs = yield* planServerErrorRetry({
+          url: requestUrl,
+          status: response.status,
+          retries: retries.serverError,
+          retryAfter: response.headers.get("Retry-After"),
         });
+        if (Option.isSome(delayMs)) {
+          // Like a 429: the whole host backs off while the slot is still held
+          yield* limiter.pause(requestUrl, delayMs.value);
+          return { type: "server-error-retry" };
+        }
+      }
+      const data = yield* Effect.tryPromise({
+        try: () => read(response),
+        catch: (cause) => new FetchError({ url: requestUrl, cause }),
+      });
+      return {
+        type: "final",
+        response: {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+          data,
+        },
+      };
+    });
+
+  const hop = (
+    requestUrl: string,
+    retries: { readonly rateLimit: number; readonly serverError: number },
+  ) =>
+    Effect.gen(function* () {
+      // Counted per actual request (every redirect hop and retry)
+      yield* metrics.increment("httpRequests");
+      const response = yield* Effect.tryPromise({
+        try: (signal) => fetch(requestUrl, { method, headers, redirect: "manual", signal }),
+        catch: (cause) => new FetchError({ url: requestUrl, cause }),
+      });
+      return yield* handle(response, requestUrl, retries).pipe(
         // Whatever was not consumed is cancelled before the slot is released,
         // so no response stream stays active outside the per-host limit
-        return yield* Effect.ensuring(
-          Effect.gen(function* () {
-            const location = response.headers.get("Location");
-            // An empty Location is a valid (relative) target, it resolves to the current URL
-            if (REDIRECT_STATUS_CODES.has(response.status) && location !== null) {
-              return { type: "redirect" as const, location };
-            }
-            if (response.status === 429 && progress.rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
-              const retryAfter = response.headers.get("Retry-After");
-              const retryAfterMs = parseRetryAfter(retryAfter);
-              if (retryAfterMs !== undefined && retryAfterMs < TASK_TIMEOUT) {
-                // Retry-After is either a number of seconds or an HTTP date, log the parsed delay
-                yield* Console.log(formatRateLimitRetry(requestUrl, retryAfterMs, retryAfter));
-                // Pause the whole host while still holding the slot
-                yield* hostLimiter.pause(requestUrl, retryAfterMs);
-                return { type: "retry" as const };
-              }
-            }
-            if (classifyStatus(response.status) === "server-error") {
-              const delayMs = yield* planServerErrorRetry(
-                requestUrl,
-                response.status,
-                progress.serverErrorRetries,
-                response.headers.get("Retry-After"),
-              );
-              if (delayMs !== undefined) {
-                // Like a 429: the whole host backs off while the slot is still held
-                yield* hostLimiter.pause(requestUrl, delayMs);
-                return { type: "server-error-retry" as const };
-              }
-            }
-            return {
-              type: "final" as const,
-              response: {
-                status: response.status,
-                statusText: response.statusText,
-                headers: response.headers,
-                data: yield* read(response),
-              },
-            };
-          }),
-          discardBody(response),
-        );
-      }).pipe(
-        Effect.timeoutFail({
-          duration: timeoutMs,
-          onTimeout: () =>
-            new TimeoutError({
-              message: `Request timed out after ${timeoutMs}ms: ${requestUrl}`,
-              timeoutMs,
-            }),
-        }),
+        Effect.ensuring(discardBody(response)),
       );
+    }).pipe(
+      Effect.timeoutFail({
+        duration: Duration.millis(timeoutMs),
+        onTimeout: () =>
+          new FetchError({
+            url: requestUrl,
+            // Same text as `AbortSignal.timeout`, so reports do not change
+            cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+          }),
+      }),
+    );
 
-    const send = (
-      progress: RequestProgress,
-    ): Effect.Effect<
-      LimitedResponse<T>,
-      E | FetchError | TimeoutError | TooManyRedirects,
-      HostLimiter | Metrics
-    > =>
-      Effect.gen(function* () {
-        const result = yield* hostLimiter.run(progress.url, sendHop(progress.url, progress));
-        switch (result.type) {
-          case "final":
-            return { ...result.response, url: progress.url };
-          case "retry":
-            return yield* send({ ...progress, rateLimitRetries: progress.rateLimitRetries + 1 });
-          case "server-error-retry":
-            return yield* send({
-              ...progress,
-              serverErrorRetries: progress.serverErrorRetries + 1,
-            });
-          case "redirect":
-            if (progress.redirects >= MAX_REDIRECTS) {
-              return yield* new TooManyRedirects({ url, maxRedirects: MAX_REDIRECTS });
-            }
-            return yield* send({
-              ...progress,
-              url: new URL(result.location, progress.url).href,
-              redirects: progress.redirects + 1,
-            });
+  let currentUrl = url;
+  let redirects = 0;
+  const retries = { rateLimit: 0, serverError: 0 };
+
+  for (;;) {
+    const result = yield* limiter.withSlot(currentUrl, hop(currentUrl, { ...retries }));
+    switch (result.type) {
+      case "final":
+        return { ...result.response, url: currentUrl } satisfies LimitedResponse<T>;
+      case "rate-limit-retry":
+        retries.rateLimit++;
+        break;
+      case "server-error-retry":
+        retries.serverError++;
+        break;
+      case "redirect":
+        if (redirects >= MAX_REDIRECTS) {
+          return yield* new TooManyRedirects({ url, maxRedirects: MAX_REDIRECTS });
         }
-      });
-
-    return yield* send({ url, redirects: 0, rateLimitRetries: 0, serverErrorRetries: 0 });
-  });
+        redirects++;
+        currentUrl = new URL(result.location, currentUrl).href;
+        break;
+    }
+  }
+});
