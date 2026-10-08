@@ -6,6 +6,9 @@ This checker loads the page and checks that the hash exists. Client-rendered doc
 
 ## CLI
 
+> [!WARNING]
+> This repository is private. The CLI only works locally. Clone it, or `npx` from a machine that can access GitHub.
+
 Not on npm. Needs Node.js 24+. Run it from the directory you want to check.
 
 ```sh
@@ -26,6 +29,9 @@ docs-link-checker files "docs/**/*.md" README.md
 Options, baseline files, and reports: [docs/cli.md](docs/cli.md).
 
 ## GitHub Action
+
+> [!WARNING]
+> This repository is private. The action only works in this repo with `uses: ./`, or in workflows that can access it.
 
 ```yaml
 # .github/workflows/links.yaml
