@@ -2,8 +2,7 @@
 /** @jsxFrag Fragment */
 // npx/tsx defaults to React.createElement unless the factory is in this file.
 import { join } from "node:path";
-import type { FileSystem } from "@effect/platform";
-import type { PlatformError } from "@effect/platform/Error";
+import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 // oxlint-disable-next-line eslint/no-unused-vars -- Fragment is used via @jsxFrag / tsconfig jsxFragmentFactory
 import { Fragment, h } from "preact";
@@ -521,12 +520,23 @@ export const getReportPaths = (siteName: string, outputDir = DEFAULT_OUTPUT_DIR)
 };
 
 /**
- * Saves the report as JSON and HTML into `outputDir` (created if needed), STUB: implemented by the CLI group.
+ * Saves the report as JSON and HTML into `outputDir` (created if needed).
  * @returns the paths of the saved reports
  */
-export const saveReport: (
+export const saveReport = (
   report: LinkCheckReport,
-  outputDir?: string,
-  options?: RenderOptions,
-) => Effect.Effect<{ json: string; html: string }, PlatformError, FileSystem.FileSystem> = () =>
-  Effect.die("not implemented");
+  outputDir = DEFAULT_OUTPUT_DIR,
+  options: RenderOptions = {},
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = getReportPaths(report.siteName, outputDir);
+    yield* fs.makeDirectory(outputDir, { recursive: true });
+
+    yield* fs.writeFileString(paths.json, JSON.stringify(report, null, 2));
+    yield* Effect.logInfo(`Saved JSON report to ${paths.json}`);
+
+    yield* fs.writeFileString(paths.html, renderReportToHTML(report, options));
+    yield* Effect.logInfo(`Saved HTML report to ${paths.html}`);
+    return paths;
+  });

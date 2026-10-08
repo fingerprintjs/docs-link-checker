@@ -16,10 +16,8 @@
   ],
   // TEMPORARY, remove in STEP 3: exports whose users are the STEP 2 implementations
   "ignoreIssues": {
-    "src/baseline.ts": ["exports"],
     "src/browser.ts": ["exports"],
     "src/errors.ts": ["exports"],
-    "src/github_actions.ts": ["exports"],
     "src/github/gh_get_links.ts": ["exports", "types"],
     "src/github/github_client.ts": ["types"],
     "src/glob.ts": ["exports"],
@@ -27,16 +25,13 @@
     "src/http.ts": ["exports", "types"],
     "src/metrics.ts": ["exports"],
     "src/page.ts": ["exports"],
-    "src/report/report.tsx": ["exports"],
     "src/utils.ts": ["exports"],
   },
   // TEMPORARY, remove in STEP 3: dependencies that only the STEP 2 implementations use
   "ignoreDependencies": [
-    "@effect/platform-node-shared",
     "@octokit/core",
     "@octokit/plugin-retry",
     "@octokit/plugin-throttling",
     "@octokit/rest",
-    "commander",
   ],
 }
