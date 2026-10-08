@@ -294,6 +294,8 @@ describe("linkcheck.baseline.json (used by the default checks)", () => {
     couldNotCheck("https://www.iso.org/iso-3166-country-codes.html"),
     // Reported as resolved by `new URL()` (with a trailing slash)
     couldNotCheck("http://www.allaboutcookies.org/"),
+    couldNotCheck("https://twitter.com/FingerprintJs"),
+    couldNotCheck("https://x.com/FingerprintJs"),
   ];
 
   it("moves the known 'could not check' links to the ignored section", () => {

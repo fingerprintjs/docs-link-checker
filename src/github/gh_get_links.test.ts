@@ -58,6 +58,24 @@ describe("getReadmesFromOrg()", () => {
     });
   });
 
+  it("skips deprecated repositories excluded from org-wide checks", async () => {
+    octokit.paginate.mockResolvedValue([
+      ...repos,
+      {
+        full_name: "org/fingerprint-pro-segment-source-function",
+        owner: { login: "org" },
+        name: "fingerprint-pro-segment-source-function",
+        archived: false,
+      },
+    ]);
+
+    const readmes = await getReadmesFromOrg("org");
+    expect(readmes).toHaveLength(8);
+    expect(
+      readmes.some((readme) => readme.sourcePath.includes("fingerprint-pro-segment-source-function")),
+    ).toBe(false);
+  });
+
   it("throws a clear error when the repositories cannot be listed", async () => {
     octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
     await expect(getReadmesFromOrg("org")).rejects.toThrow(

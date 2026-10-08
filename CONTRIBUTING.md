@@ -41,3 +41,4 @@
   - Add a `reason`
   - Do not baseline real broken links
   - Format: [CLI](docs/cli.md#baseline-file)
+- `github-org` skips deprecated repos listed in `GITHUB_ORG_EXCLUDED_REPOS` (`src/github/gh_get_links.ts`)

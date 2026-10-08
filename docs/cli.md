@@ -31,7 +31,7 @@ docs-link-checker files "**/*.md" --dry-run   # only list the links
 ## Commands
 
 - `site <url> [--include <prefix>...]`: links on all pages of the website's sitemap. `--include` (repeatable) keeps only links starting with one of the prefixes.
-- `github-org <org>`: links in README files of the organization's public repositories.
+- `github-org <org>`: links in README files of the organization's public repositories (deprecated repos in `GITHUB_ORG_EXCLUDED_REPOS`, see [CONTRIBUTING](../CONTRIBUTING.md), are skipped).
 - `files <glob...> [--dry-run] [--no-annotations]`: links in local markdown files (`.md`, `.markdown`, `node_modules` and `.git` are skipped). Quote the globs so the CLI expands them (`**` works in every shell).
   - Relative links (`docs/a.md`, `../b/`, `a.md?plain=1`) are resolved against the file, root-relative links (`/docs/a.md`) against the current directory. The target file or directory must exist (file names are case-sensitive on Linux, like on GitHub), inside the current directory: links leaving it, also through symlinks, are broken and the file is never read.
   - `#anchors` (`#install`, `docs/a.md#install`, `docs/#install` for the directory's `README.md` or `README.markdown`, in any case, `.md` first) must match a heading slug (GitHub semantics, like for GitHub links) or an HTML anchor (`<a name="...">`). `#L10-L20` on code files must be within the file (lines start at 1, ranges go forward). Other anchors on non-markdown files are not checked.
