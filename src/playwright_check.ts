@@ -39,12 +39,15 @@ const GITHUB_CODE_LINE_SELECTOR = "[data-line-number]";
 
 /**
  * Body of a navigation response, `""` if it can't be read within `PAGE_OPERATION_TIMEOUT` (Playwright has no timeout
- * for response bodies, a body that never ends would hold the page slot). The page is closed afterwards anyway.
+ * for response bodies, a body that never ends would hold the page slot). `response.text()` takes no signal, the
+ * pending read ends when `withPage` closes the context.
  */
 const readResponseText = (response: PlaywrightResponse): Promise<string> =>
-  withTimeout(response.text(), PAGE_OPERATION_TIMEOUT, "Reading the response timed out").catch(
-    () => "",
-  );
+  withTimeout(
+    () => response.text(),
+    PAGE_OPERATION_TIMEOUT,
+    "Reading the response timed out",
+  ).catch(() => "");
 
 /**
  * GitHub code line links (`#L12`, `#L12-L15`) are checked against the line numbers of the code view, not an anchor:
@@ -126,9 +129,10 @@ async function isHashPresentAfterSettingIt(page: Page, url: string) {
   const startedAt = Date.now();
   try {
     await withTimeout(
-      page.evaluate((newHash) => {
-        location.hash = newHash;
-      }, hash),
+      () =>
+        page.evaluate((newHash) => {
+          location.hash = newHash;
+        }, hash),
       HASH_WAIT_TIMEOUT,
       HASH_SET_TIMEOUT_MESSAGE,
     );

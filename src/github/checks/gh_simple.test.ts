@@ -24,6 +24,8 @@ import {
   checkGitHubReleaseLink,
 } from "./gh_simple";
 
+const signal = new AbortController().signal;
+
 const OK = { ok: true, status: 200 };
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
 
@@ -46,8 +48,8 @@ beforeEach(() => {
   }
 });
 
-describe("checkGitHubCommitLink()", () => {
-  const check = () => checkGitHubCommitLink("o", "r", ["commit", "0".repeat(40)]);
+describe("checkGitHubCommitLink(, signal)", () => {
+  const check = () => checkGitHubCommitLink("o", "r", ["commit", "0".repeat(40)], signal);
 
   it("is OK for an existing commit", async () => {
     expect(await check()).toEqual(OK);
@@ -79,8 +81,8 @@ describe("checkGitHubCommitLink()", () => {
   });
 });
 
-describe("checkGitHubDiscussionLink()", () => {
-  const check = () => checkGitHubDiscussionLink("owner", "repo", 9);
+describe("checkGitHubDiscussionLink(, signal)", () => {
+  const check = () => checkGitHubDiscussionLink("owner", "repo", 9, signal);
 
   it("is OK for an existing discussion", async () => {
     octokit.graphql.mockResolvedValue({
@@ -123,14 +125,14 @@ describe("checkGitHubDiscussionLink()", () => {
   });
 });
 
-describe("checkGitHubIssueLink() and checkGitHubPullRequestLink()", () => {
+describe("checkGitHubIssueLink(, signal) and checkGitHubPullRequestLink(, signal)", () => {
   it("accepts the new issue page without a request", async () => {
-    expect(await checkGitHubIssueLink("o", "r", ["issues", "new"])).toEqual(OK);
+    expect(await checkGitHubIssueLink("o", "r", ["issues", "new"], signal)).toEqual(OK);
     expect(octokit.issues.get).not.toHaveBeenCalled();
   });
 
   it("reports an issue number that is not a number as broken link, without a request", async () => {
-    expect(await checkGitHubIssueLink("o", "r", ["issues", "abc"])).toEqual({
+    expect(await checkGitHubIssueLink("o", "r", ["issues", "abc"], signal)).toEqual({
       ok: false,
       error: "broken link",
       errorDetail: "Invalid issue number format: abc",
@@ -139,7 +141,7 @@ describe("checkGitHubIssueLink() and checkGitHubPullRequestLink()", () => {
   });
 
   it("reports a pull request number that is not a number as broken link, without a request", async () => {
-    expect(await checkGitHubPullRequestLink("o", "r", ["pull", "abc"])).toEqual({
+    expect(await checkGitHubPullRequestLink("o", "r", ["pull", "abc"], signal)).toEqual({
       ok: false,
       error: "broken link",
       status: 404,
@@ -149,8 +151,9 @@ describe("checkGitHubIssueLink() and checkGitHubPullRequestLink()", () => {
   });
 });
 
-describe("checkGitHubReleaseLink()", () => {
-  const release = (...parts: string[]) => checkGitHubReleaseLink("o", "r", ["releases", ...parts]);
+describe("checkGitHubReleaseLink(, signal)", () => {
+  const release = (...parts: string[]) =>
+    checkGitHubReleaseLink("o", "r", ["releases", ...parts], signal);
 
   it("accepts an asset that is part of the release", async () => {
     octokit.repos.getReleaseByTag.mockResolvedValue({
@@ -196,6 +199,7 @@ describe("checkGitHubReleaseLink()", () => {
       owner: "o",
       repo: "r",
       release_id: 123,
+      request: { signal: expect.any(AbortSignal) },
     });
 
     octokit.repos.getRelease.mockRejectedValue(notFound());
@@ -212,6 +216,7 @@ describe("checkGitHubReleaseLink()", () => {
       owner: "o",
       repo: "r",
       tag: "@scope/pkg@1.0.0",
+      request: { signal: expect.any(AbortSignal) },
     });
   });
 

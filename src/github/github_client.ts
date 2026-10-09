@@ -1,13 +1,7 @@
-import { existsSync } from "node:fs";
 import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { Octokit } from "@octokit/rest";
 import { incrementMetric } from "../run";
-
-// Optional local .env, existing env vars win (https://nodejs.org/api/process.html#processloadenvfilepath)
-if (existsSync(".env")) {
-  process.loadEnvFile();
-}
 
 const MyOctokit = Octokit.plugin(retry, throttling);
 

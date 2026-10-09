@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatFileProblems, runCli } from "./cli";
+import { OrgListingError } from "./github/gh_get_links";
 import { getJSONReport } from "./report/report";
 
 // GitHub organizations need GH_TOKEN and the network
@@ -304,7 +305,8 @@ describe("runCli()", () => {
 
   it("files: returns 1 when no file matches", async () => {
     expect(await runCli(["files", "nope/*.md"], io())).toBe(1);
-    expect(stderr).toContain('No markdown files match "nope/*.md"');
+    // Only the message, no stack trace
+    expect(stderr).toBe('Error: No markdown files match "nope/*.md".\n');
   });
 
   it("baseline: ignores matching links, --update-baseline writes failures and passes", async () => {
@@ -425,5 +427,13 @@ describe("runCli()", () => {
     mocks.checkReadmesInGithubOrg.mockRejectedValue(new Error("GitHub exploded"));
     expect(await runCli(["github-org", "org"], io())).toBe(1);
     expect(stderr).toContain("GitHub exploded");
+  });
+
+  it("prints only the message when the organization can't be listed", async () => {
+    mocks.checkReadmesInGithubOrg.mockRejectedValue(
+      new OrgListingError("Could not list repositories of org"),
+    );
+    expect(await runCli(["github-org", "org"], io())).toBe(1);
+    expect(stderr).toBe("Error: Could not list repositories of org\n");
   });
 });

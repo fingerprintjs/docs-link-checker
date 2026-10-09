@@ -34,7 +34,9 @@ vi.mock("./github_client", () => ({
   },
 }));
 
-import { checkLinkWithGithubApi } from "./gh_check_link";
+import { checkLinkWithGithubApi as checkLink } from "./gh_check_link";
+
+const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
 
 beforeEach(() => {
   octokit.noToken = false;
@@ -65,6 +67,7 @@ describe("checkLinkWithGithubApi() with percent-encoded paths", () => {
       owner: "fingerprintjs",
       repo: "vue",
       tag: "@fingerprint/vue@2.0.0",
+      request: { signal: expect.any(AbortSignal) },
     });
   });
 
@@ -119,7 +122,12 @@ describe("checkLinkWithGithubApi() with percent-encoded paths", () => {
     const result = await checkLinkWithGithubApi("https://github.com/o/r/commit/abc%31234");
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(octokit.repos.getCommit).toHaveBeenCalledWith({ owner: "o", repo: "r", ref: "abc1234" });
+    expect(octokit.repos.getCommit).toHaveBeenCalledWith({
+      owner: "o",
+      repo: "r",
+      ref: "abc1234",
+      request: { signal: expect.any(AbortSignal) },
+    });
   });
 
   it("does not throw on malformed percent-encoding", async () => {
@@ -143,7 +151,9 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
     const result = await checkLinkWithGithubApi(url);
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(octokit.users.getByUsername).toHaveBeenCalledWith({ username });
+    expect(octokit.users.getByUsername).toHaveBeenCalledWith({
+      username,
+    });
     expect(octokit.repos.get).not.toHaveBeenCalled();
   });
 
@@ -151,7 +161,10 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
     const result = await checkLinkWithGithubApi("https://github.com/frida/frida/");
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(octokit.repos.get).toHaveBeenCalledWith({ owner: "frida", repo: "frida" });
+    expect(octokit.repos.get).toHaveBeenCalledWith({
+      owner: "frida",
+      repo: "frida",
+    });
     expect(octokit.users.getByUsername).not.toHaveBeenCalled();
   });
 
@@ -194,7 +207,9 @@ describe("checkLinkWithGithubApi() with unknown account URLs", () => {
     const result = await checkLinkWithGithubApi("https://github.com/premium-support");
 
     expect(result).toEqual({ ok: true, status: 200 });
-    expect(octokit.users.getByUsername).toHaveBeenCalledWith({ username: "premium-support" });
+    expect(octokit.users.getByUsername).toHaveBeenCalledWith({
+      username: "premium-support",
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -300,7 +315,10 @@ describe("checkLinkWithGithubApi() with URL variants", () => {
     "https://github.com/o/r/?tab=readme-ov-file",
   ])("checks %s as the repository", async (url) => {
     expect(await checkLinkWithGithubApi(url)).toEqual({ ok: true, status: 200 });
-    expect(octokit.repos.get).toHaveBeenCalledWith({ owner: "o", repo: "r" });
+    expect(octokit.repos.get).toHaveBeenCalledWith({
+      owner: "o",
+      repo: "r",
+    });
     expect(octokit.issues.get).not.toHaveBeenCalled();
     expect(octokit.repos.getContent).not.toHaveBeenCalled();
   });

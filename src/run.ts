@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import pLimit, { type LimitFunction } from "p-limit";
 import type { Browser } from "playwright";
 import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./limiter";
+
+// How many Playwright pages (browser contexts) are open at the same time
+export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
 
 export type RunConfig = {
   hostConcurrency?: number;
@@ -10,13 +14,14 @@ type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
 
 /**
  * State of a single link-check run (a CLI command or a standalone `checkLinks`):
- * in-memory caches, metrics, the per-host limiter and the shared browser.
+ * in-memory caches, metrics, the per-host limiter, the shared browser and its page slots.
  */
 export type RunContext = {
   cache: Map<string, Promise<unknown>>;
   metrics: RunMetrics;
   hostLimiter: HostLimiter;
   browser: BrowserSlot;
+  pageSlots: LimitFunction;
 };
 
 export type RunMetrics = {
@@ -29,6 +34,7 @@ const createRunContext = (config: RunConfig = {}): RunContext => ({
   metrics: { counters: {}, phases: [] },
   hostLimiter: new HostLimiter(config.hostConcurrency ?? DEFAULT_HOST_CONCURRENCY),
   browser: {},
+  pageSlots: pLimit(PLAYWRIGHT_CONCURRENCY_LIMIT),
 });
 
 const storage = new AsyncLocalStorage<RunContext>();
@@ -46,6 +52,9 @@ export const getHostLimiter = (): HostLimiter => getContext().hostLimiter;
 
 /** Slot holding the shared browser of the current run (or the default context), see `src/browser.ts` */
 export const getBrowserSlot = (): BrowserSlot => getContext().browser;
+
+/** Limits open Playwright pages of the current run (or the default context), see `withPage` in `src/browser.ts` */
+export const getPageSlots = (): LimitFunction => getContext().pageSlots;
 
 const closeContextBrowser = async (slot: BrowserSlot): Promise<void> => {
   const promise = slot.promise;

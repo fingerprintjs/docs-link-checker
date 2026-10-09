@@ -22,6 +22,11 @@ const isMarkdownFile = (path: string) => MARKDOWN_EXTENSIONS.has(extname(path).t
 /** Relative path with `/` separators (used as the page of local links, in reports and annotations) */
 const toPosixPath = (path: string) => path.split(sep).join("/");
 
+/** No markdown file matches the patterns (probably a typo, checking nothing would pass silently) */
+export class NoMarkdownFilesError extends Error {
+  override name = "NoMarkdownFilesError";
+}
+
 /**
  * Expands glob patterns (and plain file paths) to markdown files, relative to `cwd`, sorted and deduplicated.
  * `node_modules` and `.git` are skipped, non-markdown files are ignored.
@@ -225,7 +230,7 @@ export type CollectedLinks = {
 
 /**
  * Finds markdown files matching `patterns` (relative to `cwd`) and extracts their links, grouped by kind.
- * @throws {Error} if no markdown file matches the patterns (probably a typo, checking nothing would pass silently)
+ * @throws {NoMarkdownFilesError} if no markdown file matches the patterns
  */
 export const collectLinksFromFiles = async ({
   patterns,
@@ -238,7 +243,9 @@ export const collectLinksFromFiles = async ({
 }): Promise<CollectedLinks> => {
   const allFiles = await findMarkdownFiles(patterns, cwd);
   if (allFiles.length === 0) {
-    throw new Error(`No markdown files match ${patterns.map((p) => `"${p}"`).join(", ")}.`);
+    throw new NoMarkdownFilesError(
+      `No markdown files match ${patterns.map((p) => `"${p}"`).join(", ")}.`,
+    );
   }
   const files = sampleItems({
     items: allFiles,

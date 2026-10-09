@@ -45,24 +45,53 @@ export const getApiErrorResult = (error: unknown, notFoundDetail: string): LinkC
 };
 
 /**
+ * Waits for a promise that other checks may share, until `signal` aborts. Aborting stops only this caller,
+ * the promise itself keeps running for the others.
+ */
+export const abortable = async <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) {
+    return promise;
+  }
+  signal.throwIfAborted();
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+};
+
+/**
  * Runs `request` once per `key` in a run. GitHub names (owner, repo, user) are case-insensitive, callers lowercase
  * them in the key.
+ * An already aborted `signal` fails before any request (no new request after a timeout). An abort later stops only
+ * this caller (see `abortable`), the shared request is never aborted.
  * "Not found" is a definitive answer worth caching. Other errors (rate limits, 401/403, 5xx) are retried on the next
  * call.
  */
-export const cachedRequest = <T>(
+export const cachedRequest = async <T>(
   key: unknown[],
   request: (octokit: ReturnType<typeof getMyOctokit>) => Promise<T>,
-): Promise<T> =>
+  signal?: AbortSignal,
+): Promise<T> => {
+  signal?.throwIfAborted();
   // `async`: a client that can't be created (no `GH_TOKEN`) rejects the promise instead of throwing
-  runCached(`github:${JSON.stringify(key)}`, async () => request(getMyOctokit()), {
+  const shared = runCached(`github:${JSON.stringify(key)}`, async () => request(getMyOctokit()), {
     cacheError: isNotFoundApiError,
     // Requests themselves are counted by the Octokit client (see `countRequests`)
     onHit: () => incrementMetric("githubCacheHits"),
   });
+  return abortable(shared, signal);
+};
 
 /** `GET /repos/{owner}/{repo}`, cached per repository */
-export const getRepoCached = (owner: string, repo: string) =>
-  cachedRequest(["repo", owner.toLowerCase(), repo.toLowerCase()], (octokit) =>
-    octokit.repos.get({ owner, repo }),
+export const getRepoCached = (owner: string, repo: string, signal?: AbortSignal) =>
+  cachedRequest(
+    ["repo", owner.toLowerCase(), repo.toLowerCase()],
+    (octokit) => octokit.repos.get({ owner, repo }),
+    signal,
   );

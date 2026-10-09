@@ -10,7 +10,11 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
-import { checkReadmesInGithubOrg, getGithubOrgSiteName } from "./github/gh_get_links";
+import {
+  checkReadmesInGithubOrg,
+  getGithubOrgSiteName,
+  OrgListingError,
+} from "./github/gh_get_links";
 import {
   describeResult,
   getFileAnnotations,
@@ -19,7 +23,12 @@ import {
   writeJobSummary,
 } from "./github_actions";
 import { parseHostConcurrency } from "./limiter";
-import { checkLocalFiles, collectLinksFromFiles, LOCAL_FILES_SITE_NAME } from "./local_files";
+import {
+  checkLocalFiles,
+  collectLinksFromFiles,
+  LOCAL_FILES_SITE_NAME,
+  NoMarkdownFilesError,
+} from "./local_files";
 import {
   DEFAULT_OUTPUT_DIR,
   getJSONReport,
@@ -521,9 +530,14 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
       try {
         exitCode = await runCheckCommand(command, context);
       } catch (error) {
-        context.stderr(
-          `Error: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-        );
+        // Expected failures are explained by the message, a stack trace would only add noise
+        let text = String(error);
+        if (error instanceof NoMarkdownFilesError || error instanceof OrgListingError) {
+          text = error.message;
+        } else if (error instanceof Error) {
+          text = error.stack ?? error.message;
+        }
+        context.stderr(`Error: ${text}\n`);
         exitCode = 1;
       }
     });

@@ -1,13 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { octokit } = vi.hoisted(() => ({
-  octokit: { repos: { get: vi.fn(), getContent: vi.fn() } },
+  octokit: {
+    repos: { get: vi.fn(), getContent: vi.fn() },
+    git: { listMatchingRefs: vi.fn() },
+    paginate: vi.fn(),
+  },
 }));
 
 vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 
+import { withTimeout } from "../limiter";
 import { getRunContext, withRun } from "../run";
-import { checkLinkWithGithubApi } from "./gh_check_link";
+import { checkLinkWithGithubApi as checkLink } from "./gh_check_link";
+
+const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
 
 const delayed = <T>(value: T, ms = 10) =>
   new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
@@ -123,5 +130,48 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
       ]);
       expect(getRunContext()!.metrics.counters).toMatchObject({ githubCacheHits: 1 });
     });
+  });
+
+  it("sends no more requests once the check timed out", async () => {
+    octokit.repos.getContent
+      .mockReset()
+      .mockImplementation(
+        () =>
+          new Promise((_, reject) =>
+            setTimeout(() => reject(Object.assign(new Error("Not Found"), { status: 404 })), 20),
+          ),
+      );
+    octokit.paginate.mockReset().mockResolvedValue([]);
+
+    // `feature/x` can be a branch: after "not found" for `feature`, the check would list branches and tags
+    const check = withTimeout(
+      (signal) => checkLink("https://github.com/owner/repo/blob/feature/x/README.md", signal),
+      5,
+      "timed out",
+    );
+    await expect(check).rejects.toThrow("timed out");
+    await delayed(undefined, 40);
+
+    expect(octokit.paginate).not.toHaveBeenCalled();
+  });
+
+  it("a timed-out check does not cancel the request it shares with other checks", async () => {
+    // Like a real request: answers after 20 ms, or fails as soon as a signal it was given aborts
+    octokit.repos.get.mockReset().mockImplementation(
+      ({ request }: { request?: { signal?: AbortSignal } }) =>
+        new Promise((resolve, reject) => {
+          setTimeout(() => resolve({ data: {} }), 20);
+          request?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+
+    await withRun({}, async () => {
+      const first = withTimeout((signal) => checkLink(REPO_URL, signal), 5, "timed out");
+      const second = checkLinkWithGithubApi(REPO_URL);
+
+      await expect(first).rejects.toThrow("timed out");
+      expect(await second).toEqual({ ok: true, status: 200 });
+    });
+    expect(octokit.repos.get).toHaveBeenCalledTimes(1);
   });
 });
