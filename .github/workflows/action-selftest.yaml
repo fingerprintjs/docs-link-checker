@@ -32,6 +32,8 @@ jobs:
         with:
           files: ${{ env.FIXTURE_FILES }}
           baseline: ${{ env.FIXTURE_BASELINE }}
+          # Artifact names must be unique in a run, only the next step uploads its report
+          artifact-name: ""
 
       - name: Check the fixture without the baseline (reports broken links, doesn't fail)
         id: without-baseline
@@ -39,6 +41,7 @@ jobs:
         with:
           files: ${{ env.FIXTURE_FILES }}
           fail-on-broken: false
+          artifact-name: action-selftest-report
 
       - name: Check the fixture with fail-on-broken (fails)
         id: failing
@@ -48,6 +51,7 @@ jobs:
           files: ${{ env.FIXTURE_FILES }}
           # Already annotated by the previous step
           annotations: false
+          artifact-name: ""
 
       - name: Assert outputs
         env:
@@ -55,6 +59,7 @@ jobs:
           WITHOUT_BASELINE: ${{ steps.without-baseline.outputs.links-to-fix }}
           REPORT_PATH: ${{ steps.without-baseline.outputs.report-path }}
           REPORT_HTML_PATH: ${{ steps.without-baseline.outputs.report-html-path }}
+          REPORT_URL: ${{ steps.without-baseline.outputs.report-url }}
           FAILING_OUTCOME: ${{ steps.failing.outcome }}
         run: |
           failed=0
@@ -63,18 +68,10 @@ jobs:
           [ "$WITHOUT_BASELINE" = "$EXPECTED_LINKS_TO_FIX" ] || fail "Without the baseline: expected $EXPECTED_LINKS_TO_FIX links to fix, got '$WITHOUT_BASELINE'."
           [ -f "$REPORT_PATH" ] || fail "JSON report not found at '$REPORT_PATH'."
           [ -f "$REPORT_HTML_PATH" ] || fail "HTML report not found at '$REPORT_HTML_PATH'."
+          case "$REPORT_URL" in https://*) ;; *) fail "Expected the URL of the uploaded report, got '$REPORT_URL'." ;; esac
           [ "$FAILING_OUTCOME" = "failure" ] || fail "With fail-on-broken: expected the step to fail, got '$FAILING_OUTCOME'."
           if [ -f "$REPORT_PATH" ]; then
             ignored=$(node -p "require(process.argv[1]).summary.ignored" "$REPORT_PATH")
             [ "$ignored" = "0" ] || fail "Without the baseline: expected 0 ignored links, got '$ignored'."
           fi
           exit "$failed"
-
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: action-selftest-report
-          path: ${{ steps.without-baseline.outputs.report-html-path }}
-          retention-days: 7
-          if-no-files-found: warn

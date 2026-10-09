@@ -25,13 +25,9 @@ jobs:
             README.md
             docs/**/*.md
           baseline: linkcheck.baseline.json
-      - name: Upload report
-        if: ${{ !cancelled() && steps.links.outputs.report-html-path }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: link-check-report
-          path: ${{ steps.links.outputs.report-html-path }}
 ```
+
+The job summary lists the links to fix, grouped by target, and links to the uploaded reports (HTML and JSON).
 
 | Input            | Default                          | Description                                                                                          |
 | ---------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -42,14 +38,18 @@ jobs:
 | `sample-rate`    | `1`                              | Check only a deterministic share of the files.                                                       |
 | `annotations`    | `true`                           | Report links to fix as annotations on the files.                                                     |
 | `output-dir`     | `$RUNNER_TEMP/docs-link-checker` | Where to save the JSON and HTML reports.                                                             |
+| `compare`        |                                  | Previous JSON report. The summary adds "+N new, M fixed since previous report".                      |
+| `artifact-name`  | `link-check-report`              | Upload the reports as an artifact with this name and link it in the summary. Empty: no upload.       |
 
 | Output             | Description                                         |
 | ------------------ | --------------------------------------------------- |
 | `links-to-fix`     | Number of links to fix, not counting ignored links. |
 | `report-path`      | Path of the JSON report.                            |
 | `report-html-path` | Path of the HTML report.                            |
+| `report-url`       | URL of the uploaded artifact, empty without upload. |
 
 - The action sets up Node.js (the version in this repository's `.nvmrc`) for the rest of the job, and installs its own dependencies with its pinned pnpm through `npx` (the job's own pnpm setup is not changed).
+- Artifact names must be unique in a workflow run: set `artifact-name` when the action runs more than once, or `""` to upload nothing.
 - Playwright's Chromium is only installed (and cached) when the files contain absolute links.
 - To create a baseline for an existing repository, install the [CLI](cli.md) and run it from that repository's root: `docs-link-checker files "**/*.md" --update-baseline`.
 
