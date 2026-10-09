@@ -54,6 +54,26 @@ export const problemLabel = (link: LinkWithResult): string => {
   }
 };
 
+export type ProblemKind = "ok" | "broken" | "anchor" | "network" | "check";
+
+/** Filter category of a link, derived from its label so every output counts the same way */
+export const problemKind = (link: LinkWithResult): ProblemKind => {
+  const label = problemLabel(link);
+  if (label === "OK") return "ok";
+  if (label === "Anchor not found" || label === "Line out of range") return "anchor";
+  if (label === "Network error") return "network";
+  return label.startsWith("Could not check") ? "check" : "broken";
+};
+
+/** How many of the links are in each category */
+export const countByKind = (links: LinkWithResult[]): Record<ProblemKind, number> => {
+  const counts = { ok: 0, broken: 0, anchor: 0, network: 0, check: 0 };
+  for (const link of links) {
+    counts[problemKind(link)]++;
+  }
+  return counts;
+};
+
 const MAX_REASON_LENGTH = 100;
 
 /** Local and GitHub messages in plain words, the label already says what failed */

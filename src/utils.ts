@@ -91,6 +91,8 @@ export const parallelProcess = async <T, R>({
     }
 
     if (errors.length > 0) {
+      // Else the error is appended to the live progress line
+      terminal.clear();
       console.error(`Errors processing items: ${errors.length}\n${formatConcurrentErrors(errors)}`);
     }
     return { results, errors };

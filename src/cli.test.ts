@@ -481,7 +481,7 @@ describe("runCli()", () => {
     const output = plain(stdout);
     // One target on two pages, site origin dropped, pages with their link text
     expect(output).toContain(
-      `HTTP 404  /keep/missing  on 2 pages\n          ↳ /page  "a"\n          ↳ /page2  "same target"\n`,
+      `HTTP 404  /keep/missing  on 2 pages  Not Found\n          ↳ /page  "a"\n          ↳ /page2  "same target"\n`,
     );
     expect(output).toContain("✗ 2 links to fix (2 broken)");
     expect(output).toContain("3 checked · 0 ignored by baseline · 0 could not check");

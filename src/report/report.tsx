@@ -11,12 +11,14 @@ import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
 import { diffLinksToFix, type PreviousReport } from "./compare";
 import {
+  countByKind,
   displayUrl,
   encodePath,
   formatLocation,
   groupByTarget,
   type IgnoredLink,
   isHttpUrl,
+  problemKind,
   problemLabel,
   shortReason,
   type TargetGroup,
@@ -158,17 +160,6 @@ const getLocalLinkUrl = (
   }
 };
 
-const KIND_BY_ERROR = {
-  "broken link": "broken",
-  "hash not found": "anchor",
-  "unexpected error": "network",
-  "could not check": "check",
-} as const;
-
-/** Filter category of a link: the `data-kind` of its row, matched by the stat buttons in the header */
-const kindOf = (link: LinkWithResult): string =>
-  link.result.ok ? "ok" : KIND_BY_ERROR[link.result.error];
-
 /** Link text for display: site origin dropped, the #hash highlighted */
 const LinkLabel = ({ href, siteOrigin }: { href: string; siteOrigin?: string }) => {
   const label = displayUrl(href, siteOrigin);
@@ -251,7 +242,7 @@ const Reason = ({ link, siteOrigin }: ViewProps & { link: LinkWithResult | Ignor
 };
 
 const Problem = ({ link }: { link: LinkWithResult }) => (
-  <span class={kindOf(link) === "check" ? "warn" : "bad"}>{problemLabel(link)}</span>
+  <span class={problemKind(link) === "check" ? "warn" : "bad"}>{problemLabel(link)}</span>
 );
 
 /** A page of a link: `/path "link text"`, or `file:line` for local files */
@@ -314,7 +305,7 @@ const GroupRow = ({
   ignored,
   ...view
 }: ViewProps & { group: TargetGroup<IgnoredLink>; ignored: boolean }) => (
-  <tr data-row="" data-kind={kindOf(group.link)}>
+  <tr data-row="" data-kind={problemKind(group.link)}>
     <td class="pb">
       <Problem link={group.link} />
     </td>
@@ -398,7 +389,7 @@ const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }
               </td>
             </tr>
             {pageLinks.map((link) => (
-              <tr data-row="" data-kind={kindOf(link)} data-page={page}>
+              <tr data-row="" data-kind={problemKind(link)} data-page={page}>
                 {hasLines ? <td class="mono muted">{link.line ? `:${link.line}` : ""}</td> : null}
                 <td class="pb">
                   <Problem link={link} />
@@ -434,11 +425,12 @@ const Sep = () => <span class="sep">·</span>;
 
 const Stats = ({ report }: { report: LinkCheckReport }) => {
   const { summary } = report;
+  const counts = countByKind([...getLinksToFix(report), ...report.couldNotCheck]);
   const filters = [
-    ["broken", summary.brokenLinks, "broken"],
-    ["anchor", summary.hashNotFound, "anchor"],
-    ["network", summary.networkErrors, "network error"],
-    ["check", summary.couldNotCheck, "could not check"],
+    ["broken", counts.broken, "broken"],
+    ["anchor", counts.anchor, "anchor"],
+    ["network", counts.network, "network error"],
+    ["check", counts.check, "could not check"],
   ] as const;
   return (
     <p class="stats">

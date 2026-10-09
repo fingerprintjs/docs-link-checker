@@ -1,4 +1,6 @@
+import { stripVTControlCharacters } from "node:util";
 import {
+  countByKind,
   displayUrl,
   formatLocation,
   groupByTarget,
@@ -21,13 +23,20 @@ import { compareStrings } from "./utils";
 const MAX_PAGES_PER_TARGET = 5;
 const MAX_TEXT_LENGTH = 60;
 
+/** Remote text (link text, URLs, reasons) on one line, without control characters that could redraw the terminal */
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+const safe = (text: string): string =>
+  stripVTControlCharacters(text).replace(/\s+/g, " ").replace(CONTROL_CHARS, "").trim();
+
 const pad = (text: string, width: number) => text.padEnd(width);
 
 const colorOf = (label: string) =>
   label === "Anchor not found" || label === "Line out of range" ? "yellow" : "red";
 
 /** The href with its `#hash` highlighted */
-const paintHref = (paint: Paint, href: string) => {
+const paintHref = (paint: Paint, rawHref: string) => {
+  const href = safe(rawHref);
   const hashStart = href.indexOf("#");
   return hashStart < 0 ? href : href.slice(0, hashStart) + paint("yellow", href.slice(hashStart));
 };
@@ -35,9 +44,10 @@ const paintHref = (paint: Paint, href: string) => {
 /** Dim `reason · redirects to X`, empty if there is neither */
 const paintNote = (paint: Paint, link: IgnoredLink, reason = "") => {
   const { redirectedTo } = link.result;
-  const parts = [reason, redirectedTo && `redirects to ${displayUrl(redirectedTo)}`].filter(
-    Boolean,
-  );
+  const parts = [
+    safe(reason),
+    redirectedTo && `redirects to ${safe(displayUrl(redirectedTo))}`,
+  ].filter(Boolean);
   return parts.length > 0 ? paint("dim", parts.join(" · ")) : "";
 };
 
@@ -57,13 +67,13 @@ export const formatFileProblems = (report: LinkCheckReport, paint: Paint): strin
   return [...files.entries()]
     .toSorted(([a], [b]) => compareStrings(a, b))
     .flatMap(([, fileLinks]) => {
-      const locationWidth = Math.max(...fileLinks.map((link) => formatLocation(link).length));
+      const locationWidth = Math.max(...fileLinks.map((link) => safe(formatLocation(link)).length));
       const rows = fileLinks
         .toSorted((a, b) => (a.line ?? 0) - (b.line ?? 0))
         .map((link) => {
           const label = problemLabel(link);
           return [
-            paint("dim", pad(formatLocation(link), locationWidth)),
+            paint("dim", pad(safe(formatLocation(link)), locationWidth)),
             paint(colorOf(label), pad(label, labelWidth)),
             paintHref(paint, displayUrl(link.href)),
             paintNote(paint, link, shortReason(link)),
@@ -90,19 +100,20 @@ export const formatTargetGroups = (
         paint(colorOf(label), pad(label, labelWidth)),
         paintHref(paint, displayUrl(link.href, siteOrigin)),
         paint("dim", `on ${plural(pages.length, "page")}`),
-        paintNote(paint, link),
+        paintNote(paint, link, shortReason(link)),
       ]
         .filter(Boolean)
         .join("  ");
       const shown = pages.slice(0, MAX_PAGES_PER_TARGET).map((page) => {
+        const pageText = safe(page.text);
         const text =
-          page.text.length > MAX_TEXT_LENGTH
-            ? `${page.text.slice(0, MAX_TEXT_LENGTH - 1)}…`
-            : page.text;
+          pageText.length > MAX_TEXT_LENGTH
+            ? `${pageText.slice(0, MAX_TEXT_LENGTH - 1)}…`
+            : pageText;
         const quoted = text ? `  "${text}"` : "";
         return paint(
           "dim",
-          `${" ".repeat(labelWidth + 2)}↳ ${displayUrl(page.page, siteOrigin)}${quoted}`,
+          `${" ".repeat(labelWidth + 2)}↳ ${safe(displayUrl(page.page, siteOrigin))}${quoted}`,
         );
       });
       const hidden = pages.length - shown.length;
@@ -135,11 +146,11 @@ export const formatVerdict = (
 ): string[] => {
   const { summary, diff } = report;
   const toFix = summary.totalLinksToFix;
+  const byKind = countByKind(getLinksToFix(report));
   const parts = [
-    summary.brokenLinks > 0 && `${summary.brokenLinks} broken`,
-    summary.hashNotFound > 0 &&
-      `${summary.hashNotFound} missing ${summary.hashNotFound === 1 ? "anchor" : "anchors"}`,
-    summary.networkErrors > 0 && `${summary.networkErrors} network errors`,
+    byKind.broken > 0 && `${byKind.broken} broken`,
+    byKind.anchor > 0 && `${byKind.anchor} missing ${byKind.anchor === 1 ? "anchor" : "anchors"}`,
+    byKind.network > 0 && `${byKind.network} network errors`,
   ].filter(Boolean);
   const headline =
     toFix > 0

@@ -1,6 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  countByKind,
   displayUrl,
   formatLocation,
   groupByTarget,
@@ -87,9 +88,11 @@ const getSiteOrigin = (siteName: string): string | undefined => {
 
 const statsLine = (report: LinkCheckReport): string => {
   const { summary, diff } = report;
+  const counts = countByKind(getLinksToFix(report));
   const parts = [
-    `**${summary.brokenLinks + summary.networkErrors}** broken`,
-    `**${summary.hashNotFound}** missing anchors`,
+    `**${counts.broken}** broken`,
+    `**${counts.anchor}** missing anchors`,
+    ...(counts.network > 0 ? [`**${counts.network}** network errors`] : []),
     `${summary.couldNotCheck} could not check`,
     `${summary.ignored} ignored`,
     `${summary.linksChecked.toLocaleString("en-US")} checked`,

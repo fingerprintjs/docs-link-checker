@@ -72,6 +72,13 @@ describe("renderJobSummary()", () => {
     expect(renderJobSummary(report([]))).toContain("## ✅ local files: all links OK");
   });
 
+  it("counts a link that failed without status as a network error, not broken", () => {
+    const markdown = renderJobSummary(
+      report([broken("https://down.example.com", { result: { ok: false, error: "broken link" } })]),
+    );
+    expect(markdown).toContain("**0** broken · **0** missing anchors · **1** network errors ·");
+  });
+
   it("adds the trend when the report has a diff", () => {
     const current = report([broken("a.md")]);
     expect(renderJobSummary(current)).not.toContain("since previous report");

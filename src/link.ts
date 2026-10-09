@@ -204,13 +204,14 @@ const checkLinksInRun = async ({
   // Filled in by the two passes below, one entry per unique href
   const results = new Map<string, LinkCheckResult>();
   const toRecheck: string[] = [];
+  let failing = 0;
 
   const { errors: fetchErrors } = await timePhase("Check links (fetch, GitHub API)", () =>
     parallelProcess({
       items: interleaveByHost(uniqueHrefs.map((href) => ({ href }))),
       concurrencyLimit: fetchConcurrencyLimit,
       label: "Checking URLs",
-      failing: () => [...results.values()].filter((result) => !result.ok).length,
+      failing: () => failing,
       // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
       processFn: async ({ href }) => {
         const { result, method } = await checkLinkFirstPass(href, pageCache);
@@ -219,6 +220,7 @@ const checkLinksInRun = async ({
           toRecheck.push(href);
         } else {
           results.set(href, result);
+          if (!result.ok) failing++;
         }
       },
     }),
