@@ -2,7 +2,8 @@ import { fetchWithHostLimit } from "../http";
 import { checkLinks } from "../link";
 import { extractMarkdownLinks } from "../markdown";
 import { filterOutIrrelevantLinks } from "../page";
-import { timePhase } from "../run";
+import { getTerminal, timePhase } from "../run";
+import { plural } from "../terminal";
 import type { Link, LinkWithResult } from "../types";
 import { parallelProcess, sampleItems } from "../utils";
 import { getErrorMessage } from "../utils/errors";
@@ -79,10 +80,11 @@ export async function getReadmesFromOrg(orgName: string, sampleRate?: number): P
       { cause: error },
     );
   }
-  console.log(`\nFound ${repos.length} public repositories in ${orgName} organization.`);
+  getTerminal().verbose(`Found ${repos.length} public repositories in ${orgName} organization.`);
 
   const { results, errors } = await parallelProcess({
     items: repos,
+    label: "Listing README files",
     processFn: async (repo) => {
       return findReadmeFilesInRepo(repo.owner.login, repo.name);
     },
@@ -94,8 +96,8 @@ export async function getReadmesFromOrg(orgName: string, sampleRate?: number): P
     );
   }
   const readmes = results.flat();
-  console.log(
-    `\nFound ${readmes.length} public Readmes files in ${repos.length} repositories of ${orgName} organization.`,
+  getTerminal().verbose(
+    `Found ${readmes.length} public README files in ${repos.length} repositories of ${orgName} organization.`,
   );
   return sampleItems({
     items: readmes,
@@ -125,9 +127,9 @@ export const resolveReadmeHref = (href: string, page: string): string => {
 
 /** Downloads README files (limited per host) and extracts their links */
 export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
-  console.log(`\nRetrieving links from ${files.length} files...`);
   const { results } = await parallelProcess({
     items: files,
+    label: "Reading README files",
     processFn: async (file) => {
       const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
         res.ok ? res.text() : "",
@@ -144,7 +146,7 @@ export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
   });
 
   const links = results.flat();
-  console.log(`Extracted ${links.length} links from ${files.length} files.`);
+  getTerminal().done(`Found ${plural(links.length, "link")} in ${plural(files.length, "file")}`);
   return links;
 }
 

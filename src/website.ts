@@ -1,7 +1,8 @@
 import { checkLinks } from "./link";
 import { getLinksFromPages } from "./page";
-import { timePhase } from "./run";
+import { getTerminal, timePhase } from "./run";
 import { getWebsitePages } from "./sitemap";
+import { plural } from "./terminal";
 import type { Link, LinkWithResult } from "./types";
 import { sampleItems } from "./utils";
 
@@ -38,7 +39,7 @@ export const checkWebsite = async ({
   const { links } = await timePhase("Extract links", () =>
     getLinksFromPages({ pages, linkFilter }),
   );
-  console.log(`Fetched ${links.length} links.`);
+  getTerminal().done(`Found ${plural(links.length, "link")} in ${plural(pages.length, "page")}`);
 
   return checkLinks({ links });
 };

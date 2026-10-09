@@ -1,9 +1,8 @@
 import pLimit from "p-limit";
 import type { ConcurrentError } from "./limiter";
+import { getTerminal } from "./run";
+import { formatDuration } from "./terminal";
 import { getErrorMessage } from "./utils/errors";
-
-// Long runs print progress, also in CI where an interactive progress bar would spam the log
-const PROGRESS_LOG_INTERVAL = 30000;
 
 /**
  * Human-readable description of an item that failed processing:
@@ -39,10 +38,14 @@ type ParallelProcessArgs<T, R> = {
   items: T[];
   processFn: (item: T) => Promise<R>;
   concurrencyLimit?: number;
+  /** Shows progress of the batch under this name, no progress without it */
+  label?: string;
+  /** Number of items that already failed (shown next to the progress) */
+  failing?: () => number;
 };
 
 /**
- * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent calls, progress logs and error
+ * Runs `processFn` over `items` with at most `concurrencyLimit` concurrent calls, progress and error
  * logging. A throwing `processFn` does not stop the other items.
  * @returns successful results and errors, both in item order
  */
@@ -50,13 +53,12 @@ export const parallelProcess = async <T, R>({
   items,
   processFn,
   concurrencyLimit = CONCURRENCY_LIMIT,
+  label,
+  failing,
 }: ParallelProcessArgs<T, R>) => {
-  const startTime = Date.now();
+  const terminal = getTerminal();
+  const startTime = performance.now();
   let done = 0;
-  const progressTimer = setInterval(
-    () => console.log(`Progress: ${done}/${items.length}`),
-    PROGRESS_LOG_INTERVAL,
-  );
   try {
     const limit = pLimit(concurrencyLimit);
     const settled = await Promise.allSettled(
@@ -66,6 +68,9 @@ export const parallelProcess = async <T, R>({
             return await processFn(item);
           } finally {
             done++;
+            if (label) {
+              terminal.progress(label, done, items.length, failing?.());
+            }
           }
         }),
       ),
@@ -86,8 +91,9 @@ export const parallelProcess = async <T, R>({
     }
     return { results, errors };
   } finally {
-    clearInterval(progressTimer);
-    console.log(`Time taken: ${Date.now() - startTime}ms`);
+    terminal.verbose(
+      `${label ?? "Batch"}: ${items.length} items in ${formatDuration(performance.now() - startTime)}`,
+    );
   }
 };
 
@@ -140,7 +146,12 @@ export const sampleItems = <T>({
       sample.push(item);
     }
   }
-  console.log(`Sampling ${sample.length} of ${items.length} ${label} (sample rate ${rate}).`);
+  getTerminal().line(
+    getTerminal().paint(
+      "dim",
+      `Sampling ${sample.length} of ${items.length} ${label} (sample rate ${rate})`,
+    ),
+  );
   return sample;
 };
 

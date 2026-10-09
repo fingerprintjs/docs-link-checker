@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { fetchWithHostLimit, USER_AGENT } from "./http";
+import { getTerminal } from "./run";
 
 // How deep nested sitemap indexes are followed (sitemap index -> sitemap index -> ... -> sitemap)
 export const MAX_SITEMAP_DEPTH = 3;
@@ -29,7 +30,7 @@ export const getWebsitePages = async (url: string) => {
     const sitemapUrl = `${url}/${path}`;
     const { status, data } = await fetchSitemap(sitemapUrl);
     if (isSuccess(status)) {
-      console.log(`${path} exists, parsing pages from it`);
+      getTerminal().verbose(`${path} exists, parsing pages from it`);
       return [...new Set(await parseSitemap(sitemapUrl, data, 0, new Set([sitemapUrl])))];
     }
   }
@@ -61,7 +62,7 @@ const parseSitemap = async (
       (nested) => !visited.has(nested),
     );
     for (const nested of nestedUrls) visited.add(nested);
-    console.log(`${sitemapUrl} is a sitemap index with ${nestedUrls.length} sitemaps`);
+    getTerminal().verbose(`${sitemapUrl} is a sitemap index with ${nestedUrls.length} sitemaps`);
     const nestedPages = await Promise.all(
       nestedUrls.map(async (nested) => {
         const { status, data } = await fetchSitemap(nested);
@@ -76,7 +77,7 @@ const parseSitemap = async (
   }
 
   const pages = [...new Set(getLocations($, "url"))];
-  console.log(`Retrieved ${pages.length} pages from ${sitemapUrl} sitemap.`);
+  getTerminal().verbose(`Retrieved ${pages.length} pages from ${sitemapUrl} sitemap.`);
   return pages;
 };
 

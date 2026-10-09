@@ -1,5 +1,5 @@
 import { Console } from "node:console";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 import {
   type Baseline,
@@ -10,6 +10,7 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
+import { formatFileProblems, formatTargetGroups, formatVerdict } from "./cli_report";
 import {
   checkReadmesInGithubOrg,
   getGithubOrgSiteName,
@@ -29,7 +30,7 @@ import {
   NoMarkdownFilesError,
 } from "./local_files";
 import { loadPreviousReport } from "./report/compare";
-import { describeResult, formatLocation } from "./report/format";
+import { formatLocation } from "./report/format";
 import {
   DEFAULT_OUTPUT_DIR,
   getJSONReport,
@@ -39,6 +40,7 @@ import {
   saveReport,
 } from "./report/report";
 import { type RunDeps, withRun } from "./run";
+import { createTerminal, type Terminal } from "./terminal";
 import type { LinkWithResult } from "./types";
 import { getSampleRate } from "./utils";
 import { getErrorMessage } from "./utils/errors";
@@ -56,6 +58,8 @@ export type CommonOptions = {
   pruneBaseline: boolean;
   outputDir: string;
   json: boolean;
+  /** Also show run metrics, timings and request details */
+  verbose: boolean;
   hostConcurrency: number;
 };
 
@@ -71,7 +75,7 @@ type CheckCommand =
       command: "files";
       patterns: string[];
       dryRun: boolean;
-      /** Print GitHub annotations (in GitHub Actions) or `file:line` problems */
+      /** Print GitHub annotations (in GitHub Actions) or the list of problems */
       annotations: boolean;
       options: CommonOptions;
     };
@@ -187,6 +191,7 @@ const buildProgram = (
         DEFAULT_OUTPUT_DIR,
       )
       .option("--json", "Print the JSON report to stdout (logs go to stderr)", false)
+      .option("--verbose", "Also show run metrics, timings and request details", false)
       .option(
         "--host-concurrency <n>",
         "Max concurrent requests per host",
@@ -271,7 +276,7 @@ const buildProgram = (
       .option("--dry-run", "Only list the links found, don't check anything", false)
       .option(
         "--no-annotations",
-        "Don't print links to fix as GitHub annotations (or file:line lines locally)",
+        "Don't print links to fix as GitHub annotations (or as a list locally)",
       ),
   )
     .addHelpText(
@@ -307,14 +312,19 @@ Examples:
 type Output = (text: string) => void;
 
 type RunContext = {
+  /** The arguments of the command, shown in the header */
+  argv: string[];
   env: Env;
   cwd: string;
+  /** Redraw the progress line, defaults to whether the output stream is a TTY */
+  tty?: boolean;
   stdout: Output;
   stderr: Output;
   deps?: RunDeps;
 };
 
 type CliIO = {
+  tty?: boolean;
   env?: Env;
   cwd?: string;
   stdout?: Output;
@@ -354,15 +364,16 @@ const checkCommandLinks = async (
 
 /**
  * Runs the check as a single run (see `withRun`) and does what all commands share:
- * builds and saves the report, logs the summary and the duration.
+ * builds and saves the report.
  */
 const runCommand = (
   command: CheckCommand,
   baseline: Baseline,
+  terminal: Terminal,
   { cwd, env, deps }: RunContext,
 ): Promise<LinkCheckReport> => {
   const { outputDir, hostConcurrency } = command.options;
-  return withRun({ hostConcurrency, deps }, async () => {
+  return withRun({ hostConcurrency, deps, terminal }, async () => {
     const startTime = performance.now();
     const { results, siteName } = await checkCommandLinks(command, cwd);
     const durationMs = Math.round(performance.now() - startTime);
@@ -381,20 +392,9 @@ const runCommand = (
     saveReport(report, outputDir, {
       sourceBaseUrl: command.command === "files" ? getGithubBlobBaseUrl(env, cwd) : undefined,
     });
-    console.log(report.summary);
-    console.log(`Finished in ${durationMs / 1000} seconds.`);
     return report;
   });
 };
-
-/** Local, compiler-like list of links to fix: `docs/a.md:7: broken link: docs/missing.md (File not found...)` */
-export const formatFileProblems = (report: LinkCheckReport): string[] =>
-  getLinksToFix(report).map((link) => {
-    // One line per problem: collapse multi-line error details (HTTP bodies, Playwright messages)
-    const result = describeResult(link).replace(/\s+/g, " ");
-    const shortResult = result.length > 200 ? `${result.slice(0, 199)}…` : result;
-    return `${formatLocation(link)}: ${link.href}: ${shortResult}`;
-  });
 
 /** `--dry-run` of the files command: lists the links found, checks nothing */
 const runDryRun = async (
@@ -431,22 +431,41 @@ const runDryRun = async (
 };
 
 /** Exit code for the links to fix: 1 only when failing on broken links and not updating the baseline */
-const getExitCode = (linksToFix: number, options: CommonOptions): number => {
-  if (linksToFix === 0) {
-    return 0;
+const getExitCode = (linksToFix: number, options: CommonOptions): number =>
+  linksToFix > 0 && options.failOnBroken && !options.updateBaseline ? 1 : 0;
+
+/** Path relative to `cwd`, or absolute when it is outside of it */
+const displayPath = (cwd: string, path: string) => {
+  const absolute = resolve(cwd, path);
+  const relativePath = relative(cwd, absolute);
+  return relativePath.startsWith("..") ? absolute : relativePath;
+};
+
+/** Command and arguments as typed, globs and spaces quoted */
+const formatArgs = (argv: string[]) =>
+  argv.map((arg) => (/[\s*?{}[\]()$!'"]/.test(arg) ? JSON.stringify(arg) : arg)).join(" ");
+
+/** The links to fix: the list of problems for `files`, grouped by target for the other commands */
+const printLinksToFix = (
+  command: CheckCommand,
+  report: LinkCheckReport,
+  { line, paint }: Terminal,
+  env: Env,
+) => {
+  let lines: string[] = [];
+  if (command.command === "site" || command.command === "github-org") {
+    const siteOrigin = command.command === "site" ? new URL(command.url).origin : undefined;
+    lines = formatTargetGroups(report, paint, siteOrigin);
+  } else if (command.annotations) {
+    // Workflow commands (annotations) are read from the log of the run, the list is for people at a terminal
+    lines =
+      env.GITHUB_ACTIONS === "true"
+        ? getFileAnnotations(report)
+        : formatFileProblems(report, paint);
   }
-  if (options.updateBaseline) {
-    console.warn(`Found ${linksToFix} links to fix, added to the baseline.`);
-    return 0;
+  for (const text of lines) {
+    line(text);
   }
-  if (options.failOnBroken) {
-    console.error(`Found ${linksToFix} links to fix.`);
-    return 1;
-  }
-  console.warn(
-    `Found ${linksToFix} links to fix (not failing because of --no-fail-on-broken or FAIL_ON_BROKEN_LINKS=false).`,
-  );
-  return 0;
 };
 
 const runCheckCommand = async (command: CheckCommand, context: RunContext): Promise<number> => {
@@ -466,7 +485,6 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
       }
       throw error;
     }
-    console.log(`Using baseline ${options.baseline} (${baseline.entries.length} entries).`);
   }
 
   if (command.command === "files" && command.dryRun) {
@@ -474,19 +492,27 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
     return 0;
   }
 
-  const report = await runCommand(command, baseline, context);
+  // With --json, stdout only gets the report
+  const stream = options.json ? process.stderr : process.stdout;
+  const terminal = createTerminal({
+    write: options.json ? stderr : stdout,
+    stream,
+    tty: context.tty,
+    verbose: options.verbose,
+  });
+  const { paint } = terminal;
+  terminal.line(`${paint("bold", BIN)} ${paint("dim", formatArgs(context.argv))}`);
+  if (baselinePath) {
+    terminal.line(paint("dim", `Baseline ${options.baseline}, ${baseline.entries.length} entries`));
+  }
+  terminal.line();
+
+  const report = await runCommand(command, baseline, terminal, context);
   const reportPaths = getReportPaths(report.siteName, options.outputDir);
   const linksToFix = report.summary.totalLinksToFix;
 
-  if (command.command === "files" && command.annotations) {
-    // Workflow commands (annotations) are read from stdout, keep them off it only in --json mode
-    const annotationOut = options.json ? stderr : stdout;
-    const problems =
-      env.GITHUB_ACTIONS === "true" ? getFileAnnotations(report) : formatFileProblems(report);
-    for (const line of problems) {
-      annotationOut(`${line}\n`);
-    }
-  }
+  terminal.line();
+  printLinksToFix(command, report, terminal, env);
   writeJobSummary(report, { reportPaths }, env.GITHUB_STEP_SUMMARY);
   writeGithubOutputs(
     {
@@ -506,16 +532,28 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
       prune: options.pruneBaseline,
     });
     writeBaseline(baselinePath, file);
-    console.log(
-      `Updated baseline ${options.baseline}: ${file.ignore.length} entries (was ${baseline.entries.length}).`,
+    terminal.line(
+      paint(
+        "dim",
+        `Updated baseline ${options.baseline}: ${file.ignore.length} entries (was ${baseline.entries.length})`,
+      ),
     );
+  }
+
+  const exitCode = getExitCode(linksToFix, options);
+  for (const line of formatVerdict(report, paint, {
+    htmlPath: displayPath(context.cwd, reportPaths.html),
+    baselineHint: !options.updateBaseline,
+    notFailing: exitCode === 0 && !options.updateBaseline,
+  })) {
+    terminal.line(line);
   }
 
   if (options.json) {
     stdout(`${JSON.stringify(report, null, 2)}\n`);
   }
 
-  return getExitCode(linksToFix, options);
+  return exitCode;
 };
 
 /** Runs `fn` with the process set up for the options: with --json, console output goes to stderr (restored at the end) */
@@ -538,6 +576,8 @@ const withCliEnvironment = async <T>(options: CommonOptions, fn: () => Promise<T
  */
 export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> => {
   const context: RunContext = {
+    argv,
+    tty: io.tty,
     env: io.env ?? process.env,
     cwd: io.cwd ?? process.cwd(),
     stdout: io.stdout ?? ((text: string) => process.stdout.write(text)),

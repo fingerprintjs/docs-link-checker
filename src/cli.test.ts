@@ -2,11 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatFileProblems, runCli } from "./cli";
-import { getJSONReport } from "./report/report";
-
-const RUN = { generatedAt: new Date("2026-01-02T03:04:05Z"), durationMs: 1234 };
+import { runCli } from "./cli";
 
 // GitHub organizations need GH_TOKEN and the network: fake client and README downloads
 const repo = (name: string) => ({
@@ -36,12 +34,17 @@ beforeAll(async () => {
       res.end(body);
     };
     if (req.url === "/sitemap.xml") {
-      send(200, `<urlset><url><loc>${siteUrl}/page</loc></url></urlset>`);
+      send(
+        200,
+        `<urlset><url><loc>${siteUrl}/page</loc></url><url><loc>${siteUrl}/page2</loc></url></urlset>`,
+      );
     } else if (req.url === "/page") {
       send(
         200,
         `<a href="/keep/ok">ok</a><a href="/keep/missing">a</a><a href="/other/missing">b</a>`,
       );
+    } else if (req.url === "/page2") {
+      send(200, `<a href="/keep/missing">same target</a>`);
     } else {
       send(req.url === "/keep/ok" ? 200 : 404);
     }
@@ -62,34 +65,11 @@ afterAll(() => {
 const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");
 const tempDir = () => mkdtempSync(join(tmpdir(), "cli-test-"));
 
-describe("formatFileProblems()", () => {
-  it("prints one line per link to fix, collapsing and shortening error details", () => {
-    const report = getJSONReport({
-      ...RUN,
-      siteName: "local files",
-      links: [
-        {
-          page: "a.md",
-          line: 3,
-          href: "https://x.com",
-          text: "",
-          result: { ok: false, error: "unexpected error", errorDetail: `boom\n${"x".repeat(300)}` },
-        },
-        { page: "b.md", href: "c.md", text: "", result: { ok: false, error: "broken link" } },
-      ],
-    });
-    // Report order: broken links first, then unexpected errors
-    const [first, second] = formatFileProblems(report);
-    expect(first).toBe("b.md: c.md: broken link");
-    expect(second?.startsWith("a.md:3: https://x.com: unexpected error: boom xxx")).toBe(true);
-    expect(second).not.toContain("\n");
-    expect(second?.endsWith("…")).toBe(true);
-  });
-});
-
 describe("runCli()", () => {
   let stdout: string;
   let stderr: string;
+  // Colors depend on the environment of the test run
+  const plain = (text: string) => stripVTControlCharacters(text);
   const io = (env: Record<string, string> = {}) => ({
     env,
     cwd: FIXTURE,
@@ -255,7 +235,9 @@ describe("runCli()", () => {
       io({ GITHUB_OUTPUT: githubOutput, GITHUB_STEP_SUMMARY: summary }),
     );
     expect(code).toBe(1);
-    expect(stdout).toBe("docs/guide.md:8: ../nope.md: broken link: File not found: nope.md\n");
+    expect(plain(stdout)).toContain(
+      "docs/guide.md:8  File not found  ../nope.md  no file nope.md\n",
+    );
     expect(readFileSync(githubOutput, "utf8")).toBe(
       `links-to-fix=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
     );
@@ -319,16 +301,18 @@ describe("runCli()", () => {
       io({ GITHUB_ACTIONS: "true" }),
     );
     expect(code).toBe(0);
-    expect(stdout).toBe(
+    expect(stdout).toContain(
       "::error file=docs/guide.md,line=8,title=Broken link::../nope.md: broken link: File not found: nope.md\n",
     );
+    expect(stdout).not.toContain("File not found  ../nope.md");
 
     stdout = "";
     await runCli(
       ["files", "docs/*.md", "--output-dir", tempDir(), "--no-fail-on-broken", "--no-annotations"],
       io({ GITHUB_ACTIONS: "true" }),
     );
-    expect(stdout).toBe("");
+    expect(stdout).not.toContain("::error");
+    expect(stdout).not.toContain("../nope.md");
   });
 
   it("files: links local files to the checked commit in the HTML report in GitHub Actions", async () => {
@@ -412,7 +396,8 @@ describe("runCli()", () => {
     expect(
       await runCli(["files", "docs/*.md", "--baseline", baselinePath, "--output-dir", dir], io()),
     ).toBe(0);
-    expect(stdout).toBe("");
+    expect(plain(stdout)).toContain("✓ No links to fix");
+    expect(plain(stdout)).toContain("1 ignored by baseline");
     const report = JSON.parse(readFileSync(join(dir, "local-files.json"), "utf8"));
     expect(report.summary).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
   });
@@ -471,8 +456,8 @@ describe("runCli()", () => {
     expect(await runCli(args, io())).toBe(1);
     const reportPath = join(outputDir, "127-0-0-1.json");
     expect(JSON.parse(readFileSync(reportPath, "utf8")).summary).toMatchObject({
-      linksChecked: 2,
-      totalLinksToFix: 1,
+      linksChecked: 3,
+      totalLinksToFix: 2,
     });
 
     const baselinePath = join(tempDir(), "baseline.json");
@@ -480,8 +465,65 @@ describe("runCli()", () => {
     expect(await runCli([...args, "--baseline", baselinePath], io())).toBe(0);
     expect(JSON.parse(readFileSync(reportPath, "utf8")).summary).toMatchObject({
       totalLinksToFix: 0,
-      ignored: 1,
+      ignored: 2,
     });
+  });
+
+  it("site: groups links to fix by target with the pages below, then the verdict", async () => {
+    const outputDir = tempDir();
+    const code = await runCli(
+      ["site", siteUrl, "--include", `${siteUrl}/keep`, "--output-dir", outputDir],
+      io(),
+    );
+    expect(code).toBe(1);
+    const output = plain(stdout);
+    // One target on two pages, site origin dropped, pages with their link text
+    expect(output).toContain(
+      `HTTP 404  /keep/missing  on 2 pages\n          ↳ /page  "a"\n          ↳ /page2  "same target"\n`,
+    );
+    expect(output).toContain("✗ 2 links to fix (2 broken)");
+    expect(output).toContain("3 checked · 0 ignored by baseline · 0 could not check");
+    expect(output).toMatch(/Report .*127-0-0-1\.html/);
+    expect(output).toContain("False positive? --update-baseline");
+  });
+
+  it("files: lists one aligned row per link to fix, with the hash and the reason", async () => {
+    await runCli(["files", "README.md", "--output-dir", tempDir()], io());
+    const output = plain(stdout);
+    expect(output).toContain(
+      [
+        "README.md:7   File not found     docs/missing.md  no file docs/missing.md",
+        "README.md:8   Anchor not found   docs/guide.md#nope  no heading #nope in docs/guide.md",
+        "README.md:10  Anchor not found   #nowhere  no heading #nowhere in README.md",
+        "README.md:16  Line out of range  src/code.ts#L99  src/code.ts has 3 lines",
+        "README.md:19  HTTP 404           example.com/page  Not Found",
+      ].join("\n"),
+    );
+  });
+
+  it("shows --verbose details (run metrics) only when asked for", async () => {
+    const args = ["site", siteUrl, "--output-dir", tempDir()];
+    await runCli(args, io());
+    expect(plain(stdout)).not.toContain("Run metrics");
+    expect(plain(stdout)).toContain("✓ Found 4 links in 2 pages");
+
+    stdout = "";
+    await runCli([...args, "--verbose"], io());
+    expect(plain(stdout)).toContain("Run metrics:");
+  });
+
+  it("sends the output to stderr with --json and prints the progress of non-TTY runs in steps", async () => {
+    await runCli(["site", siteUrl, "--output-dir", tempDir(), "--json"], io());
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(plain(stderr)).toContain("✗ 3 links to fix");
+    expect(plain(stderr)).toContain("Checking URLs 100% (3/3, 2 failing so far)");
+  });
+
+  it("redraws one progress line on a TTY instead of printing a line per step", async () => {
+    await runCli(["site", siteUrl, "--output-dir", tempDir()], { ...io(), tty: true });
+    expect(stdout).toContain("\r\u001B[2K");
+    expect(plain(stdout)).toMatch(/Checking URLs\s+\d\/3\s+━*─*\s+\d+%/);
+    expect(plain(stdout)).not.toContain("Checking URLs 100%");
   });
 
   it("github-org: passes the organization and sample rate, names the report", async () => {
