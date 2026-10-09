@@ -1,18 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { octokit } = vi.hoisted(() => ({
-  octokit: {
-    paginate: vi.fn(),
-    repos: { listForOrg: {}, get: vi.fn() },
-    git: { getTree: vi.fn() },
-  },
-}));
-
-vi.mock("./github_client", () => ({
-  getMyOctokit: () => octokit,
-}));
-
+import { type RunDeps, withRun } from "../run";
 import { getReadmeLinks, getReadmesFromOrg, resolveReadmeHref } from "./gh_get_links";
+
+const octokit = {
+  paginate: vi.fn(),
+  repos: { listForOrg: {}, get: vi.fn() },
+  git: { getTree: vi.fn() },
+};
+const run = <T>(fn: () => Promise<T>, deps: RunDeps = {}) =>
+  withRun({ deps: { octokit: () => octokit as never, ...deps } }, fn);
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
   full_name: `org/${name}`,
@@ -44,7 +40,7 @@ afterEach(() => {
 
 describe("getReadmesFromOrg()", () => {
   it("lists README files of all repositories", async () => {
-    const readmes = await getReadmesFromOrg("org");
+    const readmes = await run(() => getReadmesFromOrg("org"));
     expect(readmes).toHaveLength(8);
     expect(readmes).toContainEqual({
       sourcePath: "https://github.com/org/repo-a/blob/main/docs/readme.md",
@@ -63,7 +59,7 @@ describe("getReadmesFromOrg()", () => {
       },
     ]);
 
-    const readmes = await getReadmesFromOrg("org");
+    const readmes = await run(() => getReadmesFromOrg("org"));
     expect(readmes).toHaveLength(8);
     expect(
       readmes.some((readme) =>
@@ -78,14 +74,14 @@ describe("getReadmesFromOrg()", () => {
       { full_name: "org/old", owner: { login: "org" }, name: "old", archived: true },
     ]);
 
-    const readmes = await getReadmesFromOrg("org");
+    const readmes = await run(() => getReadmesFromOrg("org"));
     expect(readmes).toHaveLength(8);
     expect(readmes.some((readme) => readme.sourcePath.includes("/org/old/"))).toBe(false);
   });
 
   it("throws a clear error when the repositories cannot be listed", async () => {
     octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
-    await expect(getReadmesFromOrg("org")).rejects.toMatchObject({
+    await expect(run(() => getReadmesFromOrg("org"))).rejects.toMatchObject({
       name: "OrgListingError",
       message: "Failed to list repositories of GitHub organization org: Bad credentials",
     });
@@ -93,9 +89,9 @@ describe("getReadmesFromOrg()", () => {
 
   it("samples README files deterministically with LINK_CHECK_SAMPLE_RATE", async () => {
     vi.stubEnv("LINK_CHECK_SAMPLE_RATE", "0.25");
-    const first = await getReadmesFromOrg("org");
+    const first = await run(() => getReadmesFromOrg("org"));
     octokit.paginate.mockResolvedValue(repos.toReversed());
-    const second = await getReadmesFromOrg("org");
+    const second = await run(() => getReadmesFromOrg("org"));
 
     expect(first).toHaveLength(2);
     expect(second).toEqual(first);
@@ -124,12 +120,10 @@ describe("getReadmeLinks()", () => {
   });
 
   it("returns the links of downloaded READMEs, resolved against the README page", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("[abs](https://example.com/) [root](/docs/a.md) [sib](b.md)")),
-    );
+    const fetch = async () =>
+      new Response("[abs](https://example.com/) [root](/docs/a.md) [sib](b.md)");
 
-    const links = await getReadmeLinks([file("pkg")]);
+    const links = await run(() => getReadmeLinks([file("pkg")]), { fetch });
 
     const page = "https://github.com/org/repo/blob/main/pkg/README.md";
     expect(links).toEqual([
@@ -140,16 +134,12 @@ describe("getReadmeLinks()", () => {
   });
 
   it("skips READMEs that cannot be downloaded", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL) =>
-        String(input).includes("/gone/")
-          ? new Response("Not Found", { status: 404 })
-          : new Response("[x](https://example.com/)"),
-      ),
-    );
+    const fetch = async (input: string | URL | Request) =>
+      String(input).includes("/gone/")
+        ? new Response("Not Found", { status: 404 })
+        : new Response("[x](https://example.com/)");
 
-    const links = await getReadmeLinks([file("gone"), file("ok")]);
+    const links = await run(() => getReadmeLinks([file("gone"), file("ok")]), { fetch });
 
     expect(links.map((link) => link.page)).toEqual([file("ok").sourcePath]);
   });

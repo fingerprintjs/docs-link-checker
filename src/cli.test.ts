@@ -6,12 +6,22 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { formatFileProblems, runCli } from "./cli";
 import { getJSONReport } from "./report/report";
 
-// GitHub organizations need GH_TOKEN and the network
-const mocks = vi.hoisted(() => ({ checkReadmesInGithubOrg: vi.fn() }));
-vi.mock("./github/gh_get_links", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./github/gh_get_links")>()),
-  checkReadmesInGithubOrg: mocks.checkReadmesInGithubOrg,
-}));
+// GitHub organizations need GH_TOKEN and the network: fake client and README downloads
+const repo = (name: string) => ({
+  full_name: `org/${name}`,
+  owner: { login: "org" },
+  name,
+  archived: false,
+});
+const octokit = {
+  paginate: vi.fn(),
+  repos: { listForOrg: {}, get: vi.fn() },
+  git: { getTree: vi.fn() },
+};
+const readmeFetch = vi.fn(
+  async (_url: string | URL | Request) => new Response("[x](https://example.com/)"),
+);
+const githubDeps = { octokit: () => octokit as never, fetch: readmeFetch };
 
 // Local site for the `site` command: a sitemap with one page linking to a working and two missing URLs
 let server: Server;
@@ -94,7 +104,17 @@ describe("runCli()", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
-    mocks.checkReadmesInGithubOrg.mockReset();
+    octokit.paginate.mockReset().mockResolvedValue([]);
+    octokit.repos.get.mockReset().mockResolvedValue({ data: { default_branch: "main" } });
+    octokit.git.getTree.mockReset().mockResolvedValue({
+      data: {
+        tree: [
+          { type: "blob", path: "README.md" },
+          { type: "blob", path: "docs/README.md" },
+        ],
+      },
+    });
+    readmeFetch.mockClear();
   });
 
   afterEach(() => {
@@ -413,18 +433,26 @@ describe("runCli()", () => {
   });
 
   it("github-org: passes the organization and sample rate, names the report", async () => {
-    mocks.checkReadmesInGithubOrg.mockResolvedValue([]);
+    octokit.paginate.mockResolvedValue(["a", "b"].map(repo));
     const outputDir = tempDir();
     expect(
-      await runCli(["github-org", "org", "--sample-rate", "0.5", "--output-dir", outputDir], io()),
+      await runCli(["github-org", "org", "--sample-rate", "0.5", "--output-dir", outputDir], {
+        ...io(),
+        deps: githubDeps,
+      }),
     ).toBe(0);
-    expect(mocks.checkReadmesInGithubOrg).toHaveBeenCalledWith("org", { sampleRate: 0.5 });
+    expect(octokit.paginate).toHaveBeenCalledWith(
+      octokit.repos.listForOrg,
+      expect.objectContaining({ org: "org" }),
+    );
+    // 4 README files, half of them are checked
+    expect(readmeFetch.mock.calls.filter(([url]) => String(url).includes("raw."))).toHaveLength(2);
     expect(existsSync(join(outputDir, "org-github-readmes.json"))).toBe(true);
   });
 
   it("returns 1 when the check crashes", async () => {
-    mocks.checkReadmesInGithubOrg.mockRejectedValue(new Error("GitHub exploded"));
-    expect(await runCli(["github-org", "org"], io())).toBe(1);
+    octokit.paginate.mockRejectedValue(new Error("GitHub exploded"));
+    expect(await runCli(["github-org", "org"], { ...io(), deps: githubDeps })).toBe(1);
     expect(stderr).toContain("GitHub exploded");
   });
 });

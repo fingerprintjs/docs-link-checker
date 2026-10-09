@@ -1,42 +1,47 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-// Fake Octokit: no network, records the parameters passed to every API call
-const { octokit } = vi.hoisted(() => {
-  const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
-  return {
-    octokit: {
-      notFound,
-      // Simulates a missing `GH_TOKEN`: `getMyOctokit` throws
-      noToken: false,
-      users: { getByUsername: vi.fn() },
-      repos: {
-        get: vi.fn(),
-        getReleaseByTag: vi.fn(),
-        getContent: vi.fn(),
-        getCommit: vi.fn(),
-      },
-      issues: { get: vi.fn() },
-      pulls: { get: vi.fn() },
-      git: { listMatchingRefs: vi.fn() },
-      // All pages of a list endpoint: the mocks return a single page
-      paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
-        (await fn(params)).data,
-    },
-  };
-});
-
-vi.mock("./github_client", () => ({
-  getMyOctokit: () => {
-    if (octokit.noToken) {
-      throw new Error("GH_TOKEN is not set. A GitHub token is required to check GitHub links.");
-    }
-    return octokit;
-  },
-}));
-
+import { withRun } from "../run";
 import { checkLinkWithGithubApi as checkLink } from "./gh_check_link";
 
-const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
+// Fake Octokit: no network, records the parameters passed to every API call
+const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
+const octokit = {
+  notFound,
+  // Simulates a missing `GH_TOKEN`: `getMyOctokit` throws
+  noToken: false,
+  users: { getByUsername: vi.fn() },
+  repos: {
+    get: vi.fn(),
+    getReleaseByTag: vi.fn(),
+    getContent: vi.fn(),
+    getCommit: vi.fn(),
+  },
+  issues: { get: vi.fn() },
+  pulls: { get: vi.fn() },
+  git: { listMatchingRefs: vi.fn() },
+  // All pages of a list endpoint: the fakes return a single page
+  paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
+    (await fn(params)).data,
+};
+
+const fetchMock = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
+
+const checkLinkWithGithubApi = (url: string) =>
+  withRun(
+    {
+      deps: {
+        fetch: fetchMock,
+        octokit: () => {
+          if (octokit.noToken) {
+            throw new Error(
+              "GH_TOKEN is not set. A GitHub token is required to check GitHub links.",
+            );
+          }
+          return octokit as never;
+        },
+      },
+    },
+    () => checkLink(url, new AbortController().signal),
+  );
 
 beforeEach(() => {
   octokit.noToken = false;
@@ -193,16 +198,11 @@ describe("checkLinkWithGithubApi() with unknown sections", () => {
 });
 
 describe("checkLinkWithGithubApi() with unknown account URLs", () => {
-  const fetchMock =
-    vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
-
   beforeEach(() => {
     fetchMock.mockReset();
     fetchMock.mockImplementation(
       async () => new Response("<html><body></body></html>", { status: 200 }),
     );
-    // Restored after every test (`unstubGlobals`)
-    vi.stubGlobal("fetch", fetchMock);
   });
 
   it("accepts an unknown account URL whose page exists (a GitHub page missing from the reserved routes)", async () => {

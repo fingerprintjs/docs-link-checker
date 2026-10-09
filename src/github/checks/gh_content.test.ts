@@ -1,26 +1,24 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { getContent, getBlob, listMatchingRefs } = vi.hoisted(() => ({
-  getContent: vi.fn(),
-  getBlob: vi.fn(),
-  listMatchingRefs: vi.fn(),
-}));
-
-vi.mock("../github_client", () => ({
-  getMyOctokit: () => ({
-    repos: { getContent },
-    git: { getBlob, listMatchingRefs },
-    // All pages of a list endpoint: the mocks return a single page
-    paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
-      (await fn(params)).data,
-  }),
-}));
-
+import { withRun } from "../../run";
 import { checkLinkWithGithubApi as checkLink } from "../gh_check_link";
 
-const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
+const getContent = vi.fn();
+const getBlob = vi.fn();
+const listMatchingRefs = vi.fn();
+const octokit = {
+  repos: { getContent },
+  git: { getBlob, listMatchingRefs },
+  // All pages of a list endpoint: the fakes return a single page
+  paginate: async (fn: (params: unknown) => Promise<{ data: unknown[] }>, params: unknown) =>
+    (await fn(params)).data,
+};
+
+const run = <T>(fn: () => Promise<T>) => withRun({ deps: { octokit: () => octokit as never } }, fn);
+
+const checkLinkWithGithubApi = (url: string) =>
+  run(() => checkLink(url, new AbortController().signal));
 
 const readme = readFileSync(
   join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"),
@@ -209,8 +207,7 @@ describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
       mockRefs(["heads/a/b/c/d/e", "heads/a/b/x", "tags/a/b"]);
       mockFileAt("a/b/c/d/e", "src/f.ts", "one\n");
 
-      const { withRun } = await import("../../run");
-      await withRun({}, async () => {
+      await run(async () => {
         expect(await checkBlob("a/b/c/d/e/src/f.ts", "#L1")).toEqual({ ok: true, status: 200 });
         expect(await checkBlob("a/b/c/d/e/src/f.ts")).toEqual({ ok: true, status: 200 });
       });

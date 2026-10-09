@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { type Browser, chromium, type Page, type Request, type Route } from "playwright";
-import { getBrowserSlot, getPageSlots, incrementMetric } from "./run";
+import { getBrowserSlot, getDeps, getPageSlots, incrementMetric } from "./run";
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
@@ -128,16 +128,18 @@ const installPlaywrightChromium = () => {
 };
 
 const launchBrowser = async (): Promise<Browser> => {
+  const { chromium: browserType = chromium, installChromium = installPlaywrightChromium } =
+    getDeps();
   incrementMetric("browserLaunches");
   try {
-    return await chromium.launch({ headless: true, ...LAUNCH_OPTIONS });
+    return await browserType.launch({ headless: true, ...LAUNCH_OPTIONS });
   } catch (error) {
     if (!isMissingBrowserExecutable(error)) {
       throw error;
     }
-    installPlaywrightChromium();
+    installChromium();
     incrementMetric("browserLaunches");
-    return chromium.launch({ headless: true, ...LAUNCH_OPTIONS });
+    return browserType.launch({ headless: true, ...LAUNCH_OPTIONS });
   }
 };
 

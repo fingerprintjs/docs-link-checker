@@ -16,12 +16,18 @@ const text = (response: Response) => response.text();
 
 type Handler = (url: string, init: RequestInit) => Response | Promise<Response>;
 
-/** Stubs `fetch`, handlers get the URL (without the hash) and the request init */
+let fakeFetch: typeof fetch;
+
+/** Runs `fn` as a run whose `fetch` is the one set by `stubFetch` (which can be called inside of `fn`) */
+const run = <T>(hostConcurrency: number, fn: () => Promise<T>) =>
+  withRun({ hostConcurrency, deps: { fetch: (input, init) => fakeFetch(input, init) } }, fn);
+
+/** Fakes `fetch`, handlers get the URL (without the hash) and the request init */
 const stubFetch = (handler: Handler) => {
   const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) =>
     handler(String(input), init ?? {}),
   );
-  vi.stubGlobal("fetch", fetchMock);
+  fakeFetch = fetchMock;
   return fetchMock;
 };
 
@@ -47,7 +53,7 @@ const withFakeTimers = async <T>(request: () => Promise<T>) => {
 
 describe("fetchWithHostLimit()", () => {
   it("pauses the host before releasing the slot, so a queued request does not start during Retry-After", () =>
-    withRun({ hostConcurrency: 1 }, async () => {
+    run(1, async () => {
       const events: Array<{ name: string; at: number }> = [];
       let first = true;
       stubFetch((url) => {
@@ -76,7 +82,7 @@ describe("fetchWithHostLimit()", () => {
     }));
 
   it("returns the last 429 after the retries", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       const fetchMock = stubFetch(
         () => new Response("slow down", { status: 429, headers: { "Retry-After": "0" } }),
       );
@@ -89,7 +95,7 @@ describe("fetchWithHostLimit()", () => {
     }));
 
   it("does not retry a 429 without a usable Retry-After", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       const fetchMock = stubFetch(() => new Response(null, { status: 429 }));
 
       expect((await fetchWithHostLimit("https://limited.example.com/", {}, text)).status).toBe(429);
@@ -99,7 +105,7 @@ describe("fetchWithHostLimit()", () => {
 
 describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
   it.each([502, 503, 504])("retries a %s with a backoff, then returns the success", (status) =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       let failures = 2;
       const fetchMock = stubFetch(() =>
         failures-- > 0 ? new Response("busy", { status }) : new Response("ok", { status: 200 }),
@@ -117,7 +123,7 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
   );
 
   it("returns the last 503 after the retries, cancelling every unread body", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       let cancelled = 0;
       const fetchMock = stubFetch(
         () =>
@@ -142,7 +148,7 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
     }));
 
   it("respects Retry-After (longer than the backoff) and pauses the host for queued requests", () =>
-    withRun({ hostConcurrency: 1 }, async () => {
+    run(1, async () => {
       const events: Array<{ url: string; at: number }> = [];
       let first = true;
       stubFetch((url) => {
@@ -172,7 +178,7 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
     }));
 
   it("does not retry when Retry-After is longer than the maximum delay", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       const fetchMock = stubFetch(
         () => new Response(null, { status: 503, headers: { "Retry-After": "3600" } }),
       );
@@ -187,7 +193,7 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
     }));
 
   it("does not retry other 5xx statuses", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       const fetchMock = stubFetch(() => new Response(null, { status: 500 }));
 
       await fetchWithHostLimit("https://busy.example.com/500", {}, text);
@@ -207,7 +213,7 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
 
 describe("fetchWithHostLimit() redirects", () => {
   it("follows redirects manually and returns the final status, URL and body", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       const fetchMock = stubFetch((url) => {
         if (url === "https://old.example.com/page")
           return redirect("https://new.example.com/start", 301);
@@ -235,7 +241,7 @@ describe("fetchWithHostLimit() redirects", () => {
     }));
 
   it("respects the per-host limit of the redirect destination", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       let active = 0;
       let maxActive = 0;
       stubFetch(async (url) => {
@@ -261,7 +267,7 @@ describe("fetchWithHostLimit() redirects", () => {
     }));
 
   it("gives up after 10 redirects", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       const fetchMock = stubFetch((url) => redirect(`${url}x`, 302));
 
       await expect(fetchWithHostLimit("https://loop.example.com/", {}, text)).rejects.toThrow(
@@ -271,7 +277,7 @@ describe("fetchWithHostLimit() redirects", () => {
     }));
 
   it("reports too many redirects as a broken link in link checks", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       stubFetch((url) => redirect(`${url}x`, 302));
 
       const result = await checkLinkWithFetch("https://loop.example.com/");
@@ -281,7 +287,7 @@ describe("fetchWithHostLimit() redirects", () => {
     }));
 
   it("cancels the body of every redirect response while holding the slot of its host", () =>
-    withRun({ hostConcurrency: 1 }, async () => {
+    run(1, async () => {
       const hop = trackedResponse(302, "https://a.example.com/", {
         Location: "https://b.example.com/",
       });
@@ -296,14 +302,14 @@ describe("fetchWithHostLimit() redirects", () => {
     }));
 
   it("returns a 3xx without Location as the final response", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       stubFetch(() => new Response(null, { status: 301 }));
 
       expect((await fetchWithHostLimit("https://example.com/", {}, text)).status).toBe(301);
     }));
 
   it("follows an empty Location (resolves to the current URL), so a self-redirect loop fails", () =>
-    withRun({ hostConcurrency: 2 }, async () => {
+    run(2, async () => {
       const fetchMock = stubFetch(() => redirect("", 302));
 
       await expect(fetchWithHostLimit("https://self.example.com/", {}, text)).rejects.toThrow(
@@ -339,13 +345,10 @@ const trackedResponse = (status: number, url: string, headers?: HeadersInit) => 
 
 describe("unread response bodies are cancelled before the host slot is released", () => {
   it("fetchWithHostLimit cancels a body the reader did not consume", () =>
-    withRun({ hostConcurrency: 1 }, async () => {
+    run(1, async () => {
       const url = "https://example.com/big-file";
       const { response, tracking } = trackedResponse(200, url);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => response),
-      );
+      stubFetch(() => response);
 
       await fetchWithHostLimit(url, {}, async () => "not read");
 
@@ -353,13 +356,10 @@ describe("unread response bodies are cancelled before the host slot is released"
     }));
 
   it("link checks cancel the GET body when it is not needed", () =>
-    withRun({ hostConcurrency: 1 }, async () => {
+    run(1, async () => {
       const url = "https://example.com/big-file";
       const get = trackedResponse(200, url);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => get.response),
-      );
+      stubFetch(() => get.response);
 
       expect(await checkLinkWithFetch(url)).toEqual({ ok: true, status: 200 });
       expect(get.tracking).toEqual({ cancelled: true, slotHeldOnCancel: true });

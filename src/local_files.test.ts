@@ -3,14 +3,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { checkLocalFiles, checkLocalLink, collectLinksFromFiles } from "./local_files";
+import { withRun } from "./run";
 import type { LinkWithResult } from "./types";
-
-// Avoids network access, the external link only needs to come back with a result
-vi.mock("./link", () => ({
-  checkLinks: vi.fn(async ({ links }: { links: Array<{ href: string }> }) =>
-    links.map((link) => ({ ...link, result: { ok: true, status: 200 } })),
-  ),
-}));
 
 const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");
 const check = (file: string, href: string) =>
@@ -299,7 +293,11 @@ describe("checkLocalFiles()", () => {
       .toSorted();
 
   it("checks local links on disk and includes the results of external links", async () => {
-    const results = await checkLocalFiles({ patterns: ["**/*.md"], cwd: FIXTURE });
+    // No network access, the external link only needs to come back with a result
+    const fetch = vi.fn(async () => new Response(null, { status: 200 }));
+    const results = await withRun({ deps: { fetch } }, () =>
+      checkLocalFiles({ patterns: ["**/*.md"], cwd: FIXTURE }),
+    );
     expect(results.find((link) => link.href === "https://example.com/page")?.result.ok).toBe(true);
     expect(failing(results)).toEqual([
       "README.md:10 #nowhere",

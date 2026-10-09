@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withPage } from "./browser";
+import { checkLinks as checkLinksInRun } from "./link";
+import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
+import { PLAYWRIGHT_CONCURRENCY_LIMIT, withRun } from "./run";
 
 /**
  * Offline tests for the shared browser (`browser.ts`) with a fake Playwright.
  */
 
-const state = vi.hoisted(() => ({
+const state = {
   launches: 0,
   closes: 0,
   openPages: 0,
@@ -22,9 +26,11 @@ const state = vi.hoisted(() => ({
   failLaunch: false as false | "missing" | "other",
   installs: 0,
   failInstall: false,
-}));
+  // Status of every `fetch` of the run (403: links are re-checked with Playwright)
+  fetchStatus: 200,
+};
 
-vi.mock("playwright", () => {
+const fakeChromium = (() => {
   const launch = async () => {
     state.launches++;
     if (state.failLaunch === "missing") {
@@ -95,24 +101,32 @@ vi.mock("playwright", () => {
     };
     return browser;
   };
-  return { chromium: { launch: vi.fn(launch) } };
-});
+  return { launch };
+})();
 
-vi.mock("node:child_process", () => ({
-  spawnSync: vi.fn(() => {
-    state.installs++;
-    if (state.failInstall) {
-      return { status: 1, error: new Error("playwright install failed") };
-    }
-    state.failLaunch = false;
-    return { status: 0 };
-  }),
-}));
+const installChromium = () => {
+  state.installs++;
+  if (state.failInstall) {
+    throw new Error("playwright install failed");
+  }
+  state.failLaunch = false;
+};
 
-import { withPage } from "./browser";
-import { checkLinks } from "./link";
-import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { closeRunBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withRun } from "./run";
+/** Runs `fn` as a run with a fake browser, the browser is closed at the end of the run */
+const inRun = <T>(fn: () => Promise<T>) =>
+  withRun(
+    {
+      deps: {
+        fetch: async () => new Response(null, { status: state.fetchStatus }),
+        chromium: fakeChromium as never,
+        installChromium,
+      },
+    },
+    fn,
+  );
+
+const checkLinks = (options: Parameters<typeof checkLinksInRun>[0]) =>
+  inRun(() => checkLinksInRun(options));
 
 const launchBrowser = () => withPage(async () => {}, { timeout: 1000 });
 
@@ -121,8 +135,7 @@ const checkLinkWithPlaywright = async (url: string) =>
 
 const link = (href: string) => ({ href, page: "https://example.com/source", text: "link" });
 
-beforeEach(async () => {
-  await closeRunBrowser();
+beforeEach(() => {
   Object.assign(state, {
     launches: 0,
     closes: 0,
@@ -137,24 +150,21 @@ beforeEach(async () => {
     failLaunch: false,
     installs: 0,
     failInstall: false,
+    fetchStatus: 200,
   });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-afterEach(async () => {
-  await closeRunBrowser();
+afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("shared browser", () => {
   it("launches one browser for many Playwright checks and closes it at the end of checkLinks", async () => {
     // 403 from fetch -> every link is re-checked with Playwright
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 403 })),
-    );
+    state.fetchStatus = 403;
     const links = Array.from({ length: 20 }, (_, i) =>
       link(`https://blocked-${i}.example.com/page`),
     );
@@ -169,18 +179,17 @@ describe("shared browser", () => {
   });
 
   it("does not launch a browser when nothing needs Playwright", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 200 })),
-    );
+    state.fetchStatus = 200;
     await checkLinks({ links: [link("https://example.com/ok")] });
     expect(state.launches).toBe(0);
   });
 
   it("shares a single launch between concurrent callers and limits open pages", async () => {
     state.gotoDelayMs = 20;
-    const results = await Promise.all(
-      Array.from({ length: 12 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`)),
+    const results = await inRun(() =>
+      Promise.all(
+        Array.from({ length: 12 }, (_, i) => checkLinkWithPlaywright(`https://example.com/${i}`)),
+      ),
     );
 
     expect(results.every((result) => result.ok)).toBe(true);
@@ -191,7 +200,7 @@ describe("shared browser", () => {
   it("limits open pages per run, runs do not share page slots", async () => {
     state.gotoDelayMs = 20;
     const runChecks = (prefix: string) =>
-      withRun({}, () =>
+      inRun(() =>
         Promise.all(
           Array.from({ length: 12 }, (_, i) =>
             checkLinkWithPlaywright(`https://example.com/${prefix}${i}`),
@@ -206,10 +215,11 @@ describe("shared browser", () => {
   });
 
   it("relaunches a crashed browser once and retries the check", async () => {
-    await launchBrowser();
-    state.crashNextContext = true;
-
-    const result = await checkLinkWithPlaywright("https://example.com/after-crash");
+    const result = await inRun(async () => {
+      await launchBrowser();
+      state.crashNextContext = true;
+      return checkLinkWithPlaywright("https://example.com/after-crash");
+    });
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(state.launches).toBe(2);
@@ -218,11 +228,13 @@ describe("shared browser", () => {
 
   it("does not retry errors that are not crashes", async () => {
     await expect(
-      withPage(
-        async () => {
-          throw new Error("boom");
-        },
-        { timeout: 1000 },
+      inRun(() =>
+        withPage(
+          async () => {
+            throw new Error("boom");
+          },
+          { timeout: 1000 },
+        ),
       ),
     ).rejects.toThrow("boom");
     expect(state.launches).toBe(1);
@@ -231,10 +243,11 @@ describe("shared browser", () => {
   });
 
   it("relaunches the browser when it crashes during navigation and retries the check", async () => {
-    await launchBrowser();
-    state.nextGotoFailure = "crash";
-
-    const result = await checkLinkWithPlaywright("https://example.com/crash");
+    const result = await inRun(async () => {
+      await launchBrowser();
+      state.nextGotoFailure = "crash";
+      return checkLinkWithPlaywright("https://example.com/crash");
+    });
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(state.launches).toBe(2);
@@ -243,7 +256,7 @@ describe("shared browser", () => {
   it("reports navigation errors as broken links (no relaunch)", async () => {
     state.nextGotoFailure = "error";
 
-    const result = await checkLinkWithPlaywright("https://does-not-exist.example.com");
+    const result = await inRun(() => checkLinkWithPlaywright("https://does-not-exist.example.com"));
 
     expect(result).toMatchObject({ ok: false, error: "broken link" });
     expect(!result.ok && result.errorDetail).toContain("ERR_NAME_NOT_RESOLVED");
@@ -252,10 +265,7 @@ describe("shared browser", () => {
 
   it("reports browser launch failures as unexpected errors (not broken links)", async () => {
     state.failLaunch = "other";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 403 })),
-    );
+    state.fetchStatus = 403;
 
     const results = await checkLinks({
       links: [link("https://blocked.example.com/a"), link("https://blocked.example.com/a#x")],
@@ -280,7 +290,7 @@ describe("shared browser", () => {
   it("installs Chromium when the browser executable is missing and retries the launch", async () => {
     state.failLaunch = "missing";
 
-    const result = await checkLinkWithPlaywright("https://example.com/after-install");
+    const result = await inRun(() => checkLinkWithPlaywright("https://example.com/after-install"));
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(state.installs).toBe(1);
@@ -291,10 +301,7 @@ describe("shared browser", () => {
   it("reports a missing browser as an unexpected error when Chromium install fails", async () => {
     state.failLaunch = "missing";
     state.failInstall = true;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 403 })),
-    );
+    state.fetchStatus = 403;
 
     const [checked] = await checkLinks({ links: [link("https://blocked.example.com/a")] });
 
@@ -314,8 +321,8 @@ describe("browser belongs to the run", () => {
     state.gotoGates["https://example.com/second"] = new Promise((resolve) => {
       releaseSecond = resolve;
     });
-    const first = withRun({}, () => checkLinkWithPlaywright("https://example.com/first"));
-    const second = withRun({}, () => checkLinkWithPlaywright("https://example.com/second"));
+    const first = inRun(() => checkLinkWithPlaywright("https://example.com/first"));
+    const second = inRun(() => checkLinkWithPlaywright("https://example.com/second"));
 
     expect(await first).toEqual({ ok: true, status: 200 });
     expect(state.closes).toBe(1);
@@ -327,9 +334,9 @@ describe("browser belongs to the run", () => {
     expect(state.closes).toBe(2);
   });
 
-  it("closes the run's browser even when the run fails, standalone checks are unaffected", async () => {
+  it("closes the run's browser even when the run fails, a later run gets its own browser", async () => {
     await expect(
-      withRun({}, async () => {
+      inRun(async () => {
         await checkLinkWithPlaywright("https://example.com/a");
         throw new Error("run failed");
       }),
@@ -337,13 +344,9 @@ describe("browser belongs to the run", () => {
     expect(state.launches).toBe(1);
     expect(state.closes).toBe(1);
 
-    // A standalone check (outside of any run) uses its own (default context) browser
-    const result = await checkLinkWithPlaywright("https://example.com/standalone");
+    const result = await inRun(() => checkLinkWithPlaywright("https://example.com/later"));
     expect(result).toEqual({ ok: true, status: 200 });
     expect(state.launches).toBe(2);
-    expect(state.closes).toBe(1);
-
-    await closeRunBrowser();
     expect(state.closes).toBe(2);
   });
 });
@@ -359,27 +362,29 @@ describe("request blocking", () => {
   // Runs requests through the route handler `withPage` registered, returns the URLs that were aborted
   const run = async (requests: FakeRequest[], failResponse = false) => {
     const aborted: string[] = [];
-    await withPage(
-      async () => {
-        for (const { resourceType, url, navigation } of requests) {
-          await state.routeHandler?.({
-            request: () => ({
-              resourceType: () => resourceType,
-              url: () => url,
-              isNavigationRequest: () => navigation !== undefined,
-              frame: () => ({ parentFrame: () => (navigation === "iframe" ? {} : null) }),
-            }),
-            abort: async () => {
-              aborted.push(url);
-              if (failResponse) throw new Error("Target closed");
-            },
-            continue: async () => {
-              if (failResponse) throw new Error("Target closed");
-            },
-          });
-        }
-      },
-      { timeout: 1000 },
+    await inRun(() =>
+      withPage(
+        async () => {
+          for (const { resourceType, url, navigation } of requests) {
+            await state.routeHandler?.({
+              request: () => ({
+                resourceType: () => resourceType,
+                url: () => url,
+                isNavigationRequest: () => navigation !== undefined,
+                frame: () => ({ parentFrame: () => (navigation === "iframe" ? {} : null) }),
+              }),
+              abort: async () => {
+                aborted.push(url);
+                if (failResponse) throw new Error("Target closed");
+              },
+              continue: async () => {
+                if (failResponse) throw new Error("Target closed");
+              },
+            });
+          }
+        },
+        { timeout: 1000 },
+      ),
     );
     return aborted;
   };

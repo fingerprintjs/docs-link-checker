@@ -1,13 +1,28 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import pLimit, { type LimitFunction } from "p-limit";
-import type { Browser } from "playwright";
+import type { Browser, BrowserType } from "playwright";
+import type { MyOctokitInstance } from "./github/github_client";
 import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./limiter";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
 
+/**
+ * External dependencies of a run. Production code uses the real ones when a field is unset,
+ * tests pass small fakes here instead of mocking modules.
+ */
+export type RunDeps = {
+  fetch?: typeof fetch;
+  /** Replaces the shared Octokit client (see `getMyOctokit`) */
+  octokit?: () => MyOctokitInstance;
+  chromium?: Pick<BrowserType, "launch">;
+  /** Installs the missing Playwright Chromium */
+  installChromium?: () => void;
+};
+
 export type RunConfig = {
   hostConcurrency?: number;
+  deps?: RunDeps;
 };
 
 type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
@@ -17,6 +32,7 @@ type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
  * in-memory caches, metrics, the per-host limiter, the shared browser and its page slots.
  */
 export type RunContext = {
+  deps: RunDeps;
   cache: Map<string, Promise<unknown>>;
   metrics: RunMetrics;
   hostLimiter: HostLimiter;
@@ -30,6 +46,7 @@ export type RunMetrics = {
 };
 
 const createRunContext = (config: RunConfig = {}): RunContext => ({
+  deps: config.deps ?? {},
   cache: new Map(),
   metrics: { counters: {}, phases: [] },
   hostLimiter: new HostLimiter(config.hostConcurrency ?? DEFAULT_HOST_CONCURRENCY),
@@ -42,10 +59,13 @@ const storage = new AsyncLocalStorage<RunContext>();
 /** The context of the current run, `undefined` outside of `withRun` (metrics and caching are no-ops there) */
 export const getRunContext = (): RunContext | undefined => storage.getStore();
 
-// Used outside of any run (e.g. unit tests calling fetchWithHostLimit or checkUrlsOnPageWithPlaywright directly):
+// Used outside of any run (e.g. integration tests calling fetchWithHostLimit or checkUrlsOnPageWithPlaywright directly):
 // a single lazily created context with defaults, so there is still one host limiter and browser.
 let defaultContext: RunContext | undefined;
 const getContext = (): RunContext => getRunContext() ?? (defaultContext ??= createRunContext());
+
+/** Injected dependencies of the current run (or the default context outside of any run) */
+export const getDeps = (): RunDeps => getContext().deps;
 
 /** The per-host limiter of the current run (or the default context outside of any run) */
 export const getHostLimiter = (): HostLimiter => getContext().hostLimiter;

@@ -6,7 +6,7 @@
  * - `USER_AGENT` and `TASK_TIMEOUT`
  */
 import { parseRetryAfter } from "./limiter";
-import { getHostLimiter, incrementMetric } from "./run";
+import { getDeps, getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 
 // GitHub web rate limit makes you wait 60 seconds after 500 requests
@@ -161,7 +161,7 @@ export const fetchWithHostLimit = async <T>(
     const result = await hostLimiter.run(requestUrl, async (): Promise<HopResult<T>> => {
       // Counted per actual request (every redirect hop and retry)
       incrementMetric("httpRequests");
-      const response = await fetch(requestUrl, {
+      const response = await (getDeps().fetch ?? fetch)(requestUrl, {
         method,
         headers,
         redirect: "manual",

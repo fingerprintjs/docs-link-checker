@@ -2,146 +2,176 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { checkLinkWithFetch as fetchCheck } from "./fetch_check";
+import { checkLinks as checkLinksInRun, interleaveByHost } from "./link";
+import { checkUrlsOnPageWithPlaywright as playwrightCheck } from "./playwright_check";
+import { getHostLimiter, getRunContext, withRun } from "./run";
 import type { LinkCheckResult } from "./types";
 
 /**
  * Offline tests for `checkLinks` and the checkers it uses (`fetch_check.ts`, `playwright_check.ts`).
- * `fetch`, the GitHub API check and Playwright are mocked. The fake browser evaluates selectors with cheerio, so
+ * `fetch`, the GitHub API client and Playwright are fakes injected into the run. The fake browser evaluates selectors with cheerio, so
  * browser-specific behavior (selector syntax, hash navigation) is only covered by the integration tests.
  */
 
-const { checkLinkWithGithubApiMock, playwrightState } = vi.hoisted(() => ({
-  checkLinkWithGithubApiMock: vi.fn(),
-  playwrightState: {
-    // URLs Playwright navigated to
-    visited: [] as string[],
-    // HTML the fake browser "renders"
-    html: "",
-    // HTML per navigated URL (hash included), falls back to `html`
-    htmlByUrl: {} as Record<string, string>,
-    status: 200,
-    // Statuses of the next navigations (one per `goto`), then `status`
-    statuses: [] as number[],
-    // Headers of the navigation response (lowercase names, like Playwright)
-    headers: {} as Record<string, string>,
-    // Final URL of a navigation (after redirects) per navigated URL, falls back to the navigated URL
-    finalUrlByUrl: {} as Record<string, string>,
-    // HTML per navigated URL rendered `afterMs` after the navigation (anchors rendered late, e.g. by a timer on an
-    // already loaded and quiet page), falls back to the above before that. For tests with fake timers.
-    lateHtmlByUrl: {} as Record<string, { html: string; afterMs: number }>,
-    // Setting the hash throws (e.g. the page navigated away)
-    evaluateFails: false,
-    // Setting the hash never returns (the page main thread is hung)
-    evaluateHangs: false,
-    // The navigation response body never ends (Playwright has no timeout for it)
-    responseBodyHangs: false,
-    // A missing selector times out after its whole timeout (instead of right away), for tests with fake timers
-    waitForTakesTimeout: false,
-  },
-}));
-
-vi.mock("./github/gh_check_link", () => ({
-  checkLinkWithGithubApi: checkLinkWithGithubApiMock,
-}));
+const playwrightState = {
+  // URLs Playwright navigated to
+  visited: [] as string[],
+  // HTML the fake browser "renders"
+  html: "",
+  // HTML per navigated URL (hash included), falls back to `html`
+  htmlByUrl: {} as Record<string, string>,
+  status: 200,
+  // Statuses of the next navigations (one per `goto`), then `status`
+  statuses: [] as number[],
+  // Headers of the navigation response (lowercase names, like Playwright)
+  headers: {} as Record<string, string>,
+  // Final URL of a navigation (after redirects) per navigated URL, falls back to the navigated URL
+  finalUrlByUrl: {} as Record<string, string>,
+  // HTML per navigated URL rendered `afterMs` after the navigation (anchors rendered late, e.g. by a timer on an
+  // already loaded and quiet page), falls back to the above before that. For tests with fake timers.
+  lateHtmlByUrl: {} as Record<string, { html: string; afterMs: number }>,
+  // Setting the hash throws (e.g. the page navigated away)
+  evaluateFails: false,
+  // Setting the hash never returns (the page main thread is hung)
+  evaluateHangs: false,
+  // The navigation response body never ends (Playwright has no timeout for it)
+  responseBodyHangs: false,
+  // A missing selector times out after its whole timeout (instead of right away), for tests with fake timers
+  waitForTakesTimeout: false,
+};
 
 // Fake Playwright browser: records navigations, "renders" `playwrightState.html` and evaluates selectors with cheerio
-vi.mock("playwright", () => ({
-  chromium: {
-    launch: async () => ({
+const fakeChromium = {
+  launch: async () => ({
+    close: async () => {},
+    on: () => {},
+    isConnected: () => true,
+    newContext: async () => ({
+      route: async () => {},
       close: async () => {},
-      on: () => {},
-      isConnected: () => true,
-      newContext: async () => ({
-        route: async () => {},
-        close: async () => {},
-        newPage: async () => {
-          let currentUrl = "";
-          let navigatedAt = 0;
-          return {
-            isClosed: () => false,
-            setDefaultTimeout: () => {},
-            setDefaultNavigationTimeout: () => {},
-            goto: async (url: string) => {
-              currentUrl = url;
-              playwrightState.visited.push(url);
-              navigatedAt = Date.now();
-              const status = playwrightState.statuses.shift() ?? playwrightState.status;
-              return {
-                status: () => status,
-                statusText: () => "",
-                url: () => playwrightState.finalUrlByUrl[url] ?? url,
-                headers: () => playwrightState.headers,
-                text: () =>
-                  playwrightState.responseBodyHangs
-                    ? new Promise<string>(() => {})
-                    : Promise.resolve("Forbidden page"),
-              };
-            },
-            // Only used to set the hash of the page: runs the callback against a fake `location`
-            evaluate: async (fn: (hash: string) => void, hash: string) => {
-              if (playwrightState.evaluateFails) {
-                throw new Error("Execution context was destroyed");
-              }
-              if (playwrightState.evaluateHangs) {
-                return new Promise<void>(() => {});
-              }
-              vi.stubGlobal("location", {
-                set hash(value: string) {
-                  currentUrl = currentUrl.replace(/#.*/, "") + value;
-                },
-              });
-              try {
-                fn(hash);
-              } finally {
-                vi.unstubAllGlobals();
-              }
-            },
-            locator: (selector: string) => ({
-              first: () => ({
-                waitFor: async (options?: { timeout?: number }) => {
-                  const matches = (html: string) => cheerio.load(html)(selector).length > 0;
-                  // Throws for invalid selectors, like Playwright would
-                  if (matches(playwrightState.htmlByUrl[currentUrl] ?? playwrightState.html)) {
-                    return;
-                  }
-                  const late = playwrightState.lateHtmlByUrl[currentUrl];
-                  const lateIn = late ? navigatedAt + late.afterMs - Date.now() : Number.NaN;
-                  if (late && matches(late.html) && lateIn <= (options?.timeout ?? 0)) {
-                    await new Promise((resolve) => setTimeout(resolve, Math.max(0, lateIn)));
-                    return;
-                  }
-                  if (playwrightState.waitForTakesTimeout) {
-                    await new Promise((resolve) => setTimeout(resolve, options?.timeout));
-                  }
-                  const error = new Error("Timeout");
-                  error.name = "TimeoutError";
-                  throw error;
-                },
-              }),
+      newPage: async () => {
+        let currentUrl = "";
+        let navigatedAt = 0;
+        return {
+          isClosed: () => false,
+          setDefaultTimeout: () => {},
+          setDefaultNavigationTimeout: () => {},
+          goto: async (url: string) => {
+            currentUrl = url;
+            playwrightState.visited.push(url);
+            navigatedAt = Date.now();
+            const status = playwrightState.statuses.shift() ?? playwrightState.status;
+            return {
+              status: () => status,
+              statusText: () => "",
+              url: () => playwrightState.finalUrlByUrl[url] ?? url,
+              headers: () => playwrightState.headers,
+              text: () =>
+                playwrightState.responseBodyHangs
+                  ? new Promise<string>(() => {})
+                  : Promise.resolve("Forbidden page"),
+            };
+          },
+          // Only used to set the hash of the page: runs the callback against a fake `location`
+          evaluate: async (fn: (hash: string) => void, hash: string) => {
+            if (playwrightState.evaluateFails) {
+              throw new Error("Execution context was destroyed");
+            }
+            if (playwrightState.evaluateHangs) {
+              return new Promise<void>(() => {});
+            }
+            vi.stubGlobal("location", {
+              set hash(value: string) {
+                currentUrl = currentUrl.replace(/#.*/, "") + value;
+              },
+            });
+            try {
+              fn(hash);
+            } finally {
+              vi.unstubAllGlobals();
+            }
+          },
+          locator: (selector: string) => ({
+            first: () => ({
+              waitFor: async (options?: { timeout?: number }) => {
+                const matches = (html: string) => cheerio.load(html)(selector).length > 0;
+                // Throws for invalid selectors, like Playwright would
+                if (matches(playwrightState.htmlByUrl[currentUrl] ?? playwrightState.html)) {
+                  return;
+                }
+                const late = playwrightState.lateHtmlByUrl[currentUrl];
+                const lateIn = late ? navigatedAt + late.afterMs - Date.now() : Number.NaN;
+                if (late && matches(late.html) && lateIn <= (options?.timeout ?? 0)) {
+                  await new Promise((resolve) => setTimeout(resolve, Math.max(0, lateIn)));
+                  return;
+                }
+                if (playwrightState.waitForTakesTimeout) {
+                  await new Promise((resolve) => setTimeout(resolve, options?.timeout));
+                }
+                const error = new Error("Timeout");
+                error.name = "TimeoutError";
+                throw error;
+              },
             }),
-          };
-        },
-      }),
+          }),
+        };
+      },
     }),
-  },
-}));
-
-import { checkLinkWithFetch } from "./fetch_check";
-import { checkLinks, interleaveByHost } from "./link";
-import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { getHostLimiter, getRunContext, withRun } from "./run";
+  }),
+};
 
 const hashesHtml = readFileSync(join(import.meta.dirname, "__fixtures__", "hashes.html"), "utf8");
 
 type FetchHandler = (url: string, init: RequestInit) => Response | Promise<Response>;
 
+let fakeFetch: typeof fetch;
+
 const stubFetch = (handler: FetchHandler) => {
   const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) =>
     handler(String(input), init ?? {}),
   );
-  vi.stubGlobal("fetch", fetchMock);
+  fakeFetch = fetchMock;
   return fetchMock;
 };
+
+// Fake GitHub API client with the calls the tests need
+const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
+const octokit = {
+  issues: { get: vi.fn() },
+  repos: { getContent: vi.fn() },
+  git: { listMatchingRefs: vi.fn() },
+  paginate: vi.fn(),
+};
+const getOctokit = vi.fn(() => octokit as never);
+
+/** Runs `fn` as a run with all external dependencies faked (`stubFetch` can be called inside of `fn`) */
+const run = <T>(fn: () => Promise<T>, hostConcurrency?: number) =>
+  withRun(
+    {
+      hostConcurrency,
+      deps: {
+        fetch: (input, init) => fakeFetch(input, init),
+        chromium: fakeChromium as never,
+        octokit: getOctokit,
+      },
+    },
+    fn,
+  );
+
+const checkLinks = (options: Parameters<typeof checkLinksInRun>[0]) =>
+  run(() => checkLinksInRun(options));
+const checkLinkWithFetch = (url: string) => run(() => fetchCheck(url));
+const checkUrlsOnPageWithPlaywright = (urls: string[]) => run(() => playwrightCheck(urls));
+
+const fileContent = (text: string) => ({
+  data: {
+    type: "file",
+    sha: "abc",
+    size: text.length,
+    content: Buffer.from(text).toString("base64"),
+  },
+});
 
 const link = (href: string, page = "https://example.com/page") => ({ href, page, text: "link" });
 
@@ -161,7 +191,7 @@ const withFakeTimers = async <T>(check: () => Promise<T>) => {
     playwrightState.waitForTakesTimeout = true;
     const start = Date.now();
     let finishedAt = Number.NaN;
-    const promise = withRun({}, check).then((r) => {
+    const promise = run(check).then((r) => {
       finishedAt = Date.now();
       return r;
     });
@@ -185,7 +215,11 @@ beforeEach(() => {
   playwrightState.status = 200;
   playwrightState.statuses = [];
   playwrightState.headers = {};
-  checkLinkWithGithubApiMock.mockReset();
+  getOctokit.mockClear();
+  octokit.issues.get.mockReset().mockResolvedValue({ data: {} });
+  octokit.repos.getContent.mockReset().mockRejectedValue(notFound());
+  octokit.git.listMatchingRefs.mockReset().mockResolvedValue({ data: [] });
+  octokit.paginate.mockReset().mockResolvedValue([]);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -214,35 +248,67 @@ describe("checkLinks() deduplication", () => {
   });
 
   it("checks each GitHub href only once with the GitHub API", async () => {
-    checkLinkWithGithubApiMock.mockImplementation(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      return { ok: true, status: 200 };
+    octokit.issues.get.mockImplementation(async () => {
+      await sleep(20);
+      return { data: {} };
     });
     const links = Array.from({ length: 5 }, () => link("https://github.com/owner/repo/issues/1"));
 
     const results = await checkLinks({ links });
 
-    expect(checkLinkWithGithubApiMock).toHaveBeenCalledTimes(1);
+    expect(octokit.issues.get).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(5);
   });
 });
 
 describe("checkLinks() Playwright escalation", () => {
-  const githubApiCases: Array<[string, LinkCheckResult, boolean]> = [
+  const issue = "https://github.com/owner/repo/issues/999";
+  const readme = "https://github.com/owner/repo/blob/main/README.md#missing";
+  type ApiCase = { href: string; arrange: () => void; apiResult?: LinkCheckResult };
+  const githubApiCases: Array<[string, boolean, ApiCase]> = [
     [
       "404 from the API",
-      { ok: false, error: "broken link", status: 404, errorDetail: "Issue not found" },
       false,
+      {
+        href: issue,
+        arrange: () => octokit.issues.get.mockRejectedValue(notFound()),
+        apiResult: {
+          ok: false,
+          error: "broken link",
+          status: 404,
+          errorDetail: "Issue #999 not found in repository owner/repo",
+        },
+      },
     ],
-    ["hash not found from the API", { ok: false, error: "hash not found", status: 200 }, false],
-    ["unexpected API error", { ok: false, error: "unexpected error", status: 400 }, true],
+    [
+      "hash not found from the API",
+      false,
+      {
+        href: readme,
+        arrange: () => octokit.repos.getContent.mockResolvedValue(fileContent("# Title\n")),
+        apiResult: {
+          ok: false,
+          error: "hash not found",
+          status: 200,
+          errorDetail: "No heading found matching hash: missing",
+        },
+      },
+    ],
+    [
+      "unexpected API error",
+      true,
+      {
+        href: issue,
+        arrange: () =>
+          octokit.issues.get.mockRejectedValue(Object.assign(new Error("Bad"), { status: 400 })),
+      },
+    ],
   ];
 
   it.each(githubApiCases)(
     "GitHub API result: %s -> re-checked with Playwright: %s",
-    async (_name, apiResult, escalate) => {
-      checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
-      const href = "https://github.com/owner/repo/issues/999";
+    async (_name, escalate, { href, arrange, apiResult }) => {
+      arrange();
 
       const results = await checkLinks({ links: [link(href)] });
 
@@ -250,8 +316,7 @@ describe("checkLinks() Playwright escalation", () => {
       expect(results).toHaveLength(1);
       // The definitive API result is reported as-is.
       // Escalated links get the Playwright result (the fake page has no hash to look for)
-      const expected = escalate ? { ok: true, status: 200 } : apiResult;
-      expect(results[0]!.result).toEqual(expected);
+      expect(results[0]!.result).toEqual(escalate ? { ok: true, status: 200 } : apiResult);
     },
   );
 
@@ -263,7 +328,7 @@ describe("checkLinks() Playwright escalation", () => {
       status: 200,
       errorDetail: "a.js has only 3 lines",
     };
-    checkLinkWithGithubApiMock.mockResolvedValue(apiResult);
+    octokit.repos.getContent.mockResolvedValue(fileContent("a\nb\nc\n"));
 
     const results = await checkLinks({ links: [link(href), link(href)] });
 
@@ -273,10 +338,8 @@ describe("checkLinks() Playwright escalation", () => {
 
   it("falls back to the browser for GitHub code line links the API can't check (no token, rate limited)", async () => {
     const href = "https://github.com/owner/repo/blob/main/a.js#L2";
-    checkLinkWithGithubApiMock.mockResolvedValue({
-      ok: false,
-      error: "unexpected error",
-      errorDetail: "Error: GH_TOKEN is not set",
+    getOctokit.mockImplementation(() => {
+      throw new Error("GH_TOKEN is not set");
     });
     playwrightState.html = '<div data-line-number="1"></div><div data-line-number="2"></div>';
 
@@ -356,7 +419,7 @@ describe("checkLinks() Playwright escalation", () => {
     await checkLinks({ links: [link("https://github.com/owner/repo/wiki/Page")] });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
+    expect(getOctokit).not.toHaveBeenCalled();
   });
 
   it("checks GitHub's own pages with fetch (re-checked with Playwright if blocked), not as accounts", async () => {
@@ -365,7 +428,7 @@ describe("checkLinks() Playwright escalation", () => {
 
     const results = await checkLinks({ links: hrefs.map((href) => link(href)) });
 
-    expect(checkLinkWithGithubApiMock).not.toHaveBeenCalled();
+    expect(getOctokit).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(playwrightState.visited.toSorted()).toEqual(hrefs);
     expect(results.every((r) => r.result.ok)).toBe(true);
@@ -658,7 +721,9 @@ describe("checkLinks() grouping by page (URL without hash)", () => {
     const file = "https://github.com/owner/repo/blob/main/a.js";
     const links = ["#L5", "#L6", "#L5-L6", "#L99"].map((hash) => link(`${file}${hash}`));
     // The API can't check them (e.g. no `GH_TOKEN`), they fall back to the browser
-    checkLinkWithGithubApiMock.mockResolvedValue({ ok: false, error: "unexpected error" });
+    getOctokit.mockImplementation(() => {
+      throw new Error("GH_TOKEN is not set");
+    });
 
     const results = await checkLinks({ links });
 
@@ -901,8 +966,7 @@ describe("checkLinks() per-host limit", () => {
       ...Array.from({ length: 5 }, (_, i) => `https://quiet.example.com/page-${i}`),
     ].map((href) => link(href));
 
-    // checkLinks() joins the run, so the host concurrency comes from the run config
-    const results = await withRun({ hostConcurrency: 3 }, () => checkLinks({ links }));
+    const results = await run(() => checkLinksInRun({ links }), 3);
 
     expect(results).toHaveLength(35);
     expect(results.every((r) => r.result.ok)).toBe(true);
@@ -913,8 +977,8 @@ describe("checkLinks() per-host limit", () => {
 
 describe("checkLinks() metrics", () => {
   const countersOf = (links: ReturnType<typeof link>[]) =>
-    withRun({}, async () => {
-      await checkLinks({ links });
+    run(async () => {
+      await checkLinksInRun({ links });
       return getRunContext()!.metrics.counters;
     });
 

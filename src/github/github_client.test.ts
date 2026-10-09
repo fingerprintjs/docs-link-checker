@@ -41,9 +41,8 @@ describe("GitHub API request metrics", () => {
       if (url.includes("/graphql")) return jsonResponse({ data: { viewer: { login: "me" } } });
       return jsonResponse({ id: 1 });
     });
-    vi.stubGlobal("fetch", fetchMock);
 
-    const counters = await withRun({}, async () => {
+    const counters = await withRun({ deps: { fetch: fetchMock } }, async () => {
       const octokit = getMyOctokit();
       await octokit.rest.repos.get({ owner: "o", repo: "r" });
       await octokit.rest.issues.get({ owner: "o", repo: "r", issue_number: 1 });
