@@ -18,6 +18,7 @@ vi.mock("../github_client", () => ({
   }),
 }));
 
+import { withTimeout } from "../../limiter";
 import { checkLinkWithGithubApi as checkLink } from "../gh_check_link";
 
 const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
@@ -120,6 +121,25 @@ describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
         repo: "repo",
         file_sha: "bigsha",
       });
+    });
+
+    it("a timed-out check does not fail other checks of the same large file", async () => {
+      getContent.mockResolvedValue({
+        data: { type: "file", sha: "bigsha", size: 4, encoding: "none", content: "" },
+      });
+      getBlob.mockImplementation(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ data: { content: base64("a\nb\n") } }), 20),
+          ),
+      );
+      const url = "https://github.com/owner/repo/blob/main/big.txt";
+
+      const first = withTimeout((signal) => checkLink(`${url}#L1`, signal), 5, "timed out");
+      const second = checkLinkWithGithubApi(`${url}#L2`);
+
+      await expect(first).rejects.toThrow("timed out");
+      expect(await second).toEqual({ ok: true, status: 200 });
     });
 
     it("reports line anchors on binary files as 'hash not found'", async () => {

@@ -3,7 +3,7 @@ import { checkLineAnchor, countLines } from "../../line_anchor";
 import { getMarkdownAnchors, hasMatchingAnchor } from "../../markdown";
 import type { LinkCheckResult } from "../../types";
 import { tryCatch } from "../../utils/tryCatch";
-import { cachedRequest, getApiErrorResult, isNotFoundApiError } from "../gh_api";
+import { abortable, cachedRequest, getApiErrorResult, isNotFoundApiError } from "../gh_api";
 import { isGithubCodeLineLink } from "../gh_url";
 
 /**
@@ -159,6 +159,7 @@ const getFileText = (
 ): Promise<FileText> => {
   let text = textByFile.get(file);
   if (!text) {
+    // Shared by all hashes of the file: no signal inside, each caller waits with its own (see `abortable`)
     text = (async () => {
       const isLarge = file.encoding === "none" || (file.content === "" && (file.size ?? 0) > 0);
       const base64 = isLarge
@@ -166,7 +167,6 @@ const getFileText = (
             await cachedRequest(
               ["blob", owner.toLowerCase(), repo.toLowerCase(), file.sha],
               (octokit) => octokit.git.getBlob({ owner, repo, file_sha: file.sha }),
-              signal,
             )
           ).data.content
         : file.content;
@@ -177,7 +177,7 @@ const getFileText = (
     // A failed request is not kept, the next hash asks again (the API responses are cached for the run anyway)
     text.catch(() => textByFile.delete(file));
   }
-  return text;
+  return abortable(text, signal);
 };
 
 const getTextAnchors = (fileText: FileText): Set<string> => {
