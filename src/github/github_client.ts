@@ -1,11 +1,11 @@
 import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { Octokit } from "@octokit/rest";
-import { incrementMetric } from "../run";
+import { getDeps, incrementMetric } from "../run";
 
 const MyOctokit = Octokit.plugin(retry, throttling);
 
-type MyOctokitInstance = InstanceType<typeof MyOctokit>;
+export type MyOctokitInstance = InstanceType<typeof MyOctokit>;
 type ThrottleOptions = NonNullable<
   NonNullable<ConstructorParameters<typeof MyOctokit>[0]>["throttle"]
 >;
@@ -31,17 +31,27 @@ const throttleOptions = {
 let client: MyOctokitInstance | undefined;
 
 /**
- * Returns the shared Octokit client. The client is created lazily on first use,
+ * Returns the shared Octokit client (or the one injected in the run). The client is created lazily on first use,
  * so importing modules that use it does not require `GH_TOKEN` (e.g. in offline unit tests).
  * @throws {Error} if `GH_TOKEN` is not set
  */
 export const getMyOctokit = (): MyOctokitInstance => {
+  const injected = getDeps().octokit;
+  if (injected) {
+    return injected();
+  }
   if (!client) {
     const token = process.env.GH_TOKEN;
     if (!token) {
       throw new Error("GH_TOKEN is not set. A GitHub token is required to check GitHub links.");
     }
-    client = new MyOctokit({ auth: token, throttle: throttleOptions });
+    // Resolved per request: the client is shared by all runs, the injected fetch belongs to a run
+    const fetchOfRun: typeof fetch = (...args) => (getDeps().fetch ?? fetch)(...args);
+    client = new MyOctokit({
+      auth: token,
+      throttle: throttleOptions,
+      request: { fetch: fetchOfRun },
+    });
     countRequests(client);
   }
   return client;

@@ -1,18 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { octokit } = vi.hoisted(() => ({
-  octokit: {
-    repos: { get: vi.fn(), getContent: vi.fn() },
-    git: { listMatchingRefs: vi.fn() },
-    paginate: vi.fn(),
-  },
-}));
-
-vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
-
 import { withTimeout } from "../limiter";
 import { getRunContext, withRun } from "../run";
 import { checkLinkWithGithubApi as checkLink } from "./gh_check_link";
+
+const octokit = {
+  repos: { get: vi.fn(), getContent: vi.fn() },
+  git: { listMatchingRefs: vi.fn() },
+  paginate: vi.fn(),
+};
+const run = <T>(fn: () => Promise<T>) => withRun({ deps: { octokit: () => octokit as never } }, fn);
 
 const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
 
@@ -40,7 +36,7 @@ afterEach(() => {
 
 describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   it("dedupes concurrent checks of the same file within a run", async () => {
-    await withRun({}, async () => {
+    await run(async () => {
       const results = await Promise.all(
         Array.from({ length: 10 }, () => checkLinkWithGithubApi(FILE_URL)),
       );
@@ -52,7 +48,7 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   });
 
   it("caches different refs, paths and repositories separately", async () => {
-    await withRun({}, async () => {
+    await run(async () => {
       await Promise.all([
         checkLinkWithGithubApi(FILE_URL),
         checkLinkWithGithubApi("https://github.com/owner/repo/blob/develop/README.md"),
@@ -64,7 +60,7 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   });
 
   it("caches repositories (case-insensitive)", async () => {
-    await withRun({}, async () => {
+    await run(async () => {
       await Promise.all([
         checkLinkWithGithubApi(REPO_URL),
         checkLinkWithGithubApi("https://github.com/Owner/Repo"),
@@ -75,15 +71,15 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   });
 
   it("does not share the cache between runs", async () => {
-    await withRun({}, () => checkLinkWithGithubApi(FILE_URL));
-    await withRun({}, () => checkLinkWithGithubApi(FILE_URL));
+    await run(() => checkLinkWithGithubApi(FILE_URL));
+    await run(() => checkLinkWithGithubApi(FILE_URL));
     expect(octokit.repos.getContent).toHaveBeenCalledTimes(2);
   });
 
   it.each([404, 410])("caches %i (the repository is definitely missing)", async (status) => {
     octokit.repos.get.mockRejectedValue(Object.assign(new Error("Gone"), { status }));
 
-    await withRun({}, async () => {
+    await run(async () => {
       for (let i = 0; i < 2; i++) {
         expect(await checkLinkWithGithubApi(REPO_URL)).toMatchObject({
           ok: false,
@@ -99,7 +95,7 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   it.each([502, 401, 403])("does not cache %i", async (status) => {
     octokit.repos.get.mockRejectedValue(Object.assign(new Error("Failed"), { status }));
 
-    await withRun({}, async () => {
+    await run(async () => {
       for (let i = 0; i < 2; i++) {
         expect(await checkLinkWithGithubApi(REPO_URL)).toMatchObject({
           ok: false,
@@ -113,7 +109,7 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
 
   it("checks many hashes of the same file with one API request", async () => {
     const hashes = ["", "#title", "#usage", "#missing"];
-    const results = await withRun({}, () =>
+    const results = await run(() =>
       Promise.all(hashes.map((hash) => checkLinkWithGithubApi(`${FILE_URL}${hash}`))),
     );
 
@@ -122,7 +118,7 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   });
 
   it("counts cache hits in the run metrics (requests are counted by the Octokit client)", async () => {
-    await withRun({}, async () => {
+    await run(async () => {
       await Promise.all([
         checkLinkWithGithubApi(FILE_URL),
         checkLinkWithGithubApi(FILE_URL),
@@ -144,10 +140,12 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
     octokit.paginate.mockReset().mockResolvedValue([]);
 
     // `feature/x` can be a branch: after "not found" for `feature`, the check would list branches and tags
-    const check = withTimeout(
-      (signal) => checkLink("https://github.com/owner/repo/blob/feature/x/README.md", signal),
-      5,
-      "timed out",
+    const check = run(() =>
+      withTimeout(
+        (signal) => checkLink("https://github.com/owner/repo/blob/feature/x/README.md", signal),
+        5,
+        "timed out",
+      ),
     );
     await expect(check).rejects.toThrow("timed out");
     await delayed(undefined, 40);
@@ -165,7 +163,7 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
         }),
     );
 
-    await withRun({}, async () => {
+    await run(async () => {
       const first = withTimeout((signal) => checkLink(REPO_URL, signal), 5, "timed out");
       const second = checkLinkWithGithubApi(REPO_URL);
 

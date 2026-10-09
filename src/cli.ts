@@ -37,7 +37,7 @@ import {
   type LinkCheckReport,
   saveReport,
 } from "./report/report";
-import { withRun } from "./run";
+import { type RunDeps, withRun } from "./run";
 import type { LinkWithResult } from "./types";
 import { getSampleRate } from "./utils";
 import { getErrorMessage } from "./utils/errors";
@@ -300,6 +300,7 @@ type RunContext = {
   cwd: string;
   stdout: Output;
   stderr: Output;
+  deps?: RunDeps;
 };
 
 /** `file:line` (or just the file) of a link */
@@ -311,6 +312,8 @@ type CliIO = {
   cwd?: string;
   stdout?: Output;
   stderr?: Output;
+  /** Replaces external dependencies of the run (tests) */
+  deps?: RunDeps;
 };
 
 /** Checks the links of the command, `siteName` names the report */
@@ -349,11 +352,10 @@ const checkCommandLinks = async (
 const runCommand = (
   command: CheckCommand,
   baseline: Baseline,
-  cwd: string,
-  env: Env,
+  { cwd, env, deps }: RunContext,
 ): Promise<LinkCheckReport> => {
   const { outputDir, hostConcurrency } = command.options;
-  return withRun({ hostConcurrency }, async () => {
+  return withRun({ hostConcurrency, deps }, async () => {
     const startTime = performance.now();
     const { results, siteName } = await checkCommandLinks(command, cwd);
 
@@ -454,7 +456,7 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
     return 0;
   }
 
-  const report = await runCommand(command, baseline, context.cwd, env);
+  const report = await runCommand(command, baseline, context);
   const reportPaths = getReportPaths(report.siteName, options.outputDir);
   const linksToFix = report.summary.totalLinksToFix;
 
@@ -522,6 +524,7 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
     cwd: io.cwd ?? process.cwd(),
     stdout: io.stdout ?? ((text: string) => process.stdout.write(text)),
     stderr: io.stderr ?? ((text: string) => process.stderr.write(text)),
+    deps: io.deps,
   };
 
   let exitCode = 0;
