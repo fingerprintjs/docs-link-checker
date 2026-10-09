@@ -499,7 +499,12 @@ const JSONReportRenderer = ({
       {all.length > 0 ? (
         <>
           <div class="bar" id="bar" hidden>
-            <input type="search" id="q" placeholder="Filter by URL, page or text" />
+            <input
+              type="search"
+              id="q"
+              aria-label="Filter links"
+              placeholder="Filter by URL, page or text"
+            />
             <span class="view">
               <button type="button" data-view="link" aria-pressed="true">
                 By link

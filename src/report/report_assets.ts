@@ -74,8 +74,10 @@ export const REPORT_SCRIPT = `
       tbody.hidden = !tbody.querySelector("[data-row]:not([hidden])");
     });
     if (count) count.textContent = q || kind ? shown + " shown" : "";
-    document.getElementById("by-link").hidden = view !== "link";
-    document.getElementById("by-page").hidden = view !== "page";
+    // An all-OK report has no tables, only the filter buttons
+    var byLink = document.getElementById("by-link"), byPage = document.getElementById("by-page");
+    if (byLink) byLink.hidden = view !== "link";
+    if (byPage) byPage.hidden = view !== "page";
     document.querySelectorAll("[data-view]").forEach(function (b) {
       b.setAttribute("aria-pressed", String(b.getAttribute("data-view") === view));
     });
@@ -96,11 +98,18 @@ export const REPORT_SCRIPT = `
     if (!target) return;
     var copy = target.closest("[data-copy-href]");
     if (copy) {
-      navigator.clipboard.writeText(copy.getAttribute("data-copy-href") || "");
       var label = copy.getAttribute("data-label") || copy.textContent;
       copy.setAttribute("data-label", label);
-      copy.textContent = "Copied";
-      setTimeout(function () { copy.textContent = label; }, 1200);
+      var show = function (text) {
+        copy.textContent = text;
+        setTimeout(function () { copy.textContent = label; }, 1200);
+      };
+      // No Clipboard API or a denied write (e.g. a report opened from a file): say so instead of "Copied"
+      if (!navigator.clipboard) { show("Copy failed"); return; }
+      navigator.clipboard.writeText(copy.getAttribute("data-copy-href") || "").then(
+        function () { show("Copied"); },
+        function () { show("Copy failed"); }
+      );
       return;
     }
     var filter = target.closest("[data-kind-filter]");
