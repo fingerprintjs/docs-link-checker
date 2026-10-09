@@ -5,6 +5,7 @@
  *   so both check methods treat statuses the same way
  * - `USER_AGENT` and `TASK_TIMEOUT`
  */
+import { stripHash } from "./hash";
 import { parseRetryAfter } from "./limiter";
 import { getDeps, getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
@@ -91,6 +92,23 @@ export const serverErrorResult = (status: number, statusText: string): LinkCheck
   status,
   errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
 });
+
+/**
+ * The final URL of a request if it ended on a different page than requested. A trailing slash or hash difference is
+ * not a redirect worth reporting.
+ */
+export const getRedirectTarget = (requestedUrl: string, finalUrl: string): string | undefined => {
+  if (!URL.canParse(requestedUrl) || !URL.canParse(finalUrl)) {
+    return undefined;
+  }
+  const withoutNoise = (url: string) => {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.href;
+  };
+  return withoutNoise(finalUrl) === withoutNoise(requestedUrl) ? undefined : stripHash(finalUrl);
+};
 
 // Redirects followed per request (like `fetch`, which gives up after 20; 10 is plenty for real links)
 const MAX_REDIRECTS = 10;

@@ -13,6 +13,8 @@ export type LinkCheckResult =
       ok: true;
       status: number;
       note?: string;
+      /** Final URL when the checked URL redirected to a different page (not for trailing slash or hash changes) */
+      redirectedTo?: string;
     }
   | {
       ok: false;
@@ -25,4 +27,6 @@ export type LinkCheckResult =
         | "could not check";
       status?: number;
       errorDetail?: string;
+      /** Final URL when the checked URL redirected to a different page (not for trailing slash or hash changes) */
+      redirectedTo?: string;
     };

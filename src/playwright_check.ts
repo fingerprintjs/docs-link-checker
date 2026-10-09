@@ -2,7 +2,13 @@ import type { Page, Response as PlaywrightResponse } from "playwright";
 import { withPage } from "./browser";
 import { isGithubCodeLineLink } from "./github/gh_url";
 import { getHashSelectors, getSpecialFragmentNote } from "./hash";
-import { classifyStatus, getUserAgent, planServerErrorRetry, serverErrorResult } from "./http";
+import {
+  classifyStatus,
+  getRedirectTarget,
+  getUserAgent,
+  planServerErrorRetry,
+  serverErrorResult,
+} from "./http";
 import { withTimeout } from "./limiter";
 import { getHostLimiter, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
@@ -201,7 +207,12 @@ async function navigateAndCheck(
   retries: number,
 ): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
   const [firstUrl = ""] = urls;
-  const sameForAll = (result: LinkCheckResult) => new Map(urls.map((url) => [url, result]));
+  // Final URL of the navigation, set once the page answered
+  let redirectedTo: string | undefined;
+  const withRedirect = (result: LinkCheckResult): LinkCheckResult =>
+    redirectedTo ? { ...result, redirectedTo } : result;
+  const sameForAll = (result: LinkCheckResult) =>
+    new Map(urls.map((url) => [url, withRedirect(result)]));
 
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
   // Errors while navigating and checking the page are reported as broken links.
@@ -218,6 +229,7 @@ async function navigateAndCheck(
           return sameForAll({ ok: false, error: "broken link", status: 0 });
         }
         const status = response.status();
+        redirectedTo = getRedirectTarget(firstUrl, response.url());
         const statusClass = classifyStatus(status);
         if (statusClass === "server-error") {
           // After a redirect, the server error comes from the final URL: back off for its host
@@ -257,10 +269,7 @@ async function navigateAndCheck(
               async (url) =>
                 [
                   url,
-                  await getPlaywrightHashResult(page, url, {
-                    status,
-                    deadline,
-                  }),
+                  withRedirect(await getPlaywrightHashResult(page, url, { status, deadline })),
                 ] as const,
             ),
           ),
@@ -275,7 +284,7 @@ async function navigateAndCheck(
               break;
             }
             if (found) {
-              results.set(url, { ok: true, status });
+              results.set(url, withRedirect({ ok: true, status }));
             }
           }
         }

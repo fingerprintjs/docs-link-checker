@@ -521,6 +521,62 @@ describe("checkLinkWithFetch()", () => {
   });
 });
 
+describe("redirects", () => {
+  it("fetch: reports where a redirect ended, ok or failed", async () => {
+    stubFetch((url) =>
+      url.endsWith("/old")
+        ? new Response(null, { status: 301, headers: { Location: "/new/" } })
+        : new Response(hashesHtml, { status: 200 }),
+    );
+
+    expect(await checkLinkWithFetch("https://example.com/old")).toEqual({
+      ok: true,
+      status: 200,
+      redirectedTo: "https://example.com/new/",
+    });
+    expect(await checkLinkWithFetch("https://example.com/old#nothing-here")).toMatchObject({
+      ok: false,
+      error: "hash not found",
+      redirectedTo: "https://example.com/new/",
+    });
+  });
+
+  it("fetch: a redirect that only adds a trailing slash is not reported", async () => {
+    stubFetch((url) =>
+      url.endsWith("/docs")
+        ? new Response(null, { status: 308, headers: { Location: "/docs/" } })
+        : new Response("", { status: 200 }),
+    );
+
+    expect(await checkLinkWithFetch("https://example.com/docs")).toEqual({ ok: true, status: 200 });
+  });
+
+  it("playwright: reports the final URL of the navigation, without the hash", async () => {
+    playwrightState.finalUrlByUrl = {
+      "https://example.com/old#simple": "https://example.com/new#simple",
+    };
+    playwrightState.html = hashesHtml;
+
+    expect(await checkLinkWithPlaywright("https://example.com/old#simple")).toEqual({
+      ok: true,
+      status: 200,
+      redirectedTo: "https://example.com/new",
+    });
+  });
+
+  it("playwright: a failed page reports the redirect too", async () => {
+    playwrightState.finalUrlByUrl = { "https://example.com/old": "https://example.com/gone" };
+    playwrightState.status = 404;
+
+    expect(await checkLinkWithPlaywright("https://example.com/old")).toEqual({
+      ok: false,
+      error: "broken link",
+      status: 404,
+      redirectedTo: "https://example.com/gone",
+    });
+  });
+});
+
 describe("checkUrlsOnPageWithPlaywright() hash check", () => {
   // Special characters are covered by hash.test.ts, this only checks the wiring
   it("finds a hash with special characters", async () => {
@@ -942,7 +998,7 @@ describe("server errors (502, 503, 504)", () => {
       return { checked: await checked, firstWait, finalWait: await finalWait };
     });
 
-    expect(result.checked).toEqual({ ok: true, status: 200 });
+    expect(result.checked).toEqual({ ok: true, status: 200, redirectedTo: final });
     expect(result.firstWait).toBe(0);
     expect(result.finalWait).toBeGreaterThan(1900);
     expect(playwrightState.visited).toEqual([url, url]);
