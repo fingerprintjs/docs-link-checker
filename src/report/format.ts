@@ -125,7 +125,8 @@ const targetKey = (link: { href: string; page: string }): string => {
     const url = link.href.startsWith("/")
       ? new URL(link.href.replace(/^\/+/, ""), LOCAL_LINK_BASE)
       : new URL(link.href, new URL(encodePath(link.page), LOCAL_LINK_BASE));
-    return `${url.pathname}${url.search}${url.hash}`;
+    // Local file checks ignore the query string (`checkLocalLink`), so it does not make a different target
+    return `${url.pathname}${url.hash}`;
   } catch {
     return JSON.stringify([link.page, link.href]);
   }
@@ -155,6 +156,15 @@ export const groupByTarget = <T extends IgnoredLink>(links: T[]): TargetGroup<T>
     }
   }
   return [...groups.values()].toSorted((a, b) => b.pages.length - a.pages.length);
+};
+
+/**
+ * Origin of the checked site (`http://localhost:8080`), taken from the first page that is an http(s) URL.
+ * The report only has a display name of the site, which has no scheme or port. Undefined for local files.
+ */
+export const findSiteOrigin = (links: Array<{ page: string }>): string | undefined => {
+  const page = links.find((link) => isHttpUrl(link.page))?.page;
+  return page ? new URL(page).origin : undefined;
 };
 
 /**

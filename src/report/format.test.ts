@@ -116,6 +116,19 @@ describe("groupByTarget()", () => {
     expect(groups).toHaveLength(3);
   });
 
+  it("ignores the query string of local file targets, but not of URLs", () => {
+    const local = groupByTarget([
+      link("missing.md?download=1", "README.md"),
+      link("missing.md?plain=1", "README.md"),
+    ]);
+    expect(local).toHaveLength(1);
+    const remote = groupByTarget([
+      link("https://x.com/a?v=1", "https://s.com/a"),
+      link("https://x.com/a?v=2", "https://s.com/a"),
+    ]);
+    expect(remote).toHaveLength(2);
+  });
+
   it("resolves relative links against their page", () => {
     const groups = groupByTarget([
       link("missing.md", "a/README.md"),

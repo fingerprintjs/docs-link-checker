@@ -289,6 +289,16 @@ describe("runCli()", () => {
       expect((await runFiles(["--compare", previous])).diff).toEqual({ new: 1, fixed: 1 });
     });
 
+    it("names the invalid field when the previous report has the wrong shape", async () => {
+      const file = join(tempDir(), "bad.json");
+      writeFileSync(file, JSON.stringify({ brokenLinks: 1, hashNotFound: [], networkErrors: [] }));
+
+      const report = await runFiles(["--compare", file]);
+
+      expect(report).not.toHaveProperty("diff");
+      expect(vi.mocked(console.log).mock.calls.join("\n")).toContain("(brokenLinks: ");
+    });
+
     it("skips the comparison, without failing, when the previous report is missing", async () => {
       const report = await runFiles(["--compare", join(tempDir(), "missing.json")]);
 

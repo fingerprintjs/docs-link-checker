@@ -25,6 +25,14 @@ const previousReportSchema = z.object({
   networkErrors: z.array(linkSchema),
 });
 
+/** One line: the first invalid field for a bad report (a zod message is multi-line JSON), else the first line */
+const describeError = (error: unknown): string => {
+  const issue = error instanceof z.ZodError ? error.issues[0] : undefined;
+  return issue
+    ? `${issue.path.join(".") || "report"}: ${issue.message}`
+    : (getErrorMessage(error).split("\n")[0] ?? "");
+};
+
 /**
  * Reads the links to fix of a previous report (the JSON file this tool saves). A missing or unusable file is not
  * an error (the first run has no previous report): a one-line notice is logged and there is no comparison.
@@ -42,7 +50,7 @@ export const loadPreviousReport = (path: string): PreviousReport | undefined => 
     console.log(
       missing
         ? `No previous report at ${path}, skipping the comparison.`
-        : `Could not read the previous report ${path} (${getErrorMessage(error).split("\n")[0]}), skipping the comparison.`,
+        : `Could not read the previous report ${path} (${describeError(error)}), skipping the comparison.`,
     );
     return undefined;
   }

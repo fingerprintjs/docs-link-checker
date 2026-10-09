@@ -132,6 +132,17 @@ describe("renderJobSummary()", () => {
     );
   });
 
+  it("shortens pages of an http site with a port", () => {
+    const markdown = renderJobSummary(
+      getJSONReport({
+        ...RUN,
+        siteName: "127.0.0.1",
+        links: [broken("missing.md", { page: "http://127.0.0.1:8080/guide/a" })],
+      }),
+    );
+    expect(markdown).toContain("[/guide/a](http://127.0.0.1:8080/guide/a)");
+  });
+
   it("lists ignored links in a collapsed section with reason and page count", () => {
     const markdown = renderJobSummary(
       getJSONReport({

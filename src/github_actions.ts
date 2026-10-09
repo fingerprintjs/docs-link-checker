@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   countByKind,
   displayUrl,
+  findSiteOrigin,
   formatLocation,
   groupByTarget,
   isHttpUrl,
@@ -84,14 +85,6 @@ const linkCell = ({ link }: TargetGroup<IgnoredLink>, siteOrigin: string | undef
     : target;
 };
 
-/** Origin of the checked site, if the report is of a site (its name is the host) */
-const getSiteOrigin = (siteName: string): string | undefined => {
-  const origin = `https://${siteName}`;
-  return URL.canParse(origin) && siteName.includes(".") && !/[\s/]/.test(siteName)
-    ? origin
-    : undefined;
-};
-
 const statsLine = (report: LinkCheckReport): string => {
   const { summary, diff } = report;
   const counts = countByKind(getLinksToFix(report));
@@ -121,7 +114,11 @@ export const renderJobSummary = (report: LinkCheckReport, options: SummaryOption
   const { limit = SUMMARY_TABLE_LIMIT } = options;
   const { totalLinksToFix } = report.summary;
   const siteName = escapeTableCell(report.siteName);
-  const siteOrigin = getSiteOrigin(report.siteName);
+  const siteOrigin = findSiteOrigin([
+    ...getLinksToFix(report),
+    ...report.couldNotCheck,
+    ...report.ignored,
+  ]);
   const lines = [
     totalLinksToFix > 0
       ? `## ❌ ${siteName}: ${totalLinksToFix} ${totalLinksToFix === 1 ? "link" : "links"} to fix`

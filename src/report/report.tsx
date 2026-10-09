@@ -17,6 +17,7 @@ import {
   formatLocation,
   groupByTarget,
   type IgnoredLink,
+  findSiteOrigin,
   isHttpUrl,
   problemKind,
   problemLabel,
@@ -471,7 +472,7 @@ const JSONReportRenderer = ({
   const toFix = getLinksToFix(report);
   const all = [...toFix, ...report.couldNotCheck];
   // The checked site: pages are shown without its origin
-  const siteOrigin = [...all, ...report.ignored].find((link) => isHttpUrl(link.page))?.page;
+  const siteOrigin = findSiteOrigin([...all, ...report.ignored]);
   const view: ViewProps = { options, ...(siteOrigin ? { siteOrigin } : {}) };
   const ignoredGroups = groupByTarget(report.ignored);
   // Links to fix first, then those that could not be checked
