@@ -36,7 +36,7 @@ docs-link-checker files "**/*.md" --dry-run   # only list the links
   - Relative links (`docs/a.md`, `../b/`, `a.md?plain=1`) are resolved against the file, root-relative links (`/docs/a.md`) against the current directory. The target file or directory must exist (file names are case-sensitive on Linux, like on GitHub), inside the current directory: links leaving it, also through symlinks, are broken and the file is never read.
   - `#anchors` (`#install`, `docs/a.md#install`, `docs/#install` for the directory's `README.md` or `README.markdown`, in any case, `.md` first) must match a heading slug (GitHub semantics, like for GitHub links) or an HTML anchor (`<a name="...">`). `#L10-L20` on code files must be within the file (lines start at 1, ranges go forward). Other anchors on non-markdown files are not checked.
   - Absolute links (`https://...`) are checked like in the other commands (fetch, GitHub API, Playwright). `mailto:` and other schemes are skipped.
-  - Links to fix are printed as `file:line: link: error`, and as `::error file=...,line=...::` annotations in GitHub Actions.
+  - Links to fix are printed as one row per problem, `file:line  problem  link  reason`, or as `::error file=...,line=...::` annotations in GitHub Actions (instead of the rows). `--no-annotations` prints neither.
   - In the HTML report, files and relative links are plain text. In GitHub Actions (run from `GITHUB_WORKSPACE`), they link to the checked commit on GitHub (`.../blob/<sha>/docs/a.md#L7`), links leaving the repository are not linked.
 
 ## Options
@@ -52,6 +52,7 @@ Environment variables are the defaults.
 | `--prune-baseline`                        |                                              | With `--update-baseline`: also remove exact entries that no longer fail. Only on a full-scope run (see [Baseline file](#baseline-file)).                                                                                                                                       |
 | `--compare <report.json>`                 | `LINK_CHECK_COMPARE`                         | Previous JSON report of the same check. The report gets `diff: { new, fixed }`: links to fix (by page, link and problem) that are new or gone since then. A missing or unreadable file only logs a notice. Don't combine with `--sample-rate`, unchecked pages count as fixed. |
 | `--output-dir <dir>`                      |                                              | Where to save the JSON and HTML reports. Default `results`.                                                                                                                                                                                                                    |
+| `--verbose`                               |                                              | Also show run metrics, timings of every batch, request retries and GitHub API requests.                                                                                                                                                                                        |
 | `--json`                                  |                                              | Print the JSON report to stdout, logs go to stderr.                                                                                                                                                                                                                            |
 | `--host-concurrency <n>`                  | `LINK_CHECK_HOST_CONCURRENCY`                | Max concurrent requests per host. Default `8`.                                                                                                                                                                                                                                 |
 
@@ -60,6 +61,31 @@ Environment variables are the defaults.
 - The JSON report has `schemaVersion` (`1`), `generatedAt` (ISO time), `durationMs`, the `summary`, the links by group and, with `--compare`, `diff`. Failed and OK links can have `redirectedTo`: the final URL when the link redirected to another page (a trailing slash or hash change is not reported).
 - Reports are saved to `<output-dir>/<name>.json` and `.html` (for example `results/docs-fingerprint-com.html`, `results/local-files.html`).
 - In GitHub Actions, the CLI appends a summary to `GITHUB_STEP_SUMMARY` and writes the `links-to-fix`, `report-path` and `report-html-path` step outputs to `GITHUB_OUTPUT`.
+
+## Output
+
+```text
+docs-link-checker site https://docs.fingerprint.com
+Baseline linkcheck.baseline.json, 31 entries
+
+✓ Found 22,000 links in 1,312 pages 1m 3s
+✓ Checked 4,120 URLs fetch, GitHub API  3m 12s
+✓ Re-checked 214 pages in browser 1m 48s
+
+HTTP 404  developers.facebook.com/documentation/sharing/webmasters/web-crawlers  on 1 page
+          ↳ /docs/search-bots-filtering  "source"
+
+✗ 1 link to fix (1 broken)
+  22,000 checked · 260 ignored by baseline · 0 could not check · 5m 4s
+  Report results/docs-fingerprint-com.html
+  False positive? --update-baseline
+```
+
+- Steps are printed with their duration. While URLs are checked, a TTY shows one redrawn progress line (count, bar, ETA, failures so far), other outputs get a line every 10%.
+- `files` lists one row per problem, grouped by file. `site` and `github-org` group links to fix by target, with the pages (without the site's origin) and link texts below it, up to 5 pages per target. A link that redirected shows `redirects to <url>`.
+- With `--compare`, the verdict is followed by `+<new> new, <fixed> fixed since previous report`.
+- Colors follow `NO_COLOR` and `FORCE_COLOR`, and are off when the output is not a TTY. With `--json`, all of this goes to stderr.
+- `--verbose` adds the run metrics and timings.
 
 ## Baseline file
 
