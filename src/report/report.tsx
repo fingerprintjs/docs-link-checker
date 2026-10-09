@@ -8,6 +8,7 @@ import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
+import { diffLinksToFix, type PreviousReport } from "./compare";
 import {
   encodePath,
   formatLocation,
@@ -25,9 +26,25 @@ type GetReportArgs = {
   siteName: string;
   /** Failing links matching the baseline are moved to `ignored` and don't count towards `totalLinksToFix` */
   baseline?: Baseline;
+  /** When the check finished */
+  generatedAt: Date;
+  /** How long the check took */
+  durationMs: number;
+  /** Adds `diff` (new and fixed links to fix) when given, see `loadPreviousReport` */
+  previous?: PreviousReport;
 };
 
-export const getJSONReport = ({ links, siteName, baseline = EMPTY_BASELINE }: GetReportArgs) => {
+/** Version of the JSON report format, raised when a field is removed or changes its meaning */
+const REPORT_SCHEMA_VERSION = 1;
+
+export const getJSONReport = ({
+  links,
+  siteName,
+  baseline = EMPTY_BASELINE,
+  generatedAt,
+  durationMs,
+  previous,
+}: GetReportArgs) => {
   const ignored: IgnoredLink[] = [];
   const notIgnored: LinkWithResult[] = [];
   for (const link of links) {
@@ -46,11 +63,16 @@ export const getJSONReport = ({ links, siteName, baseline = EMPTY_BASELINE }: Ge
   const couldNotCheck = withError("could not check");
   const unexpectedErrors = withError("unexpected error");
 
+  const toFix = [...brokenLinks, ...hashNotFound, ...unexpectedErrors];
+
   return {
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    generatedAt: generatedAt.toISOString(),
+    durationMs,
     siteName,
     summary: {
       linksChecked: links.length,
-      totalLinksToFix: brokenLinks.length + hashNotFound.length + unexpectedErrors.length,
+      totalLinksToFix: toFix.length,
       brokenLinks: brokenLinks.length,
       hashNotFound: hashNotFound.length,
       networkErrors: unexpectedErrors.length,
@@ -62,6 +84,7 @@ export const getJSONReport = ({ links, siteName, baseline = EMPTY_BASELINE }: Ge
     networkErrors: unexpectedErrors,
     couldNotCheck,
     ignored,
+    ...(previous ? { diff: diffLinksToFix(previous, toFix) } : {}),
   };
 };
 

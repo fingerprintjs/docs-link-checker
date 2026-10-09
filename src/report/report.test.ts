@@ -4,6 +4,8 @@ import { createBaseline } from "../baseline";
 import type { LinkWithResult } from "../types";
 import { getJSONReport, renderReportToHTML } from "./report";
 
+const RUN = { generatedAt: new Date("2026-01-02T03:04:05Z"), durationMs: 1234 };
+
 const EVIL_HREF = `https://example.com/it's"quoted"?q=<script>alert(1)</script>`;
 
 const links: LinkWithResult[] = [
@@ -26,7 +28,7 @@ const links: LinkWithResult[] = [
   },
 ];
 
-const html = renderReportToHTML(getJSONReport({ links, siteName: `<b>site</b>` }));
+const html = renderReportToHTML(getJSONReport({ ...RUN, links, siteName: `<b>site</b>` }));
 const $ = cheerio.load(html);
 
 describe("renderReportToHTML()", () => {
@@ -60,6 +62,7 @@ describe("renderReportToHTML()", () => {
 
 describe("renderReportToHTML() with ignored links", () => {
   const report = getJSONReport({
+    ...RUN,
     links: [
       { ...links[0]!, href: "https://broken.com/" },
       { ...links[0]!, href: "https://ignored.com/", page: "docs/a.md", line: 7 },
@@ -93,6 +96,7 @@ describe("renderReportToHTML() with ignored links", () => {
       errorDetail: "<html>challenge</html>",
     };
     const groupedReport = getJSONReport({
+      ...RUN,
       siteName: "site",
       links: [
         {
@@ -174,6 +178,7 @@ describe("renderReportToHTML() with ignored links", () => {
       errorDetail: "File not found",
     };
     const localIgnored = getJSONReport({
+      ...RUN,
       siteName: "local files",
       links: [
         {
@@ -226,6 +231,7 @@ describe("renderReportToHTML() for local files", () => {
     result: { ok: false, error: "broken link", errorDetail: "File not found" },
   });
   const report = getJSONReport({
+    ...RUN,
     siteName: "local files",
     links: [
       local("docs/guide.md", "../missing.md", 7),
@@ -265,5 +271,18 @@ describe("renderReportToHTML() for local files", () => {
       `${BASE}docs/guide.md#L11`,
       "https://example.com/x",
     ]);
+  });
+});
+
+describe("getJSONReport() metadata", () => {
+  it("has the schema version and the time and duration it is given", () => {
+    const report = getJSONReport({ ...RUN, links: [], siteName: "site" });
+
+    expect(report).toMatchObject({
+      schemaVersion: 1,
+      generatedAt: "2026-01-02T03:04:05.000Z",
+      durationMs: 1234,
+    });
+    expect(report).not.toHaveProperty("diff");
   });
 });

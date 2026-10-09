@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { formatFileProblems, runCli } from "./cli";
 import { getJSONReport } from "./report/report";
 
+const RUN = { generatedAt: new Date("2026-01-02T03:04:05Z"), durationMs: 1234 };
+
 // GitHub organizations need GH_TOKEN and the network: fake client and README downloads
 const repo = (name: string) => ({
   full_name: `org/${name}`,
@@ -63,6 +65,7 @@ const tempDir = () => mkdtempSync(join(tmpdir(), "cli-test-"));
 describe("formatFileProblems()", () => {
   it("prints one line per link to fix, collapsing and shortening error details", () => {
     const report = getJSONReport({
+      ...RUN,
       siteName: "local files",
       links: [
         {
@@ -259,6 +262,55 @@ describe("runCli()", () => {
     expect(readFileSync(summary, "utf8")).toContain("| docs/guide.md:8 | ../nope.md |");
     const report = JSON.parse(readFileSync(join(out, "local-files.json"), "utf8"));
     expect(report.summary.totalLinksToFix).toBe(1);
+  });
+
+  describe("--compare", () => {
+    const link = (page: string, href: string, error = "broken link") => ({
+      page,
+      href,
+      text: "",
+      result: { ok: false, error },
+    });
+    const previousReport = (brokenLinks: unknown[]) => {
+      const file = join(tempDir(), "previous.json");
+      writeFileSync(file, JSON.stringify({ brokenLinks, hashNotFound: [], networkErrors: [] }));
+      return file;
+    };
+    const runFiles = async (extra: string[], env: Record<string, string> = {}) => {
+      const out = tempDir();
+      await runCli(["files", "docs/*.md", "--output-dir", out, ...extra], io(env));
+      return JSON.parse(readFileSync(join(out, "local-files.json"), "utf8"));
+    };
+
+    it("adds the new and fixed links to fix since the previous report", async () => {
+      // Still broken: ../nope.md. Fixed: gone.md. The problem counts, not the status or message.
+      const previous = previousReport([
+        {
+          ...link("docs/guide.md", "../nope.md"),
+          result: { ok: false, error: "broken link", status: 404 },
+        },
+        link("docs/guide.md", "gone.md"),
+      ]);
+
+      expect((await runFiles(["--compare", previous])).diff).toEqual({ new: 0, fixed: 1 });
+      expect((await runFiles([], { LINK_CHECK_COMPARE: previous })).diff).toEqual({
+        new: 0,
+        fixed: 1,
+      });
+    });
+
+    it("counts a link that fails in a new way as new and fixed", async () => {
+      const previous = previousReport([link("docs/guide.md", "../nope.md", "hash not found")]);
+
+      expect((await runFiles(["--compare", previous])).diff).toEqual({ new: 1, fixed: 1 });
+    });
+
+    it("skips the comparison, without failing, when the previous report is missing", async () => {
+      const report = await runFiles(["--compare", join(tempDir(), "missing.json")]);
+
+      expect(report).not.toHaveProperty("diff");
+      expect(report.summary.totalLinksToFix).toBe(1);
+    });
   });
 
   it("files: emits annotations in GitHub Actions, and passes with --no-fail-on-broken", async () => {

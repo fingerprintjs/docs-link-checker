@@ -13,6 +13,8 @@ import {
 import { getJSONReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
+const RUN = { generatedAt: new Date("2026-01-02T03:04:05Z"), durationMs: 1234 };
+
 const broken = (href: string, extra: Partial<LinkWithResult> = {}): LinkWithResult => ({
   href,
   page: "docs/a.md",
@@ -23,6 +25,7 @@ const broken = (href: string, extra: Partial<LinkWithResult> = {}): LinkWithResu
 
 const report = (links: LinkWithResult[], baselineHrefs: string[] = []) =>
   getJSONReport({
+    ...RUN,
     links,
     siteName: "local files",
     baseline: createBaseline(baselineHrefs.map((href) => ({ href }))),

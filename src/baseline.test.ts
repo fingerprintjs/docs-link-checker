@@ -12,6 +12,8 @@ import {
 import { getJSONReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
+const RUN = { generatedAt: new Date("2026-01-02T03:04:05Z"), durationMs: 1234 };
+
 const broken = (href: string, page = "https://example.com/page"): LinkWithResult => ({
   href,
   page,
@@ -111,6 +113,7 @@ describe("getJSONReport() with a baseline", () => {
     { pattern: "https://error.com/**" },
   ]);
   const report = getJSONReport({
+    ...RUN,
     siteName: "test",
     baseline,
     links: [

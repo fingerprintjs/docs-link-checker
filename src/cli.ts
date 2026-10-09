@@ -28,6 +28,7 @@ import {
   LOCAL_FILES_SITE_NAME,
   NoMarkdownFilesError,
 } from "./local_files";
+import { loadPreviousReport } from "./report/compare";
 import { describeResult, formatLocation } from "./report/format";
 import {
   DEFAULT_OUTPUT_DIR,
@@ -49,6 +50,8 @@ export type CommonOptions = {
   /** Path of the baseline file, if any */
   baseline?: string;
   updateBaseline: boolean;
+  /** Path of a previous JSON report, the new report gets `diff` (new and fixed links to fix) against it */
+  compare?: string;
   /** With `updateBaseline`: also remove exact entries that no longer fail (only for full-scope runs) */
   pruneBaseline: boolean;
   outputDir: string;
@@ -82,6 +85,7 @@ Environment variables:
   LINK_CHECK_SAMPLE_RATE          Default for --sample-rate
   LINK_CHECK_HOST_CONCURRENCY     Default for --host-concurrency
   LINK_CHECK_BASELINE             Default for --baseline
+  LINK_CHECK_COMPARE              Default for --compare
 
 Exit codes: 0 no links to fix (or not failing), 1 links to fix or the check crashed, 2 invalid arguments or baseline.`;
 
@@ -168,6 +172,13 @@ const buildProgram = (
         "--prune-baseline",
         "With --update-baseline: also remove exact entries that no longer fail, only for runs that check everything the baseline covers (all files / pages, no sampling)",
         false,
+      )
+      .option(
+        "--compare <report.json>",
+        "Previous JSON report: the report gets the number of new and fixed links to fix since then (skipped if the file is missing)",
+        nonEmpty,
+        // An empty LINK_CHECK_COMPARE means no comparison
+        env.LINK_CHECK_COMPARE || undefined,
       )
       .option(
         "--output-dir <dir>",
@@ -354,13 +365,24 @@ const runCommand = (
   return withRun({ hostConcurrency, deps }, async () => {
     const startTime = performance.now();
     const { results, siteName } = await checkCommandLinks(command, cwd);
+    const durationMs = Math.round(performance.now() - startTime);
 
-    const report = getJSONReport({ links: results, siteName, baseline });
+    const report = getJSONReport({
+      links: results,
+      siteName,
+      baseline,
+      generatedAt: new Date(),
+      durationMs,
+      // Relative to `cwd` like the other paths
+      previous: command.options.compare
+        ? loadPreviousReport(resolve(cwd, command.options.compare))
+        : undefined,
+    });
     saveReport(report, outputDir, {
       sourceBaseUrl: command.command === "files" ? getGithubBlobBaseUrl(env, cwd) : undefined,
     });
     console.log(report.summary);
-    console.log(`Finished in ${(performance.now() - startTime) / 1000} seconds.`);
+    console.log(`Finished in ${durationMs / 1000} seconds.`);
     return report;
   });
 };
