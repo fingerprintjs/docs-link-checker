@@ -22,9 +22,11 @@ env:
   FAIL_ON_BROKEN_LINKS: "false"
   # On pull requests, check only a deterministic 10% sample of pages/READMEs to keep CI fast. Check everything otherwise.
   LINK_CHECK_SAMPLE_RATE: ${{ github.event_name == 'pull_request' && '0.1' || '1' }}
-  DOCS_REPORT: docs-fingerprint-com.html
-  GITHUB_REPORT: fingerprintjs-github-readmes.html
-  WEB_REPORT: fingerprint-com.html
+  # Report names without extension: results/<name>.html and results/<name>.json, also on GitHub Pages
+  DOCS_REPORT: docs-fingerprint-com
+  GITHUB_REPORT: fingerprintjs-github-readmes
+  WEB_REPORT: fingerprint-com
+  PAGES_URL: https://fingerprintjs.github.io/docs-link-checker
 
 jobs:
   docs:
@@ -40,18 +42,34 @@ jobs:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
+      # The reports of the previous deployment, to show what changed. A missing one (first run) is fine.
+      - name: Download previous report
+        run: curl -fsSL -o previous.json "$PAGES_URL/${{ env.DOCS_REPORT }}.json" || echo "No previous report."
+
       - name: Run link checker
         run: pnpm run checkLinks:docs
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+          # Pull requests check a 10% sample, comparing it with the full report would show most links as fixed
+          LINK_CHECK_COMPARE: ${{ github.event_name != 'pull_request' && 'previous.json' || '' }}
+          LINK_CHECK_ARTIFACT_NAME: report-${{ env.DOCS_REPORT }}
 
-      - name: Upload report
+      - name: Upload reports
+        id: upload
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ${{ env.DOCS_REPORT }}
-          path: results/${{ env.DOCS_REPORT }}
+          name: report-${{ env.DOCS_REPORT }}
+          path: |
+            results/${{ env.DOCS_REPORT }}.html
+            results/${{ env.DOCS_REPORT }}.json
           retention-days: 30
+
+      - name: Link report in job summary
+        if: always() && steps.upload.outputs.artifact-url != ''
+        env:
+          REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: echo "[Download report]($REPORT_URL)" >> "$GITHUB_STEP_SUMMARY"
 
   githubReadmes:
     name: public GitHub READMEs in `fingerprintjs` org
@@ -66,18 +84,34 @@ jobs:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
+      # The reports of the previous deployment, to show what changed. A missing one (first run) is fine.
+      - name: Download previous report
+        run: curl -fsSL -o previous.json "$PAGES_URL/${{ env.GITHUB_REPORT }}.json" || echo "No previous report."
+
       - name: Run link checker
         run: pnpm run checkLinks:github
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+          # Pull requests check a 10% sample, comparing it with the full report would show most links as fixed
+          LINK_CHECK_COMPARE: ${{ github.event_name != 'pull_request' && 'previous.json' || '' }}
+          LINK_CHECK_ARTIFACT_NAME: report-${{ env.GITHUB_REPORT }}
 
-      - name: Upload report
+      - name: Upload reports
+        id: upload
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ${{ env.GITHUB_REPORT }}
-          path: results/${{ env.GITHUB_REPORT }}
+          name: report-${{ env.GITHUB_REPORT }}
+          path: |
+            results/${{ env.GITHUB_REPORT }}.html
+            results/${{ env.GITHUB_REPORT }}.json
           retention-days: 30
+
+      - name: Link report in job summary
+        if: always() && steps.upload.outputs.artifact-url != ''
+        env:
+          REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: echo "[Download report]($REPORT_URL)" >> "$GITHUB_STEP_SUMMARY"
 
   web:
     name: fingerprint.com (just links to our resources)
@@ -92,18 +126,34 @@ jobs:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
+      # The reports of the previous deployment, to show what changed. A missing one (first run) is fine.
+      - name: Download previous report
+        run: curl -fsSL -o previous.json "$PAGES_URL/${{ env.WEB_REPORT }}.json" || echo "No previous report."
+
       - name: Run link checker
         run: pnpm run checkLinks:web
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+          # Pull requests check a 10% sample, comparing it with the full report would show most links as fixed
+          LINK_CHECK_COMPARE: ${{ github.event_name != 'pull_request' && 'previous.json' || '' }}
+          LINK_CHECK_ARTIFACT_NAME: report-${{ env.WEB_REPORT }}
 
-      - name: Upload report
+      - name: Upload reports
+        id: upload
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ${{ env.WEB_REPORT }}
-          path: results/${{ env.WEB_REPORT }}
+          name: report-${{ env.WEB_REPORT }}
+          path: |
+            results/${{ env.WEB_REPORT }}.html
+            results/${{ env.WEB_REPORT }}.json
           retention-days: 30
+
+      - name: Link report in job summary
+        if: always() && steps.upload.outputs.artifact-url != ''
+        env:
+          REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: echo "[Download report]($REPORT_URL)" >> "$GITHUB_STEP_SUMMARY"
 
   combine-artifacts:
     name: Combine all reports
@@ -115,7 +165,7 @@ jobs:
       - name: Download reports
         uses: actions/download-artifact@v8
         with:
-          pattern: "*.html"
+          pattern: "report-*"
           path: reports
           merge-multiple: true
       - name: Create combined archive
@@ -155,7 +205,7 @@ jobs:
       - name: Download reports
         uses: actions/download-artifact@v8
         with:
-          pattern: "*.html"
+          pattern: "report-*"
           path: reports
           merge-multiple: true
 
@@ -165,49 +215,53 @@ jobs:
           # Deploy only complete runs: if any report is missing (e.g. a checker crashed),
           # keep the last complete site on GitHub Pages instead of replacing it with a partial one.
           mkdir -p reports
-          REPORT_ITEMS=""
           MISSING=""
-          for entry in "${DOCS_REPORT}|docs.fingerprint.com Report" "${GITHUB_REPORT}|GitHub READMEs Report" "${WEB_REPORT}|fingerprint.com Report"; do
-            file="${entry%%|*}"
-            title="${entry#*|}"
-            if [ -f "reports/${file}" ]; then
-              REPORT_ITEMS="${REPORT_ITEMS}<div class=\"report-item\"><a href=\"${file}\">${title}</a></div>"
-            else
-              MISSING="${MISSING} ${file}"
-            fi
+          for name in "$DOCS_REPORT" "$GITHUB_REPORT" "$WEB_REPORT"; do
+            for ext in html json; do
+              [ -f "reports/${name}.${ext}" ] || MISSING="${MISSING} ${name}.${ext}"
+            done
           done
           if [ -n "${MISSING}" ]; then
             echo "::warning::Missing reports:${MISSING}. Skipping deployment to keep the last complete reports on GitHub Pages."
             exit 0
           fi
           echo "has_reports=true" >> "$GITHUB_OUTPUT"
-          TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
-          cat > reports/index.html << EOF
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <title>Link Checker Reports</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 40px; }
-              h1 { color: #333; }
-              .report-list { margin-top: 20px; }
-              .report-item { margin: 10px 0; }
-              a { color: #0366d6; text-decoration: none; }
-              a:hover { text-decoration: underline; }
-            </style>
-          </head>
-          <body>
-            <h1>Link Checker Reports</h1>
-            <div>
-              <a href="https://github.com/fingerprintjs/docs-link-checker">Github repository</a>
-              <a href="https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml">Run workflow again</a>
-            </div>
-            <div class="report-list">
-              ${REPORT_ITEMS}
-            </div>
-            <p>Last updated: ${TIMESTAMP}</p>
-          </body>
-          </html>
+          node --input-type=module - "$DOCS_REPORT" "$GITHUB_REPORT" "$WEB_REPORT" <<'EOF'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const esc = (value) => String(value).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+          const number = (value) => value.toLocaleString("en-US");
+          const rows = process.argv.slice(2).map((name) => {
+            const { siteName, summary, diff, generatedAt } = JSON.parse(readFileSync(`reports/${name}.json`, "utf8"));
+            const toFix = summary.totalLinksToFix;
+            const status = toFix ? `<td class="bad">✗ ${toFix} to fix` : `<td class="ok">✓ OK`;
+            const trend = diff ? `+${diff.new} / −${diff.fixed}` : "";
+            const time = generatedAt ? new Date(generatedAt).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "";
+            return `<tr><td><a href="${esc(name)}.html">${esc(siteName)}</a></td>${status}</td><td class="n">${number(summary.ignored)}</td><td class="n">${number(summary.linksChecked)}</td><td class="n">${trend}</td><td>${time}</td></tr>`;
+          });
+          writeFileSync("reports/index.html", `<!doctype html>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width">
+          <title>Link check reports</title>
+          <style>
+            :root { color-scheme: light dark; --bad: #cf222e; --ok: #1a7f37; --line: #d0d7de; }
+            @media (prefers-color-scheme: dark) { :root { --bad: #ff7b72; --ok: #3fb950; --line: #30363d; } }
+            body { font: 14px/1.4 system-ui, sans-serif; max-width: 52rem; margin: 1.5rem auto; padding: 0 1rem; }
+            h1 { font-size: 1.1rem; margin: 0 0 .75rem; }
+            table { border-collapse: collapse; width: 100%; }
+            th, td { padding: .25rem .75rem .25rem 0; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+            th { font-weight: 600; }
+            .n { text-align: right; font-variant-numeric: tabular-nums; }
+            .bad { color: var(--bad); }
+            .ok { color: var(--ok); }
+            p { margin: .75rem 0 0; opacity: .7; }
+          </style>
+          <h1>Link check reports</h1>
+          <table>
+            <tr><th>Report<th>Status<th class="n">Ignored<th class="n">Checked<th class="n" title="new / fixed since the previous report">Diff<th>Generated</tr>
+            ${rows.join("\n")}
+          </table>
+          <p><a href="https://github.com/fingerprintjs/docs-link-checker">Repository</a> · <a href="https://github.com/fingerprintjs/docs-link-checker/actions/workflows/checkLinks.yaml">Run again</a></p>
+          `);
           EOF
 
       - name: Setup Pages
