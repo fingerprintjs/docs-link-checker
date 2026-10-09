@@ -350,7 +350,12 @@ const ByLinkTable = ({
 const groupByPage = (links: LinkWithResult[]): Map<string, LinkWithResult[]> => {
   const pages = new Map<string, LinkWithResult[]>();
   for (const link of links) {
-    pages.set(link.page, [...(pages.get(link.page) ?? []), link]);
+    const pageLinks = pages.get(link.page);
+    if (pageLinks) {
+      pageLinks.push(link);
+    } else {
+      pages.set(link.page, [link]);
+    }
   }
   return pages;
 };
@@ -526,7 +531,10 @@ const JSONReportRenderer = ({
           </main>
         </>
       ) : (
-        <p class="ok">✓ All {summary.linksChecked.toLocaleString("en-US")} links OK</p>
+        <p class="ok">
+          ✓ All {summary.linksChecked.toLocaleString("en-US")}{" "}
+          {summary.linksChecked === 1 ? "link" : "links"} OK
+        </p>
       )}
 
       {ignoredGroups.length > 0 ? (

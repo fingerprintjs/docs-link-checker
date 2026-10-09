@@ -40,9 +40,15 @@ const escapeTableCell = (value: string, maxLength = MAX_CELL_LENGTH): string =>
     .replace(/\[/g, "\\[")
     .replace(/]/g, "\\]");
 
-/** Code span for a table cell: markdown and HTML are not interpreted inside it, only backticks and pipes are */
+/**
+ * Code span for a table cell: markdown and HTML are not interpreted inside it, only backticks and pipes are.
+ * A backslash right before a pipe is doubled first, else `\\|` reads as an escaped backslash and a column break.
+ */
 const codeCell = (value: string): string =>
-  `\`${singleLine(value, MAX_CELL_LENGTH).replace(/`/g, "'").replace(/\|/g, "\\|")}\``;
+  `\`${singleLine(value, MAX_CELL_LENGTH)
+    .replace(/`/g, "'")
+    .replace(/\\(?=\|)/g, "\\\\")
+    .replace(/\|/g, "\\|")}\``;
 
 type SummaryOptions = {
   limit?: number;

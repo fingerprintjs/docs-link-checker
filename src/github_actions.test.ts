@@ -158,8 +158,11 @@ describe("renderJobSummary()", () => {
           },
         }),
         broken(`https://example.com/${"x".repeat(500)}`),
+        // A backslash before a pipe must not turn the pipe escape into an escaped backslash
+        broken("dir\\|x.md"),
       ]),
     );
+    expect(markdown).toContain("`dir\\\\\\|x.md`");
     expect(markdown).toContain("`a\\|b'c <script>`");
     expect(markdown).toContain("`[x](javascript:alert(1)) 'code'`");
     expect(markdown).toContain("<sub>line 1 line 2 \\| a &amp; b \\[y\\]</sub>");
