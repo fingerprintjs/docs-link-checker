@@ -7,7 +7,7 @@
  */
 import { stripHash } from "./hash";
 import { parseRetryAfter } from "./limiter";
-import { getDeps, getHostLimiter, incrementMetric } from "./run";
+import { getDeps, getHostLimiter, getTerminal, incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 
 // GitHub web rate limit makes you wait 60 seconds after 500 requests
@@ -80,7 +80,9 @@ export const planServerErrorRetry = (
     return undefined;
   }
   const delayMs = Math.min(Math.max(backoff, retryAfterMs ?? 0), MAX_SERVER_ERROR_RETRY_DELAY);
-  console.log(`Server error ${status} (${url}), retrying after ${Math.ceil(delayMs / 1000)}s...`);
+  getTerminal().verbose(
+    `Server error ${status} (${url}), retrying after ${Math.ceil(delayMs / 1000)}s...`,
+  );
   incrementMetric("serverErrorRetries");
   return delayMs;
 };
@@ -196,7 +198,7 @@ export const fetchWithHostLimit = async <T>(
           const retryAfterMs = parseRetryAfter(retryAfter);
           if (retryAfterMs !== undefined && retryAfterMs < TASK_TIMEOUT) {
             // Retry-After is either a number of seconds or an HTTP date, log the parsed delay
-            console.log(formatRateLimitRetry(requestUrl, retryAfterMs, retryAfter));
+            getTerminal().verbose(formatRateLimitRetry(requestUrl, retryAfterMs, retryAfter));
             // Pause the whole host while still holding the slot
             hostLimiter.pause(requestUrl, retryAfterMs);
             return { type: "retry" };

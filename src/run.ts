@@ -3,6 +3,7 @@ import pLimit, { type LimitFunction } from "p-limit";
 import type { Browser, BrowserType } from "playwright";
 import type { MyOctokitInstance } from "./github/github_client";
 import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./limiter";
+import { createSilentTerminal, formatDuration, type Terminal } from "./terminal";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
@@ -23,6 +24,8 @@ export type RunDeps = {
 export type RunConfig = {
   hostConcurrency?: number;
   deps?: RunDeps;
+  /** Where steps, progress and verbose details are shown. Defaults to a terminal that prints nothing. */
+  terminal?: Terminal;
 };
 
 type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
@@ -35,6 +38,7 @@ export type RunContext = {
   deps: RunDeps;
   cache: Map<string, Promise<unknown>>;
   metrics: RunMetrics;
+  terminal: Terminal;
   hostLimiter: HostLimiter;
   browser: BrowserSlot;
   pageSlots: LimitFunction;
@@ -49,6 +53,7 @@ const createRunContext = (config: RunConfig = {}): RunContext => ({
   deps: config.deps ?? {},
   cache: new Map(),
   metrics: { counters: {}, phases: [] },
+  terminal: config.terminal ?? createSilentTerminal(),
   hostLimiter: new HostLimiter(config.hostConcurrency ?? DEFAULT_HOST_CONCURRENCY),
   browser: {},
   pageSlots: pLimit(PLAYWRIGHT_CONCURRENCY_LIMIT),
@@ -66,6 +71,9 @@ const getContext = (): RunContext => getRunContext() ?? (defaultContext ??= crea
 
 /** Injected dependencies of the current run (or the default context outside of any run) */
 export const getDeps = (): RunDeps => getContext().deps;
+
+/** Terminal of the current run (or the default context outside of any run) */
+export const getTerminal = (): Terminal => getContext().terminal;
 
 /** The per-host limiter of the current run (or the default context outside of any run) */
 export const getHostLimiter = (): HostLimiter => getContext().hostLimiter;
@@ -100,7 +108,7 @@ export const closeRunBrowser = (): Promise<void> => closeContextBrowser(getConte
 /**
  * Runs `fn` as a link-check run: in-memory caches (GitHub API responses...) and metrics live for the duration of the
  * run, requests use a dedicated per-host limiter (`config.hostConcurrency`, default 8). At the end (also on
- * errors), the run metrics are logged and the shared browser (if one was launched) is closed.
+ * errors), the run metrics are shown (with --verbose) and the shared browser (if one was launched) is closed.
  * Nested calls (e.g. `checkLinks` inside `checkWebsite`) join the outer run, its config applies to all of it.
  */
 export const withRun = async <T>(config: RunConfig, fn: () => Promise<T>): Promise<T> => {
@@ -114,7 +122,8 @@ export const withRun = async <T>(config: RunConfig, fn: () => Promise<T>): Promi
       return await fn();
     } finally {
       await closeContextBrowser(context.browser);
-      console.log(formatRunMetrics(context.metrics, performance.now() - startTime));
+      context.terminal.clear();
+      context.terminal.verbose(formatRunMetrics(context.metrics, performance.now() - startTime));
     }
   });
 };
@@ -160,9 +169,6 @@ export const timePhase = async <T>(name: string, fn: () => Promise<T>): Promise<
   }
 };
 
-const formatMs = (ms: number) =>
-  ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
-
 const formatRunMetrics = (metrics: RunMetrics, totalMs?: number): string => {
   const lines = ["Run metrics:"];
   for (const [name, label] of Object.entries(METRICS)) {
@@ -174,11 +180,11 @@ const formatRunMetrics = (metrics: RunMetrics, totalMs?: number): string => {
   if (metrics.phases.length > 0) {
     lines.push("  Phases:");
     for (const phase of metrics.phases) {
-      lines.push(`    ${phase.name}: ${formatMs(phase.ms)}`);
+      lines.push(`    ${phase.name}: ${formatDuration(phase.ms)}`);
     }
   }
   if (totalMs !== undefined) {
-    lines.push(`  Total: ${formatMs(totalMs)}`);
+    lines.push(`  Total: ${formatDuration(totalMs)}`);
   }
   return lines.join("\n");
 };

@@ -171,37 +171,6 @@ describe("renderJobSummary()", () => {
     expect(markdown).toContain("| +10 more, see the full report | | |");
     expect(renderJobSummary(report(links), { limit: 5 })).toContain("| +55 more");
   });
-
-  describe("report link", () => {
-    const links = [broken("x.md")];
-
-    it("links the report URL, with the artifact name", () => {
-      const markdown = renderJobSummary(report(links), {
-        reportUrl: "https://github.com/o/r/actions/runs/1/artifacts/2",
-        artifactName: "link-check-report",
-      });
-      expect(markdown).toContain(
-        "[Full report](https://github.com/o/r/actions/runs/1/artifacts/2) (artifact `link-check-report`)",
-      );
-    });
-
-    it("names the artifact without a URL, never a local path", () => {
-      expect(renderJobSummary(report(links), { artifactName: "link-check-report" })).toContain(
-        "Full report: artifact `link-check-report`.",
-      );
-      const markdown = renderJobSummary(report(links), {
-        reportPaths: { json: "/runner/tmp/a.json", html: "/runner/tmp/a.html" },
-      });
-      expect(markdown).toContain("Full report: `a.html`.");
-      expect(markdown).not.toContain("/runner");
-    });
-
-    it("ignores a URL that is not http(s)", () => {
-      expect(renderJobSummary(report(links), { reportUrl: "javascript:alert(1)" })).not.toContain(
-        "javascript",
-      );
-    });
-  });
 });
 
 describe("writeJobSummary()", () => {
@@ -212,13 +181,6 @@ describe("writeJobSummary()", () => {
     const content = readFileSync(file, "utf8");
     expect(content.startsWith("previous step\n## ❌")).toBe(true);
     expect(writeJobSummary(report([]), {}, "")).toBe(false);
-  });
-
-  it("uses the report URL from LINK_CHECK_REPORT_URL", () => {
-    vi.stubEnv("LINK_CHECK_REPORT_URL", "https://example.com/report");
-    const file = tempFile("url-summary.md");
-    writeJobSummary(report([broken("x.md")]), {}, file);
-    expect(readFileSync(file, "utf8")).toContain("[Full report](https://example.com/report)");
   });
 
   it("never falls back to the real GITHUB_STEP_SUMMARY / GITHUB_OUTPUT (like in CI)", () => {

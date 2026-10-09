@@ -25,17 +25,6 @@ export const encodePath = (path: string): string =>
 export const formatLocation = (link: { page: string; line?: number }): string =>
   link.line ? `${link.page}:${link.line}` : link.page;
 
-/** Short description of a result: `broken link (404): detail`. The error detail is kept as is. */
-export const describeResult = (link: LinkWithResult): string => {
-  const { result } = link;
-  if (result.ok) {
-    return "OK";
-  }
-  const status = result.status ? ` (${result.status})` : "";
-  const detail = result.errorDetail?.trim() ? `: ${result.errorDetail.trim()}` : "";
-  return `${result.error}${status}${detail}`;
-};
-
 /**
  * Name of the problem of a failed link: `Anchor not found`, `Line out of range`, `File not found`, `HTTP 404`,
  * `Network error`, `Could not check (403)`. `OK` for a link that works.

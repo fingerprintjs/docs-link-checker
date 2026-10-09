@@ -176,9 +176,6 @@ runs:
         LINK_CHECK_BASELINE: ""
         LINK_CHECK_HOST_CONCURRENCY: ""
         LINK_CHECK_COMPARE: ${{ inputs.compare }}
-        # Named in the job summary, the link to it is added after the upload
-        LINK_CHECK_ARTIFACT_NAME: ${{ inputs.artifact-name }}
-        LINK_CHECK_REPORT_URL: ""
       run: |
         set -f
         # shellcheck disable=SC2086

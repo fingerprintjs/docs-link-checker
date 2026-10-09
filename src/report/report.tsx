@@ -601,9 +601,7 @@ export function saveReport(
   mkdirSync(outputDir, { recursive: true });
 
   writeFileSync(paths.json, JSON.stringify(report, null, 2));
-  console.log(`Saved JSON report to ${paths.json}`);
 
   renderReportToHTMLFile(report, paths.html, options);
-  console.log(`Saved HTML report to ${paths.html}`);
   return paths;
 }

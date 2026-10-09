@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   displayUrl,
   formatLocation,
@@ -45,23 +45,6 @@ const codeCell = (value: string): string =>
 
 type SummaryOptions = {
   limit?: number;
-  /** Where the uploaded report can be opened (artifact or Pages URL), only http(s) URLs are used */
-  reportUrl?: string;
-  /** Name of the artifact the reports are uploaded as, mentioned when there is no `reportUrl` */
-  artifactName?: string;
-  /** Paths of the saved reports, the file name is mentioned when there is no URL or artifact name */
-  reportPaths?: { json: string; html: string };
-};
-
-const reportLine = ({ reportUrl, artifactName, reportPaths }: SummaryOptions): string => {
-  const artifact = artifactName ? ` (artifact \`${artifactName.replace(/`/g, "")}\`)` : "";
-  if (reportUrl && isHttpUrl(reportUrl)) {
-    return `[Full report](${new URL(reportUrl).href.replace(/[()\s]/g, encodeURIComponent)})${artifact}`;
-  }
-  if (artifactName) {
-    return `Full report: artifact \`${artifactName.replace(/`/g, "")}\`.`;
-  }
-  return reportPaths ? `Full report: \`${basename(reportPaths.html).replace(/`/g, "")}\`.` : "";
 };
 
 const pageLink = (page: string, siteOrigin: string | undefined, line?: number): string => {
@@ -173,10 +156,6 @@ export const renderJobSummary = (report: LinkCheckReport, options: SummaryOption
     );
   }
 
-  const fullReport = reportLine(options);
-  if (fullReport) {
-    lines.push(fullReport, "");
-  }
   return `${lines.join("\n")}\n`;
 };
 
@@ -194,15 +173,7 @@ export const writeJobSummary = (
   if (!summaryFile) {
     return false;
   }
-  appendFileSync(
-    summaryFile,
-    renderJobSummary(report, {
-      // The action sets these after uploading the reports, see `action.yml`
-      reportUrl: process.env.LINK_CHECK_REPORT_URL || undefined,
-      artifactName: process.env.LINK_CHECK_ARTIFACT_NAME || undefined,
-      ...options,
-    }),
-  );
+  appendFileSync(summaryFile, renderJobSummary(report, options));
   return true;
 };
 

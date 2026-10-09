@@ -52,7 +52,6 @@ jobs:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
           # Pull requests check a 10% sample, comparing it with the full report would show most links as fixed
           LINK_CHECK_COMPARE: ${{ github.event_name != 'pull_request' && 'previous.json' || '' }}
-          LINK_CHECK_ARTIFACT_NAME: report-${{ env.DOCS_REPORT }}
 
       - name: Upload reports
         id: upload
@@ -94,7 +93,6 @@ jobs:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
           # Pull requests check a 10% sample, comparing it with the full report would show most links as fixed
           LINK_CHECK_COMPARE: ${{ github.event_name != 'pull_request' && 'previous.json' || '' }}
-          LINK_CHECK_ARTIFACT_NAME: report-${{ env.GITHUB_REPORT }}
 
       - name: Upload reports
         id: upload
@@ -136,7 +134,6 @@ jobs:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
           # Pull requests check a 10% sample, comparing it with the full report would show most links as fixed
           LINK_CHECK_COMPARE: ${{ github.event_name != 'pull_request' && 'previous.json' || '' }}
-          LINK_CHECK_ARTIFACT_NAME: report-${{ env.WEB_REPORT }}
 
       - name: Upload reports
         id: upload

@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { fetchWithHostLimit, USER_AGENT } from "./http";
+import { getTerminal } from "./run";
 import type { Link } from "./types";
 import { parallelProcess } from "./utils";
 
@@ -96,27 +97,24 @@ export const getLinksFromPages = async ({
   pages: string[];
   linkFilter?: (link: Link) => boolean;
 }) => {
-  console.log(`Retrieving links from ${pages.length} pages...`);
   // Parse links from pages
   const { results, errors } = await parallelProcess({
     items: pages,
+    label: "Reading pages",
     processFn: async (page: string) => parseLinksFromPage(page),
   });
 
   // Flatten and filter results if a link filter is provided
   const flatResults = results.flat();
-  console.log(`Extracted ${flatResults.length} links.`);
   const links = linkFilter ? flatResults.filter(linkFilter) : flatResults;
   if (linkFilter) {
-    console.log(
-      `Filtered away ${flatResults.length - links.length} links using the provided links filter. Continuing with ${
-        links.length
-      } links...`,
+    getTerminal().verbose(
+      `Filtered away ${flatResults.length - links.length} links using the provided links filter.`,
     );
   }
 
   if (errors.length > 0) {
-    console.log(`Retrieving links failed for ${errors.length} pages.`);
+    getTerminal().verbose(`Retrieving links failed for ${errors.length} pages.`);
   }
 
   return { links, errors };

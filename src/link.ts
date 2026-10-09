@@ -5,7 +5,14 @@ import { hasHash, stripHash } from "./hash";
 import { TASK_TIMEOUT } from "./http";
 import { withTimeout } from "./limiter";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { incrementMetric, PLAYWRIGHT_CONCURRENCY_LIMIT, timePhase, withRun } from "./run";
+import {
+  getTerminal,
+  incrementMetric,
+  PLAYWRIGHT_CONCURRENCY_LIMIT,
+  timePhase,
+  withRun,
+} from "./run";
+import { plural } from "./terminal";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { CONCURRENCY_LIMIT, parallelProcess } from "./utils";
 import { getErrorMessage } from "./utils/errors";
@@ -179,7 +186,7 @@ const checkLinksInRun = async ({
   links,
   fetchConcurrencyLimit = CONCURRENCY_LIMIT,
 }: CheckLinksArgs): Promise<LinkWithResult[]> => {
-  console.log(`\nChecking ${links.length} links...`);
+  const terminal = getTerminal();
   const uniqueHrefs = [...new Set(links.map((link) => link.href))];
   const uniquePages = new Set(uniqueHrefs.map(stripHash));
   incrementMetric("totalLinks", links.length);
@@ -202,6 +209,8 @@ const checkLinksInRun = async ({
     parallelProcess({
       items: interleaveByHost(uniqueHrefs.map((href) => ({ href }))),
       concurrencyLimit: fetchConcurrencyLimit,
+      label: "Checking URLs",
+      failing: () => [...results.values()].filter((result) => !result.ok).length,
       // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
       processFn: async ({ href }) => {
         const { result, method } = await checkLinkFirstPass(href, pageCache);
@@ -222,14 +231,16 @@ const checkLinksInRun = async ({
     });
   }
 
+  terminal.done(`Checked ${plural(uniqueHrefs.length, "URL")}`, "fetch, GitHub API");
+
   // One navigation per page, all hashes pointing to that page are checked in the same DOM
   const pageGroups = groupHrefsByPage(toRecheck);
-  console.log(`Checking ${toRecheck.length} links (${pageGroups.length} pages) with Playwright...`);
 
   const { errors: playwrightErrors } = await timePhase("Re-check links with Playwright", () =>
     parallelProcess({
       items: pageGroups,
       concurrencyLimit: PLAYWRIGHT_CONCURRENCY_LIMIT,
+      label: "Re-checking pages in browser",
       // No timeout for the whole group: it can wait for a page slot and for the host to resume.
       // Every navigation and hash wait is bounded on its own (PAGE_OPERATION_TIMEOUT, HASH_WAIT_TIMEOUT,
       // HASH_FALLBACK_WAIT_TIMEOUT).
@@ -249,7 +260,9 @@ const checkLinksInRun = async ({
     }
   }
 
-  console.log(`Checked ${uniqueHrefs.length} unique URLs (${uniquePages.size} unique pages).`);
+  if (pageGroups.length > 0) {
+    terminal.done(`Re-checked ${plural(pageGroups.length, "page")} in browser`);
+  }
   return links.map((link) => ({
     ...link,
     // Every unique href was given a result above (or an unexpected-error one for a throwing check)

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { type Browser, chromium, type Page, type Request, type Route } from "playwright";
-import { getBrowserSlot, getDeps, getPageSlots, incrementMetric } from "./run";
+import { getBrowserSlot, getDeps, getPageSlots, getTerminal, incrementMetric } from "./run";
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
@@ -119,7 +119,7 @@ type RunCommand = (
 ) => { status: number | null; error?: Error };
 
 export const installPlaywrightChromium = (spawn: RunCommand = spawnSync) => {
-  console.log("Playwright Chromium is missing, installing...");
+  getTerminal().line(getTerminal().paint("dim", "Playwright Chromium is missing, installing..."));
   // This package's `playwright` CLI, not a different version from `npx playwright`
   const cli = join(
     dirname(createRequire(import.meta.url).resolve("playwright/package.json")),
