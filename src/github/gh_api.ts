@@ -45,11 +45,31 @@ export const getApiErrorResult = (error: unknown, notFoundDetail: string): LinkC
 };
 
 /**
+ * Waits for a promise that other checks may share, until `signal` aborts. Aborting stops only this caller,
+ * the promise itself keeps running for the others.
+ */
+export const abortable = async <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) {
+    return promise;
+  }
+  signal.throwIfAborted();
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+};
+
+/**
  * Runs `request` once per `key` in a run. GitHub names (owner, repo, user) are case-insensitive, callers lowercase
  * them in the key.
- * `signal` stops only this caller: it fails right away if the signal is already aborted (no new request after a
- * timeout) and stops waiting when it aborts. The shared request itself is never aborted, other callers still wait
- * for it.
+ * An already aborted `signal` fails before any request (no new request after a timeout). An abort later stops only
+ * this caller (see `abortable`), the shared request is never aborted.
  * "Not found" is a definitive answer worth caching. Other errors (rate limits, 401/403, 5xx) are retried on the next
  * call.
  */
@@ -65,19 +85,7 @@ export const cachedRequest = async <T>(
     // Requests themselves are counted by the Octokit client (see `countRequests`)
     onHit: () => incrementMetric("githubCacheHits"),
   });
-  if (!signal) {
-    return shared;
-  }
-  let onAbort = () => {};
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(signal.reason);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([shared, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
+  return abortable(shared, signal);
 };
 
 /** `GET /repos/{owner}/{repo}`, cached per repository */

@@ -455,4 +455,12 @@ describe("runCli()", () => {
     expect(await runCli(["github-org", "org"], { ...io(), deps: githubDeps })).toBe(1);
     expect(stderr).toContain("GitHub exploded");
   });
+
+  it("prints only the message when the organization can't be listed", async () => {
+    octokit.paginate.mockRejectedValue(new Error("GitHub exploded"));
+    expect(await runCli(["github-org", "org"], { ...io(), deps: githubDeps })).toBe(1);
+    expect(stderr).toBe(
+      "Error: Failed to list repositories of GitHub organization org: GitHub exploded\n",
+    );
+  });
 });

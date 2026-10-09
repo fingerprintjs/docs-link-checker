@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTimeout } from "../../limiter";
 import { withRun } from "../../run";
 import { checkLinkWithGithubApi as checkLink } from "../gh_check_link";
 
@@ -117,6 +118,27 @@ describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
         owner: "owner",
         repo: "repo",
         file_sha: "bigsha",
+      });
+    });
+
+    it("a timed-out check does not fail other checks of the same large file", async () => {
+      getContent.mockResolvedValue({
+        data: { type: "file", sha: "bigsha", size: 4, encoding: "none", content: "" },
+      });
+      getBlob.mockImplementation(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ data: { content: base64("a\nb\n") } }), 20),
+          ),
+      );
+      const url = "https://github.com/owner/repo/blob/main/big.txt";
+
+      await run(async () => {
+        const first = withTimeout((signal) => checkLink(`${url}#L1`, signal), 5, "timed out");
+        const second = checkLink(`${url}#L2`, new AbortController().signal);
+
+        await expect(first).rejects.toThrow("timed out");
+        expect(await second).toEqual({ ok: true, status: 200 });
       });
     });
 
