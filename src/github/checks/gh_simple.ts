@@ -45,8 +45,10 @@ export const checkIfRepositoryExists = (
 export const checkIfOwnerExists = (owner: string, signal: AbortSignal): Promise<LinkCheckResult> =>
   checkExists(
     // Users and organizations, names are case-insensitive
-    cachedRequest(["user", owner.toLowerCase()], (octokit) =>
-      octokit.users.getByUsername({ username: owner, request: { signal } }),
+    cachedRequest(
+      ["user", owner.toLowerCase()],
+      (octokit) => octokit.users.getByUsername({ username: owner }),
+      signal,
     ),
     `User or organization ${owner} not found`,
   );

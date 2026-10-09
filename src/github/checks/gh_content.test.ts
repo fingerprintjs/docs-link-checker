@@ -119,7 +119,6 @@ describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
         owner: "owner",
         repo: "repo",
         file_sha: "bigsha",
-        request: { signal: expect.any(AbortSignal) },
       });
     });
 

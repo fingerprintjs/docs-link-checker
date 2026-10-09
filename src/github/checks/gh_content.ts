@@ -18,8 +18,10 @@ const getContent = (
   path: string,
   signal: AbortSignal,
 ) =>
-  cachedRequest(["content", owner.toLowerCase(), repo.toLowerCase(), ref, path], (octokit) =>
-    octokit.repos.getContent({ owner, repo, ref, path, request: { signal } }),
+  cachedRequest(
+    ["content", owner.toLowerCase(), repo.toLowerCase(), ref, path],
+    (octokit) => octokit.repos.getContent({ owner, repo, ref, path }),
+    signal,
   );
 
 /**
@@ -44,8 +46,8 @@ const getRefCandidates = async (
               owner,
               repo,
               ref: `${kind}/${first}`,
-              request: { signal },
             }),
+          signal,
         ),
       );
       if (error) {
@@ -163,8 +165,8 @@ const getFileText = (
         ? (
             await cachedRequest(
               ["blob", owner.toLowerCase(), repo.toLowerCase(), file.sha],
-              (octokit) =>
-                octokit.git.getBlob({ owner, repo, file_sha: file.sha, request: { signal } }),
+              (octokit) => octokit.git.getBlob({ owner, repo, file_sha: file.sha }),
+              signal,
             )
           ).data.content
         : file.content;
