@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withPage } from "./browser";
+import { installPlaywrightChromium, withPage } from "./browser";
 import { checkLinks as checkLinksInRun } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { PLAYWRIGHT_CONCURRENCY_LIMIT, withRun } from "./run";
@@ -477,5 +477,34 @@ describe("request blocking", () => {
       sub("script", "https://example.com/a.js"),
     ];
     await expect(run(requests, true)).resolves.toEqual(["https://example.com/a.woff2"]);
+  });
+});
+
+describe("installPlaywrightChromium()", () => {
+  const spawnResult = (result: { status: number | null; error?: Error }) => vi.fn(() => result);
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("runs the playwright CLI of this package", () => {
+    const spawn = spawnResult({ status: 0 });
+    installPlaywrightChromium(spawn);
+    expect(spawn).toHaveBeenCalledWith(
+      process.execPath,
+      [expect.stringMatching(/playwright[\\/]cli\.js$/), "install", "chromium"],
+      { stdio: "inherit" },
+    );
+  });
+
+  it("throws when the install exits with an error status", () => {
+    expect(() => installPlaywrightChromium(spawnResult({ status: 1 }))).toThrow(
+      "playwright install chromium failed (exit 1)",
+    );
+  });
+
+  it("throws the spawn error when the CLI can't start", () => {
+    const error = new Error("spawn ENOENT");
+    expect(() => installPlaywrightChromium(spawnResult({ status: null, error }))).toThrow(error);
   });
 });

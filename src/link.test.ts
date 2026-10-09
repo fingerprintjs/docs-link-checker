@@ -215,7 +215,8 @@ beforeEach(() => {
   playwrightState.status = 200;
   playwrightState.statuses = [];
   playwrightState.headers = {};
-  getOctokit.mockClear();
+  // Some tests make it throw (no `GH_TOKEN`), restore the fake client
+  getOctokit.mockReset().mockImplementation(() => octokit as never);
   octokit.issues.get.mockReset().mockResolvedValue({ data: {} });
   octokit.repos.getContent.mockReset().mockRejectedValue(notFound());
   octokit.git.listMatchingRefs.mockReset().mockResolvedValue({ data: [] });

@@ -111,14 +111,21 @@ const createResourceBlocker = () => {
 const isMissingBrowserExecutable = (error: unknown) =>
   error instanceof Error && error.message.includes("Executable doesn't exist");
 
-const installPlaywrightChromium = () => {
+/** Runs a command and waits for it (`spawnSync`), replaced only in tests */
+type RunCommand = (
+  command: string,
+  args: string[],
+  options: { stdio: "inherit" },
+) => { status: number | null; error?: Error };
+
+export const installPlaywrightChromium = (spawn: RunCommand = spawnSync) => {
   console.log("Playwright Chromium is missing, installing...");
   // This package's `playwright` CLI, not a different version from `npx playwright`
   const cli = join(
     dirname(createRequire(import.meta.url).resolve("playwright/package.json")),
     "cli.js",
   );
-  const result = spawnSync(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
+  const result = spawn(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
   if (result.status !== 0) {
     throw (
       result.error ??
@@ -128,7 +135,7 @@ const installPlaywrightChromium = () => {
 };
 
 const launchBrowser = async (): Promise<Browser> => {
-  const { chromium: browserType = chromium, installChromium = installPlaywrightChromium } =
+  const { chromium: browserType = chromium, installChromium = () => installPlaywrightChromium() } =
     getDeps();
   incrementMetric("browserLaunches");
   try {
