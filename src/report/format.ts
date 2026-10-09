@@ -103,7 +103,7 @@ const LOCAL_LINK_BASE = "https://local.invalid/";
  * An http(s) href is itself. Anything else is resolved against the page it was found on, the same way
  * `checkLocalLink` resolves it: `missing.md` in `a/README.md` and `b/README.md` are different files.
  */
-export const targetKey = (link: { href: string; page: string }): string => {
+const targetKey = (link: { href: string; page: string }): string => {
   if (isHttpUrl(link.href)) {
     return link.href;
   }
