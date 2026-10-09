@@ -135,8 +135,11 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   it("sends no more requests once the check timed out", async () => {
     octokit.repos.getContent
       .mockReset()
-      .mockImplementation(() =>
-        delayed(Promise.reject(Object.assign(new Error("Not Found"), { status: 404 })), 20),
+      .mockImplementation(
+        () =>
+          new Promise((_, reject) =>
+            setTimeout(() => reject(Object.assign(new Error("Not Found"), { status: 404 })), 20),
+          ),
       );
     octokit.paginate.mockReset().mockResolvedValue([]);
 
