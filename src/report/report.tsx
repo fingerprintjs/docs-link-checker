@@ -534,10 +534,8 @@ const JSONReportRenderer = ({
           </main>
         </>
       ) : (
-        <p class="ok">
-          ✓ All {summary.linksChecked.toLocaleString("en-US")}{" "}
-          {summary.linksChecked === 1 ? "link" : "links"} OK
-        </p>
+        // Not "all OK": baseline-ignored and unchecked links can still be in the report
+        <p class="ok">✓ No links to fix</p>
       )}
 
       {ignoredGroups.length > 0 ? (

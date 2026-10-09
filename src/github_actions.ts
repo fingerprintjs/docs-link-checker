@@ -122,7 +122,7 @@ export const renderJobSummary = (report: LinkCheckReport, options: SummaryOption
   const lines = [
     totalLinksToFix > 0
       ? `## ❌ ${siteName}: ${totalLinksToFix} ${totalLinksToFix === 1 ? "link" : "links"} to fix`
-      : `## ✅ ${siteName}: all links OK`,
+      : `## ✅ ${siteName}: no links to fix`,
     "",
     statsLine(report),
     "",

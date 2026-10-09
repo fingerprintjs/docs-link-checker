@@ -69,7 +69,7 @@ describe("renderJobSummary()", () => {
     expect(markdown).toContain(
       "**1** broken · **1** missing anchors · 1 could not check · 1 ignored · 5 checked\n",
     );
-    expect(renderJobSummary(report([]))).toContain("## ✅ local files: all links OK");
+    expect(renderJobSummary(report([]))).toContain("## ✅ local files: no links to fix");
   });
 
   it("counts a link that failed without status as a network error, not broken", () => {

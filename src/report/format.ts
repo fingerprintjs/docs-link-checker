@@ -135,7 +135,7 @@ const targetKey = (link: { href: string; page: string }): string => {
 export type TargetGroup<T extends IgnoredLink> = {
   /** First link of the group, represents it (result, reason) */
   link: T;
-  /** All links of the group, in input order (the pages to fix) */
+  /** Links of the group, one per page (and line for local files), in input order: the pages to fix */
   pages: T[];
 };
 
@@ -149,6 +149,10 @@ export const groupByTarget = <T extends IgnoredLink>(links: T[]): TargetGroup<T>
   for (const link of links) {
     const key = JSON.stringify([targetKey(link), problemLabel(link), link.ignoreReason ?? ""]);
     const group = groups.get(key);
+    // The same link twice on a page is one page to fix, else "on 2 pages" would list the page twice
+    if (group?.pages.some((page) => page.page === link.page && page.line === link.line)) {
+      continue;
+    }
     if (group) {
       group.pages.push(link);
     } else {

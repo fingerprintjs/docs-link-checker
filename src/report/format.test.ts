@@ -94,6 +94,23 @@ describe("groupByTarget()", () => {
     ...(ignoreReason ? { ignoreReason } : {}),
   });
 
+  it("counts a page that links to the same target twice once, but keeps distinct lines of a file", () => {
+    const [group] = groupByTarget([
+      link("https://x.com/a", "https://site.com/p1"),
+      link("https://x.com/a", "https://site.com/p1"),
+      link("https://x.com/a", "https://site.com/p2"),
+    ]);
+    expect(group?.pages.map((page) => page.page)).toEqual([
+      "https://site.com/p1",
+      "https://site.com/p2",
+    ]);
+    const [local] = groupByTarget([
+      { ...link("missing.md", "README.md", 0), line: 3 },
+      { ...link("missing.md", "README.md", 0), line: 9 },
+    ]);
+    expect(local?.pages).toHaveLength(2);
+  });
+
   it("groups pages linking to the same target and problem, most pages first", () => {
     const groups = groupByTarget([
       link("https://x.com/one", "https://s.com/a"),

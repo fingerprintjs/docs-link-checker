@@ -120,7 +120,7 @@ describe("renderReportToHTML() header", () => {
     expect(ok("title").text()).toBe("✓ OK · site");
     expect(ok("h1").text()).toBe("site ✓ OK");
     expect(ok("main").length).toBe(0);
-    expect(ok("body").text()).toContain("✓ All 1 link OK");
+    expect(ok("body").text()).toContain("✓ No links to fix");
   });
 
   it("shows the redirect target and only the response body that adds information", () => {
