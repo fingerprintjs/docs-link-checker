@@ -2,8 +2,6 @@
  * Plain-text vocabulary shared by all outputs (CLI, HTML report, job summary, annotations):
  * labels, one-line reasons, grouping by target link and short URLs.
  */
-import { decodeHash } from "../hash";
-import { parseLineAnchor } from "../line_anchor";
 import type { LinkWithResult } from "../types";
 
 /** A link that matched the baseline file, with the reason of the matching entry */
@@ -29,22 +27,26 @@ export const formatLocation = (link: { page: string; line?: number }): string =>
  * Name of the problem of a failed link: `Anchor not found`, `Line out of range`, `File not found`, `HTTP 404`,
  * `Network error`, `Could not check (403)`. `OK` for a link that works.
  */
+/** Error details of `checkLineAnchor` (src/line_anchor.ts) */
+const LINE_CHECK_DETAIL = /^Invalid line anchor #|has only \d+ lines?$/;
+
 export const problemLabel = (link: LinkWithResult): string => {
   const { result } = link;
   if (result.ok) {
     return "OK";
   }
   switch (result.error) {
-    case "hash not found": {
-      const hash = link.href.includes("#") ? link.href.slice(link.href.indexOf("#")) : "";
-      return parseLineAnchor(decodeHash(hash)) ? "Line out of range" : "Anchor not found";
-    }
+    case "hash not found":
+      // From the line check's message, not the hash: `#L99` on a markdown or web page is a normal anchor
+      return LINE_CHECK_DETAIL.test(result.errorDetail ?? "")
+        ? "Line out of range"
+        : "Anchor not found";
     case "broken link":
       if (result.status) {
         return `HTTP ${result.status}`;
       }
       // Local links are only checked on the filesystem, a failed request always has a status or is a network error
-      return isHttpUrl(link.page) ? "Network error" : "File not found";
+      return isHttpUrl(link.href) ? "Network error" : "File not found";
     case "could not check":
       return result.status ? `Could not check (${result.status})` : "Could not check";
     case "unexpected error":

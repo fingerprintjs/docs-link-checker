@@ -59,6 +59,10 @@ export const parallelProcess = async <T, R>({
   const terminal = getTerminal();
   const startTime = performance.now();
   let done = 0;
+  // Starts the step clock (quiet period, ETA) with the batch, not with the first finished item
+  if (label) {
+    terminal.progress(label, 0, items.length, failing?.());
+  }
   try {
     const limit = pLimit(concurrencyLimit);
     const settled = await Promise.allSettled(

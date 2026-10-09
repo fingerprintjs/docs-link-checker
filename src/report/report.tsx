@@ -309,7 +309,11 @@ const PagesCell = ({ pages, ...view }: ViewProps & { pages: Link[] }) => (
 );
 
 /** One row per target link, with the pages to fix it on. Ignored groups also show why they are ignored. */
-const GroupRow = ({ group, ...view }: ViewProps & { group: TargetGroup<IgnoredLink> }) => (
+const GroupRow = ({
+  group,
+  ignored,
+  ...view
+}: ViewProps & { group: TargetGroup<IgnoredLink>; ignored: boolean }) => (
   <tr data-row="" data-kind={kindOf(group.link)}>
     <td class="pb">
       <Problem link={group.link} />
@@ -321,7 +325,8 @@ const GroupRow = ({ group, ...view }: ViewProps & { group: TargetGroup<IgnoredLi
     <td>
       <PagesCell pages={group.pages} {...view} />
     </td>
-    {group.link.ignoreReason !== undefined ? <td class="rs">{group.link.ignoreReason}</td> : null}
+    {/* Baseline reasons are optional, the cell is always there to keep the columns aligned */}
+    {ignored ? <td class="rs">{group.link.ignoreReason ?? ""}</td> : null}
     <td>
       <CopyButton href={group.link.href} />
     </td>
@@ -345,7 +350,7 @@ const ByLinkTable = ({
     </thead>
     <tbody>
       {groups.map((group) => (
-        <GroupRow group={group} {...view} />
+        <GroupRow group={group} ignored={ignored} {...view} />
       ))}
     </tbody>
   </table>

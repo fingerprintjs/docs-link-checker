@@ -11,7 +11,21 @@ const failed = (
 describe("problemLabel()", () => {
   it.each([
     ["https://x.com/a#nope", { error: "hash not found", status: 200 }, "Anchor not found"],
-    ["https://github.com/o/r/blob/main/a.ts#L99", { error: "hash not found" }, "Line out of range"],
+    [
+      "https://github.com/o/r/blob/main/a.ts#L99",
+      { error: "hash not found", errorDetail: "a.ts has only 3 lines" },
+      "Line out of range",
+    ],
+    [
+      "https://github.com/o/r/blob/main/a.ts#L0",
+      {
+        error: "hash not found",
+        errorDetail: "Invalid line anchor #L0 (lines start at 1, ranges go forward)",
+      },
+      "Line out of range",
+    ],
+    // A line-like hash on a page that is not a code file is a normal anchor
+    ["https://x.com/page#L99", { error: "hash not found", status: 200 }, "Anchor not found"],
     ["https://x.com/a", { error: "broken link", status: 404 }, "HTTP 404"],
     ["https://x.com/a", { error: "broken link" }, "Network error"],
     ["https://x.com/a", { error: "unexpected error" }, "Network error"],
@@ -25,6 +39,21 @@ describe("problemLabel()", () => {
     expect(problemLabel(failed("a.md", { ok: false, error: "broken link" }, "docs/b.md"))).toBe(
       "File not found",
     );
+  });
+
+  it("calls an external link in a local file that failed without status a network error", () => {
+    expect(
+      problemLabel(failed("https://x.com/a", { ok: false, error: "broken link" }, "docs/b.md")),
+    ).toBe("Network error");
+  });
+
+  it("calls a missing heading in a markdown file an anchor, even if it looks like a line", () => {
+    const link = failed(
+      "README.md#L99",
+      { ok: false, error: "hash not found", errorDetail: "No heading matching #L99 in README.md" },
+      "docs/b.md",
+    );
+    expect(problemLabel(link)).toBe("Anchor not found");
   });
 });
 

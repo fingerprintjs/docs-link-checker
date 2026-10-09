@@ -56,6 +56,22 @@ describe("parallelProcess() progress", () => {
     expect(text.match(/Checking \d+%/g)).toHaveLength(10);
   });
 
+  it("starts the step clock with the batch, not with the first finished item", async () => {
+    let time = 0;
+    const text = await output(
+      () =>
+        parallelProcess({
+          items: [1],
+          label: "Checking",
+          processFn: async () => {
+            time = 6000;
+          },
+        }),
+      { now: () => time },
+    );
+    expect(text).toContain("Checking 100% (1/1)\n");
+  });
+
   it("prints no progress lines for a batch that ends within seconds", async () => {
     const text = await output(() =>
       parallelProcess({ items, label: "Checking", processFn: async () => {} }),

@@ -365,6 +365,11 @@ describe("renderReportToHTML() with ignored links", () => {
     expect($local("[data-section=ignored] summary").first().text()).toBe(
       "5 ignored by baseline (3 links)",
     );
+    // No reason in the baseline: the reason cell is still there, the copy button stays in its column
+    const headerCells = $local("[data-section=ignored] thead th").length;
+    rows.each((_, row) => {
+      expect($local(row).children("td")).toHaveLength(headerCells);
+    });
 
     const byReason = (reason: string) =>
       rows.filter((_, row) => $local(row).text().includes(reason));
