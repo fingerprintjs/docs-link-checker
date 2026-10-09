@@ -13,7 +13,7 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.js",
     "cli": "node bin/docs-link-checker.js",
-    "bench": "tsx bench/bench.ts",
+    "bench": "tsx --env-file-if-exists=.env bench/bench.ts",
     "checkLinks:docs": "node bin/docs-link-checker.js site https://docs.fingerprint.com --baseline linkcheck.baseline.json",
     "checkLinks:github": "node bin/docs-link-checker.js github-org fingerprintjs --baseline linkcheck.baseline.json",
     "checkLinks:web": "node bin/docs-link-checker.js site https://fingerprint.com --include https://docs.fingerprint.com --include https://dev.fingerprint.com --include https://fingerprint.com --include https://github.com --baseline linkcheck.baseline.json",
@@ -26,7 +26,7 @@
     "knip": "knip",
     "check": "pnpm run format:check && pnpm run lint && pnpm run tsc && pnpm run knip",
     "check:fix": "oxfmt && oxlint --fix",
-    "gh-limit": "tsx ./checks/gh_rate_limit.ts"
+    "gh-limit": "tsx --env-file-if-exists=.env ./checks/gh_rate_limit.ts"
   },
   "keywords": [],
   "author": "Juraj Uhlar, Fingerprint",

@@ -1,4 +1,3 @@
-import { PLAYWRIGHT_CONCURRENCY_LIMIT } from "./browser";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { checkLinkWithGithubApi } from "./github/gh_check_link";
 import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "./github/gh_url";
@@ -6,7 +5,7 @@ import { hasHash, stripHash } from "./hash";
 import { TASK_TIMEOUT } from "./http";
 import { withTimeout } from "./limiter";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { incrementMetric, timePhase, withRun } from "./run";
+import { incrementMetric, PLAYWRIGHT_CONCURRENCY_LIMIT, timePhase, withRun } from "./run";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { CONCURRENCY_LIMIT, parallelProcess } from "./utils";
 import { getErrorMessage } from "./utils/errors";

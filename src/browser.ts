@@ -1,12 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import pLimit from "p-limit";
 import { type Browser, chromium, type Page, type Request, type Route } from "playwright";
-import { getBrowserSlot, incrementMetric } from "./run";
-
-// How many Playwright pages (browser contexts) are open at the same time
-export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
+import { getBrowserSlot, getPageSlots, incrementMetric } from "./run";
 
 const LAUNCH_OPTIONS = {
   // Potentially helps avoid some bot detection checks
@@ -112,8 +108,6 @@ const createResourceBlocker = () => {
   };
 };
 
-const pageSlots = pLimit(PLAYWRIGHT_CONCURRENCY_LIMIT);
-
 const isMissingBrowserExecutable = (error: unknown) =>
   error instanceof Error && error.message.includes("Executable doesn't exist");
 
@@ -217,7 +211,7 @@ const runWithNewPage = async <T>(
 export const withPage = async <T>(
   fn: (page: Page) => Promise<T>,
   options: WithPageOptions,
-): Promise<T> => pageSlots(() => withSharedBrowserPage(fn, options));
+): Promise<T> => getPageSlots()(() => withSharedBrowserPage(fn, options));
 
 const withSharedBrowserPage = async <T>(
   fn: (page: Page) => Promise<T>,

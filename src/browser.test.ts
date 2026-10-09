@@ -109,10 +109,10 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
-import { PLAYWRIGHT_CONCURRENCY_LIMIT, withPage } from "./browser";
+import { withPage } from "./browser";
 import { checkLinks } from "./link";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
-import { closeRunBrowser, withRun } from "./run";
+import { closeRunBrowser, PLAYWRIGHT_CONCURRENCY_LIMIT, withRun } from "./run";
 
 const launchBrowser = () => withPage(async () => {}, { timeout: 1000 });
 
@@ -186,6 +186,23 @@ describe("shared browser", () => {
     expect(results.every((result) => result.ok)).toBe(true);
     expect(state.launches).toBe(1);
     expect(state.maxOpenPages).toBe(PLAYWRIGHT_CONCURRENCY_LIMIT);
+  });
+
+  it("limits open pages per run, runs do not share page slots", async () => {
+    state.gotoDelayMs = 20;
+    const runChecks = (prefix: string) =>
+      withRun({}, () =>
+        Promise.all(
+          Array.from({ length: 12 }, (_, i) =>
+            checkLinkWithPlaywright(`https://example.com/${prefix}${i}`),
+          ),
+        ),
+      );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await Promise.all([runChecks("a"), runChecks("b")]);
+
+    expect(state.maxOpenPages).toBe(2 * PLAYWRIGHT_CONCURRENCY_LIMIT);
   });
 
   it("relaunches a crashed browser once and retries the check", async () => {
