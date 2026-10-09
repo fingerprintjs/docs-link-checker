@@ -129,23 +129,17 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
   });
 
   it("sends no more requests once the check timed out", async () => {
-    // Fails with "not found" after 20 ms, or with an abort error as soon as its signal aborts
-    octokit.repos.getContent.mockReset().mockImplementation(
-      ({ request }: { request: { signal?: AbortSignal } }) =>
-        new Promise((_, reject) => {
-          const timer = setTimeout(
-            () => reject(Object.assign(new Error("Not Found"), { status: 404 })),
-            20,
-          );
-          request.signal?.addEventListener("abort", () => {
-            clearTimeout(timer);
-            reject(new DOMException("aborted", "AbortError"));
-          });
-        }),
-    );
+    octokit.repos.getContent
+      .mockReset()
+      .mockImplementation(
+        () =>
+          new Promise((_, reject) =>
+            setTimeout(() => reject(Object.assign(new Error("Not Found"), { status: 404 })), 20),
+          ),
+      );
     octokit.paginate.mockReset().mockResolvedValue([]);
 
-    // `feature/x` can be a branch: after "not found" for `feature`, the check lists branches and tags
+    // `feature/x` can be a branch: after "not found" for `feature`, the check would list branches and tags
     const check = run(() =>
       withTimeout(
         (signal) => checkLink("https://github.com/owner/repo/blob/feature/x/README.md", signal),
@@ -157,5 +151,25 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
     await delayed(undefined, 40);
 
     expect(octokit.paginate).not.toHaveBeenCalled();
+  });
+
+  it("a timed-out check does not cancel the request it shares with other checks", async () => {
+    // Like a real request: answers after 20 ms, or fails as soon as a signal it was given aborts
+    octokit.repos.get.mockReset().mockImplementation(
+      ({ request }: { request?: { signal?: AbortSignal } }) =>
+        new Promise((resolve, reject) => {
+          setTimeout(() => resolve({ data: {} }), 20);
+          request?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+
+    await run(async () => {
+      const first = withTimeout((signal) => checkLink(REPO_URL, signal), 5, "timed out");
+      const second = checkLinkWithGithubApi(REPO_URL);
+
+      await expect(first).rejects.toThrow("timed out");
+      expect(await second).toEqual({ ok: true, status: 200 });
+    });
+    expect(octokit.repos.get).toHaveBeenCalledTimes(1);
   });
 });

@@ -47,24 +47,43 @@ export const getApiErrorResult = (error: unknown, notFoundDetail: string): LinkC
 /**
  * Runs `request` once per `key` in a run. GitHub names (owner, repo, user) are case-insensitive, callers lowercase
  * them in the key.
- * A `signal` in `request` (Octokit `request: { signal }`) belongs to the first caller. If it aborts, concurrent callers
- * sharing the request fail too (and re-check in the browser), the failure is not cached.
+ * `signal` stops only this caller: it fails right away if the signal is already aborted (no new request after a
+ * timeout) and stops waiting when it aborts. The shared request itself is never aborted, other callers still wait
+ * for it.
  * "Not found" is a definitive answer worth caching. Other errors (rate limits, 401/403, 5xx) are retried on the next
  * call.
  */
-export const cachedRequest = <T>(
+export const cachedRequest = async <T>(
   key: unknown[],
   request: (octokit: ReturnType<typeof getMyOctokit>) => Promise<T>,
-): Promise<T> =>
+  signal?: AbortSignal,
+): Promise<T> => {
+  signal?.throwIfAborted();
   // `async`: a client that can't be created (no `GH_TOKEN`) rejects the promise instead of throwing
-  runCached(`github:${JSON.stringify(key)}`, async () => request(getMyOctokit()), {
+  const shared = runCached(`github:${JSON.stringify(key)}`, async () => request(getMyOctokit()), {
     cacheError: isNotFoundApiError,
     // Requests themselves are counted by the Octokit client (see `countRequests`)
     onHit: () => incrementMetric("githubCacheHits"),
   });
+  if (!signal) {
+    return shared;
+  }
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([shared, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+};
 
 /** `GET /repos/{owner}/{repo}`, cached per repository */
 export const getRepoCached = (owner: string, repo: string, signal?: AbortSignal) =>
-  cachedRequest(["repo", owner.toLowerCase(), repo.toLowerCase()], (octokit) =>
-    octokit.repos.get({ owner, repo, request: { signal } }),
+  cachedRequest(
+    ["repo", owner.toLowerCase(), repo.toLowerCase()],
+    (octokit) => octokit.repos.get({ owner, repo }),
+    signal,
   );

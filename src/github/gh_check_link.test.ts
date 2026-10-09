@@ -108,7 +108,6 @@ describe("checkLinkWithGithubApi() with percent-encoded paths", () => {
       repo: "r",
       ref: "main",
       path: "docs/my file@v1.md",
-      request: { signal: expect.any(AbortSignal) },
     });
   });
 
@@ -121,7 +120,6 @@ describe("checkLinkWithGithubApi() with percent-encoded paths", () => {
       repo: "r",
       ref: "v1.0",
       path: "src/[id]",
-      request: { signal: expect.any(AbortSignal) },
     });
   });
 
@@ -160,7 +158,6 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
     expect(result).toEqual({ ok: true, status: 200 });
     expect(octokit.users.getByUsername).toHaveBeenCalledWith({
       username,
-      request: { signal: expect.any(AbortSignal) },
     });
     expect(octokit.repos.get).not.toHaveBeenCalled();
   });
@@ -172,7 +169,6 @@ describe("checkLinkWithGithubApi() with user and organization URLs", () => {
     expect(octokit.repos.get).toHaveBeenCalledWith({
       owner: "frida",
       repo: "frida",
-      request: { signal: expect.any(AbortSignal) },
     });
     expect(octokit.users.getByUsername).not.toHaveBeenCalled();
   });
@@ -213,7 +209,6 @@ describe("checkLinkWithGithubApi() with unknown account URLs", () => {
     expect(result).toEqual({ ok: true, status: 200 });
     expect(octokit.users.getByUsername).toHaveBeenCalledWith({
       username: "premium-support",
-      request: { signal: expect.any(AbortSignal) },
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -323,7 +318,6 @@ describe("checkLinkWithGithubApi() with URL variants", () => {
     expect(octokit.repos.get).toHaveBeenCalledWith({
       owner: "o",
       repo: "r",
-      request: { signal: expect.any(AbortSignal) },
     });
     expect(octokit.issues.get).not.toHaveBeenCalled();
     expect(octokit.repos.getContent).not.toHaveBeenCalled();
@@ -339,7 +333,6 @@ describe("checkLinkWithGithubApi() with URL variants", () => {
       repo: "r",
       ref: "master",
       path: "",
-      request: { signal: expect.any(AbortSignal) },
     });
   });
 });
