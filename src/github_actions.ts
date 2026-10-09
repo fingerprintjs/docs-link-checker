@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { describeResult, formatLocation } from "./report/format";
 import { getLinksToFix, type LinkCheckReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
@@ -24,20 +25,6 @@ const escapeTableCell = (value: string, maxLength = MAX_CELL_LENGTH): string => 
     .replace(/`/g, "\\`")
     .replace(/\[/g, "\\[")
     .replace(/]/g, "\\]");
-};
-
-const pageWithLine = (link: LinkWithResult) =>
-  link.line ? `${link.page}:${link.line}` : link.page;
-
-/** Short description of a failed result: `broken link (404): detail` */
-export const describeResult = (link: LinkWithResult): string => {
-  const { result } = link;
-  if (result.ok) {
-    return "OK";
-  }
-  const status = result.status ? ` (${result.status})` : "";
-  const detail = result.errorDetail?.trim() ? `: ${result.errorDetail.trim()}` : "";
-  return `${result.error}${status}${detail}`;
 };
 
 type SummaryOptions = {
@@ -73,7 +60,7 @@ export const renderJobSummary = (
         .slice(0, limit)
         .map(
           (link) =>
-            `| ${escapeTableCell(pageWithLine(link))} | ${escapeTableCell(link.href)} | ${escapeTableCell(describeResult(link))} |`,
+            `| ${escapeTableCell(formatLocation(link))} | ${escapeTableCell(link.href)} | ${escapeTableCell(describeResult(link))} |`,
         ),
       "",
     );

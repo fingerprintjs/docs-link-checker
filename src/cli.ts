@@ -16,7 +16,6 @@ import {
   OrgListingError,
 } from "./github/gh_get_links";
 import {
-  describeResult,
   getFileAnnotations,
   getGithubBlobBaseUrl,
   writeGithubOutputs,
@@ -29,6 +28,7 @@ import {
   LOCAL_FILES_SITE_NAME,
   NoMarkdownFilesError,
 } from "./local_files";
+import { describeResult, formatLocation } from "./report/format";
 import {
   DEFAULT_OUTPUT_DIR,
   getJSONReport,
@@ -302,10 +302,6 @@ type RunContext = {
   stderr: Output;
   deps?: RunDeps;
 };
-
-/** `file:line` (or just the file) of a link */
-const formatLocation = (link: { page?: string; line?: number }) =>
-  link.line ? `${link.page}:${link.line}` : link.page;
 
 type CliIO = {
   env?: Env;

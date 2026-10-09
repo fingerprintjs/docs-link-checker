@@ -8,11 +8,17 @@ import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
+import {
+  encodePath,
+  formatLocation,
+  groupByTarget,
+  type IgnoredLink,
+  isHttpUrl,
+  type TargetGroup,
+  targetKey,
+} from "./format";
 
 export type LinkCheckReport = ReturnType<typeof getJSONReport>;
-
-/** A failing link that matched an entry of the baseline file */
-type IgnoredLink = LinkWithResult & { ignoreReason?: string };
 
 type GetReportArgs = {
   links: LinkWithResult[];
@@ -78,8 +84,6 @@ const safeHref = (url: string): string | undefined => {
   }
 };
 
-const isHttpUrl = (value: string) => safeHref(value) !== undefined;
-
 export type RenderOptions = {
   /**
    * Base URL of the checked files, ending with `/` (e.g. `https://github.com/owner/repo/blob/<sha>/`, see
@@ -93,8 +97,6 @@ export type RenderOptions = {
 /** Keeps a URL only if it is inside the base URL (a `../` link must not leave the repository) */
 const insideBase = (url: URL, base: string): string | undefined =>
   url.href.startsWith(base) ? safeHref(url.href) : undefined;
-
-const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
 /** URL of a local file (the page of a link), with its line: `<base>docs/a.md#L7` */
 const getLocalFileUrl = (
@@ -149,8 +151,6 @@ const HrefRenderer = ({ link }: { link: LinkWithResult }) => {
   return <span className="text-red-600">{href}</span>;
 };
 
-const pageLabel = (link: Link) => (link.line ? `${link.page}:${link.line}` : link.page);
-
 const ResultRenderer = ({ link }: { link: LinkWithResult | IgnoredLink }) =>
   link.result.ok ? (
     <span className="text-green-600">OK</span>
@@ -184,14 +184,14 @@ const PageCell = ({ link, options }: { link: Link; options: RenderOptions }) => 
           target="_blank"
           rel="noopener"
         >
-          {pageLabel(link)}
+          {formatLocation(link)}
         </a>
       </>
     );
   }
   // Local file: link to the checked file if its URL is known, plain text otherwise
   const url = getLocalFileUrl(options.sourceBaseUrl, link.page, link.line);
-  const label = <code>{pageLabel(link)}</code>;
+  const label = <code>{formatLocation(link)}</code>;
   return (
     <>
       📄{" "}
@@ -291,60 +291,6 @@ const LinksTable = ({
   </table>
 );
 
-type IgnoredGroup = {
-  /** First occurrence. Its result and reason represent the group. */
-  link: IgnoredLink;
-  occurrences: IgnoredLink[];
-};
-
-const LOCAL_LINK_BASE = "https://local.invalid/";
-
-/**
- * What the ignored link points at.
- * An http(s) href is itself. Anything else is resolved against the page it was found on, the same way
- * `checkLocalLink` resolves it: `missing.md` in `a/README.md` and `b/README.md` are different files.
- */
-const ignoredTargetKey = (link: { href: string; page: string }): string => {
-  if (isHttpUrl(link.href)) {
-    return link.href;
-  }
-  try {
-    if (isHttpUrl(link.page)) {
-      return new URL(link.href, link.page).href;
-    }
-    const url = link.href.startsWith("/")
-      ? new URL(link.href.replace(/^\/+/, ""), LOCAL_LINK_BASE)
-      : new URL(link.href, new URL(encodePath(link.page), LOCAL_LINK_BASE));
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return JSON.stringify([link.page, link.href]);
-  }
-};
-
-const ignoredGroupKey = (link: IgnoredLink): string =>
-  JSON.stringify([
-    ignoredTargetKey(link),
-    link.result.ok ? "ok" : link.result.error,
-    link.result.ok ? "" : (link.result.status ?? ""),
-    link.ignoreReason ?? "",
-  ]);
-
-// One row per target, error, status, and ignore reason.
-// errorDetail stays out of the key. A Cloudflare challenge page changes on every request, so it would split the group into one row per page.
-const groupIgnoredLinks = (links: IgnoredLink[]): IgnoredGroup[] => {
-  const groups = new Map<string, IgnoredGroup>();
-  for (const link of links) {
-    const key = ignoredGroupKey(link);
-    const group = groups.get(key);
-    if (group) {
-      group.occurrences.push(link);
-    } else {
-      groups.set(key, { link, occurrences: [link] });
-    }
-  }
-  return [...groups.values()];
-};
-
 const IgnoredPages = ({
   links,
   options,
@@ -381,7 +327,7 @@ const IgnoredLinksTable = ({
   groups,
   options,
 }: {
-  groups: IgnoredGroup[];
+  groups: TargetGroup<IgnoredLink>[];
   options: RenderOptions;
 }) => (
   <table className="border-collapse border border-gray-300 mb-6">
@@ -394,7 +340,7 @@ const IgnoredLinksTable = ({
     </thead>
     <tbody>
       {groups.map((group, index) => {
-        const sameText = group.occurrences.every((item) => item.text === group.link.text);
+        const sameText = group.pages.every((item) => item.text === group.link.text);
         return (
           // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
           <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
@@ -413,7 +359,7 @@ const IgnoredLinksTable = ({
               <ResultRenderer link={group.link} />
             </td>
             <td className="py-2 px-4 border-b break-all sm:break-words">
-              <IgnoredPages links={group.occurrences} options={options} showText={!sameText} />
+              <IgnoredPages links={group.pages} options={options} showText={!sameText} />
             </td>
           </tr>
         );
@@ -435,8 +381,8 @@ const JSONReportRenderer = ({
     ...report.networkErrors,
     ...report.couldNotCheck,
   ];
-  const ignoredGroups = groupIgnoredLinks(report.ignored);
-  const uniqueIgnoredLinks = new Set(report.ignored.map((link) => ignoredTargetKey(link))).size;
+  const ignoredGroups = groupByTarget(report.ignored);
+  const uniqueIgnoredLinks = new Set(report.ignored.map(targetKey)).size;
   return (
     <div className="overflow-x-auto min-w-[720px] max-w-[1280px] mx-auto px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">Link Check Report for {report.siteName}</h1>
