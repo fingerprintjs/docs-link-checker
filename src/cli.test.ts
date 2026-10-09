@@ -259,7 +259,9 @@ describe("runCli()", () => {
     expect(readFileSync(githubOutput, "utf8")).toBe(
       `links-to-fix=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
     );
-    expect(readFileSync(summary, "utf8")).toContain("| docs/guide.md:8 | ../nope.md |");
+    expect(readFileSync(summary, "utf8")).toContain(
+      "| `../nope.md`<br><sub>no file nope.md</sub> | `docs/guide.md:8` |",
+    );
     const report = JSON.parse(readFileSync(join(out, "local-files.json"), "utf8"));
     expect(report.summary.totalLinksToFix).toBe(1);
   });
@@ -320,7 +322,7 @@ describe("runCli()", () => {
     );
     expect(code).toBe(0);
     expect(stdout).toBe(
-      "::error file=docs/guide.md,line=8,title=Broken link::../nope.md: broken link: File not found: nope.md\n",
+      "::error file=docs/guide.md,line=8,title=File not found::../nope.md: no file nope.md\n",
     );
 
     stdout = "";

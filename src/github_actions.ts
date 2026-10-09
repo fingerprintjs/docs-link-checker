@@ -1,22 +1,35 @@
 import { appendFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { describeResult, formatLocation } from "./report/format";
+import { basename, resolve } from "node:path";
+import {
+  displayUrl,
+  formatLocation,
+  groupByTarget,
+  isHttpUrl,
+  problemLabel,
+  shortReason,
+  type IgnoredLink,
+  type TargetGroup,
+} from "./report/format";
 import { getLinksToFix, type LinkCheckReport } from "./report/report";
 import type { LinkWithResult } from "./types";
 
-/** How many links to fix are listed in the job summary table */
+/** How many targets (rows) of links to fix, and of ignored links, are listed in the job summary */
 const SUMMARY_TABLE_LIMIT = 50;
+/** Pages listed per row, the rest is counted (`+3 more`) */
+const MAX_PAGES_PER_ROW = 2;
 const MAX_CELL_LENGTH = 300;
+
+const singleLine = (value: string, maxLength: number): string => {
+  const line = value.replace(/\s*[\r\n]+\s*/g, " ").trim();
+  return line.length > maxLength ? `${line.slice(0, maxLength - 1)}…` : line;
+};
 
 /**
  * Escapes text for a markdown table cell: pipes, line breaks, and HTML (GitHub renders some HTML in summaries).
  * Long values are shortened.
  */
-const escapeTableCell = (value: string, maxLength = MAX_CELL_LENGTH): string => {
-  const singleLine = value.replace(/\s*[\r\n]+\s*/g, " ").trim();
-  const shortened =
-    singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 1)}…` : singleLine;
-  return shortened
+const escapeTableCell = (value: string, maxLength = MAX_CELL_LENGTH): string =>
+  singleLine(value, maxLength)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -25,57 +38,144 @@ const escapeTableCell = (value: string, maxLength = MAX_CELL_LENGTH): string => 
     .replace(/`/g, "\\`")
     .replace(/\[/g, "\\[")
     .replace(/]/g, "\\]");
-};
+
+/** Code span for a table cell: markdown and HTML are not interpreted inside it, only backticks and pipes are */
+const codeCell = (value: string): string =>
+  `\`${singleLine(value, MAX_CELL_LENGTH).replace(/`/g, "'").replace(/\|/g, "\\|")}\``;
 
 type SummaryOptions = {
   limit?: number;
-  /** Paths of the saved reports, mentioned in the summary */
+  /** Where the uploaded report can be opened (artifact or Pages URL), only http(s) URLs are used */
+  reportUrl?: string;
+  /** Name of the artifact the reports are uploaded as, mentioned when there is no `reportUrl` */
+  artifactName?: string;
+  /** Paths of the saved reports, the file name is mentioned when there is no URL or artifact name */
   reportPaths?: { json: string; html: string };
 };
 
+const reportLine = ({ reportUrl, artifactName, reportPaths }: SummaryOptions): string => {
+  const artifact = artifactName ? ` (artifact \`${artifactName.replace(/`/g, "")}\`)` : "";
+  if (reportUrl && isHttpUrl(reportUrl)) {
+    return `[Full report](${new URL(reportUrl).href.replace(/[()\s]/g, encodeURIComponent)})${artifact}`;
+  }
+  if (artifactName) {
+    return `Full report: artifact \`${artifactName.replace(/`/g, "")}\`.`;
+  }
+  return reportPaths ? `Full report: \`${basename(reportPaths.html).replace(/`/g, "")}\`.` : "";
+};
+
+const pageLink = (page: string, siteOrigin: string | undefined, line?: number): string => {
+  if (!isHttpUrl(page)) {
+    return codeCell(formatLocation({ page, line }));
+  }
+  const url = new URL(page).href.replace(/[()\s|]/g, encodeURIComponent);
+  return `[${escapeTableCell(displayUrl(page, siteOrigin))}](${url})`;
+};
+
+const pagesCell = (group: TargetGroup<IgnoredLink>, siteOrigin: string | undefined): string => {
+  const shown = group.pages
+    .slice(0, MAX_PAGES_PER_ROW)
+    .map((link) => pageLink(link.page, siteOrigin, link.line));
+  const more = group.pages.length - MAX_PAGES_PER_ROW;
+  return [...shown, ...(more > 0 ? [`+${more} more`] : [])].join("<br>");
+};
+
+/** The target (link), the reason below it and where it redirects to */
+const linkCell = ({ link }: TargetGroup<IgnoredLink>, siteOrigin: string | undefined): string => {
+  const notes = [
+    shortReason(link),
+    link.result.redirectedTo
+      ? `redirects to ${displayUrl(link.result.redirectedTo, siteOrigin)}`
+      : "",
+  ].filter(Boolean);
+  const target = codeCell(isHttpUrl(link.href) ? displayUrl(link.href) : link.href);
+  return notes.length > 0
+    ? `${target}<br><sub>${escapeTableCell(notes.join(" · "))}</sub>`
+    : target;
+};
+
+/** Origin of the checked site, if the report is of a site (its name is the host) */
+const getSiteOrigin = (siteName: string): string | undefined => {
+  const origin = `https://${siteName}`;
+  return URL.canParse(origin) && siteName.includes(".") && !/[\s/]/.test(siteName)
+    ? origin
+    : undefined;
+};
+
+const statsLine = (report: LinkCheckReport): string => {
+  const { summary, diff } = report;
+  const parts = [
+    `**${summary.brokenLinks + summary.networkErrors}** broken`,
+    `**${summary.hashNotFound}** missing anchors`,
+    `${summary.couldNotCheck} could not check`,
+    `${summary.ignored} ignored`,
+    `${summary.linksChecked.toLocaleString("en-US")} checked`,
+  ];
+  if (diff) {
+    parts.push(`+${diff.new} new, ${diff.fixed} fixed since previous report`);
+  }
+  return parts.join(" · ");
+};
+
+const tableRows = <T>(items: T[], limit: number, row: (item: T) => string): string[] => {
+  const rows = items.slice(0, limit).map(row);
+  return items.length > limit
+    ? [...rows, `| +${items.length - limit} more, see the full report | | |`]
+    : rows;
+};
+
 /** Markdown summary of a report for the GitHub job summary (`GITHUB_STEP_SUMMARY`) */
-export const renderJobSummary = (
-  report: LinkCheckReport,
-  { limit = SUMMARY_TABLE_LIMIT, reportPaths }: SummaryOptions = {},
-): string => {
-  const { summary } = report;
-  const icon = summary.totalLinksToFix > 0 ? "❌" : "✅";
+export const renderJobSummary = (report: LinkCheckReport, options: SummaryOptions = {}): string => {
+  const { limit = SUMMARY_TABLE_LIMIT } = options;
+  const { totalLinksToFix } = report.summary;
+  const siteName = escapeTableCell(report.siteName);
+  const siteOrigin = getSiteOrigin(report.siteName);
   const lines = [
-    `## ${icon} Link check: ${escapeTableCell(report.siteName)}`,
+    totalLinksToFix > 0
+      ? `## ❌ ${siteName}: ${totalLinksToFix} ${totalLinksToFix === 1 ? "link" : "links"} to fix`
+      : `## ✅ ${siteName}: all links OK`,
     "",
-    "| Links checked | To fix | Broken links | Hash not found | Network errors | Could not check | Ignored |",
-    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    `| ${summary.linksChecked} | ${summary.totalLinksToFix} | ${summary.brokenLinks} | ${summary.hashNotFound} | ${summary.networkErrors} | ${summary.couldNotCheck} | ${summary.ignored} |`,
+    statsLine(report),
     "",
   ];
 
-  const linksToFix = getLinksToFix(report);
-  if (linksToFix.length > 0) {
+  const groups = groupByTarget(getLinksToFix(report));
+  if (groups.length > 0) {
     lines.push(
-      "### Links to fix",
-      "",
-      "| Page | Link | Error |",
+      "| Problem | Link | Found on |",
       "| --- | --- | --- |",
-      ...linksToFix
-        .slice(0, limit)
-        .map(
-          (link) =>
-            `| ${escapeTableCell(formatLocation(link))} | ${escapeTableCell(link.href)} | ${escapeTableCell(describeResult(link))} |`,
-        ),
+      ...tableRows(
+        groups,
+        limit,
+        (group) =>
+          `| ${problemLabel(group.link)} | ${linkCell(group, siteOrigin)} | ${pagesCell(group, siteOrigin)} |`,
+      ),
       "",
     );
-    if (linksToFix.length > limit) {
-      lines.push(
-        `Showing the first ${limit} of ${linksToFix.length} links to fix, see the full report for the rest.`,
-        "",
-      );
-    }
   }
-  if (reportPaths) {
+
+  const ignored = groupByTarget(report.ignored);
+  if (ignored.length > 0) {
     lines.push(
-      `Full report: \`${reportPaths.html.replace(/`/g, "")}\` (JSON: \`${reportPaths.json.replace(/`/g, "")}\`).`,
+      `<details><summary>${report.summary.ignored} ignored by baseline</summary>`,
+      "",
+      "| Link | Reason | Pages |",
+      "| --- | --- | ---: |",
+      ...tableRows(
+        ignored,
+        limit,
+        ({ link, pages }) =>
+          `| ${codeCell(isHttpUrl(link.href) ? displayUrl(link.href) : link.href)} | ${escapeTableCell(link.ignoreReason ?? "")} | ${pages.length} |`,
+      ),
+      "",
+      "</details>",
       "",
     );
+  }
+
+  const fullReport = reportLine(options);
+  if (fullReport) {
+    lines.push(fullReport, "");
   }
   return `${lines.join("\n")}\n`;
 };
@@ -94,7 +194,15 @@ export const writeJobSummary = (
   if (!summaryFile) {
     return false;
   }
-  appendFileSync(summaryFile, renderJobSummary(report, options));
+  appendFileSync(
+    summaryFile,
+    renderJobSummary(report, {
+      // The action sets these after uploading the reports, see `action.yml`
+      reportUrl: process.env.LINK_CHECK_REPORT_URL || undefined,
+      artifactName: process.env.LINK_CHECK_ARTIFACT_NAME || undefined,
+      ...options,
+    }),
+  );
   return true;
 };
 
@@ -106,7 +214,7 @@ const escapeCommandProperty = (value: string) =>
 
 type AnnotationLevel = "error" | "warning";
 
-/** A workflow command annotation: `::error file=docs/a.md,line=3,title=Broken link::message` */
+/** A workflow command annotation: `::error file=docs/a.md,line=3,title=File not found::message` */
 const formatAnnotation = (
   level: AnnotationLevel,
   { file, line, title }: { file: string; line?: number; title?: string },
@@ -118,28 +226,22 @@ const formatAnnotation = (
   return `::${level} ${properties.join(",")}::${escapeCommandData(message)}`;
 };
 
-const TITLES: Record<string, string> = {
-  "broken link": "Broken link",
-  "hash not found": "Anchor not found",
-  "unexpected error": "Link check error",
-  "could not check": "Could not check link",
-};
-
 /**
  * Annotations for local files: errors for links to fix, warnings for links that could not be checked.
- * Ignored links are not annotated.
+ * Ignored links are not annotated. The title is the problem, the message the link and a short reason.
  */
 export const getFileAnnotations = (report: LinkCheckReport): string[] => {
-  const annotate = (level: AnnotationLevel) => (link: LinkWithResult) =>
-    formatAnnotation(
+  const annotate = (level: AnnotationLevel) => (link: LinkWithResult) => {
+    const reason = shortReason(link);
+    const message = reason.includes(link.href)
+      ? reason
+      : [link.href, reason].filter(Boolean).join(": ");
+    return formatAnnotation(
       level,
-      {
-        file: link.page,
-        line: link.line,
-        title: link.result.ok ? undefined : TITLES[link.result.error],
-      },
-      `${link.href}: ${describeResult(link)}`,
+      { file: link.page, line: link.line, title: problemLabel(link) },
+      message,
     );
+  };
   return [
     ...getLinksToFix(report).map(annotate("error")),
     ...report.couldNotCheck.map(annotate("warning")),

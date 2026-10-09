@@ -38,62 +38,169 @@ const tempFile = (name: string) => {
 };
 
 describe("renderJobSummary()", () => {
-  it("shows counts and a table of links to fix, escaped, with lines", () => {
+  const hashNotFound = (href: string, page: string, line?: number): LinkWithResult =>
+    broken(href, {
+      page,
+      line,
+      result: {
+        ok: false,
+        error: "hash not found",
+        status: 200,
+        errorDetail: "No heading matching #nope in docs/guide.md",
+      },
+    });
+
+  it("has the verdict in the title and the counts in one line", () => {
     const markdown = renderJobSummary(
       report(
         [
-          broken("docs/b|c.md", { line: 3 }),
-          broken("https://example.com/x", {
-            page: "README.md",
-            result: { ok: false, error: "hash not found", status: 200, errorDetail: "a\nb | c" },
+          broken("docs/b.md"),
+          hashNotFound("#nope", "docs/guide.md"),
+          broken("https://blocked.com", {
+            result: { ok: false, error: "could not check", status: 403 },
           }),
           broken("ignored.md"),
           { href: "ok.md", page: "a.md", text: "", result: { ok: true, status: 200 } },
         ],
         ["ignored.md"],
       ),
-      { reportPaths: { json: "results/local-files.json", html: "results/local-files.html" } },
     );
-    expect(markdown).toContain("## ❌ Link check: local files");
-    expect(markdown).toContain("| 4 | 2 | 1 | 1 | 0 | 0 | 1 |");
+    expect(markdown).toContain("## ❌ local files: 2 links to fix\n");
     expect(markdown).toContain(
-      "| docs/a.md:3 | docs/b\\|c.md | broken link: File not found |\n| README.md | https://example.com/x | hash not found (200): a b \\| c |",
+      "**1** broken · **1** missing anchors · 1 could not check · 1 ignored · 5 checked\n",
     );
-    expect(markdown).not.toContain("ignored.md");
-    expect(markdown).not.toContain("Showing the first");
-    expect(markdown).toContain("Full report: `results/local-files.html`");
+    expect(renderJobSummary(report([]))).toContain("## ✅ local files: all links OK");
   });
 
-  it("escapes table cells so links cannot break the table or inject markdown/HTML", () => {
+  it("adds the trend when the report has a diff", () => {
+    const current = report([broken("a.md")]);
+    expect(renderJobSummary(current)).not.toContain("since previous report");
+    expect(renderJobSummary({ ...current, diff: { new: 2, fixed: 3 } })).toContain(
+      " · +2 new, 3 fixed since previous report\n",
+    );
+  });
+
+  it("groups pages by target with problem, reason and the first two pages", () => {
     const markdown = renderJobSummary(
       report([
-        broken("a|b\\|c <script>&", { page: "[x](javascript:alert(1)) `code`" }),
-        broken("line 1\r\nline 2\n\n  line 3\rline 4"),
+        broken("missing.md", { page: "a.md", line: 3 }),
+        hashNotFound("#nope", "docs/guide.md"),
+        broken("missing.md", { page: "b.md", line: 4 }),
+        broken("missing.md", { page: "c.md" }),
+        broken("missing.md", { page: "d.md" }),
+      ]),
+    );
+    expect(markdown).toContain("| Problem | Link | Found on |");
+    // Most pages first
+    expect(markdown).toContain(
+      "| File not found | `missing.md`<br><sub>File not found</sub> | `a.md:3`<br>`b.md:4`<br>+2 more |",
+    );
+    expect(markdown).toContain(
+      "| Anchor not found | `#nope`<br><sub>no heading #nope in docs/guide.md</sub> | `docs/guide.md` |",
+    );
+    expect(markdown.match(/\| Anchor not found/g)).toHaveLength(1);
+  });
+
+  it("shows pages of a site without its origin, and where a link redirects to", () => {
+    const markdown = renderJobSummary(
+      getJSONReport({
+        ...RUN,
+        siteName: "docs.example.com",
+        links: [
+          broken("https://other.com/gone", {
+            page: "https://docs.example.com/guide/a?x=1",
+            result: {
+              ok: false,
+              error: "broken link",
+              status: 404,
+              errorDetail: "Not Found <!doctype html><html>",
+              redirectedTo: "https://docs.example.com/login",
+            },
+          }),
+        ],
+      }),
+    );
+    expect(markdown).toContain(
+      "| HTTP 404 | `other.com/gone`<br><sub>Not Found · redirects to /login</sub> | [/guide/a?x=1](https://docs.example.com/guide/a?x=1) |",
+    );
+  });
+
+  it("lists ignored links in a collapsed section with reason and page count", () => {
+    const markdown = renderJobSummary(
+      getJSONReport({
+        ...RUN,
+        siteName: "local files",
+        links: [broken("https://x.com/old"), broken("https://x.com/old", { page: "b.md" })],
+        baseline: createBaseline([{ href: "https://x.com/old", reason: "removed soon" }]),
+      }),
+    );
+    expect(markdown).toContain("<details><summary>2 ignored by baseline</summary>");
+    expect(markdown).toContain("| `x.com/old` | removed soon | 2 |");
+    expect(markdown).not.toContain("| Problem |");
+  });
+
+  it("escapes cells so links cannot break the table or inject markdown/HTML", () => {
+    const markdown = renderJobSummary(
+      report([
+        broken("a|b`c <script>", { page: "[x](javascript:alert(1)) `code`" }),
+        broken("x.md", {
+          result: {
+            ok: false,
+            error: "broken link",
+            errorDetail: "line 1\r\nline 2 | a & b [y]",
+          },
+        }),
         broken(`https://example.com/${"x".repeat(500)}`),
       ]),
     );
-    expect(markdown).toContain(
-      "| \\[x\\](javascript:alert(1)) \\`code\\` | a\\|b\\\\\\|c &lt;script&gt;&amp; |",
-    );
-    expect(markdown).toContain("| line 1 line 2 line 3 line 4 |");
-    const longCell = markdown.match(/https:\/\/example\.com\/x+…/)?.[0];
-    expect(longCell).toHaveLength(300);
+    expect(markdown).toContain("`a\\|b'c <script>`");
+    expect(markdown).toContain("`[x](javascript:alert(1)) 'code'`");
+    expect(markdown).toContain("<sub>line 1 line 2 \\| a &amp; b \\[y\\]</sub>");
+    expect(markdown).toMatch(/`example\.com\/x+…`/);
+    const rows = markdown.split("\n").filter((l) => l.startsWith("| ") && !l.includes("---"));
+    for (const row of rows) {
+      expect(row.replace(/\\\|/g, "").split("|")).toHaveLength(5);
+    }
   });
 
   it("truncates the table and says so", () => {
     const links = Array.from({ length: 60 }, (_, i) => broken(`missing-${i}.md`));
     const markdown = renderJobSummary(report(links));
-    expect(markdown.match(/missing-\d+\.md/g)).toHaveLength(50);
-    expect(markdown).toContain("missing-49.md");
+    expect(markdown.match(/`missing-\d+\.md`/g)).toHaveLength(50);
     expect(markdown).not.toContain("missing-50.md");
-    expect(markdown).toContain("Showing the first 50 of 60 links to fix");
-    expect(renderJobSummary(report(links), { limit: 5 })).toContain("Showing the first 5 of 60");
+    expect(markdown).toContain("| +10 more, see the full report | | |");
+    expect(renderJobSummary(report(links), { limit: 5 })).toContain("| +55 more");
   });
 
-  it("has no table when all links are fine", () => {
-    const markdown = renderJobSummary(report([]));
-    expect(markdown).toContain("## ✅ Link check");
-    expect(markdown).not.toContain("Links to fix");
+  describe("report link", () => {
+    const links = [broken("x.md")];
+
+    it("links the report URL, with the artifact name", () => {
+      const markdown = renderJobSummary(report(links), {
+        reportUrl: "https://github.com/o/r/actions/runs/1/artifacts/2",
+        artifactName: "link-check-report",
+      });
+      expect(markdown).toContain(
+        "[Full report](https://github.com/o/r/actions/runs/1/artifacts/2) (artifact `link-check-report`)",
+      );
+    });
+
+    it("names the artifact without a URL, never a local path", () => {
+      expect(renderJobSummary(report(links), { artifactName: "link-check-report" })).toContain(
+        "Full report: artifact `link-check-report`.",
+      );
+      const markdown = renderJobSummary(report(links), {
+        reportPaths: { json: "/runner/tmp/a.json", html: "/runner/tmp/a.html" },
+      });
+      expect(markdown).toContain("Full report: `a.html`.");
+      expect(markdown).not.toContain("/runner");
+    });
+
+    it("ignores a URL that is not http(s)", () => {
+      expect(renderJobSummary(report(links), { reportUrl: "javascript:alert(1)" })).not.toContain(
+        "javascript",
+      );
+    });
   });
 });
 
@@ -105,6 +212,13 @@ describe("writeJobSummary()", () => {
     const content = readFileSync(file, "utf8");
     expect(content.startsWith("previous step\n## ❌")).toBe(true);
     expect(writeJobSummary(report([]), {}, "")).toBe(false);
+  });
+
+  it("uses the report URL from LINK_CHECK_REPORT_URL", () => {
+    vi.stubEnv("LINK_CHECK_REPORT_URL", "https://example.com/report");
+    const file = tempFile("url-summary.md");
+    writeJobSummary(report([broken("x.md")]), {}, file);
+    expect(readFileSync(file, "utf8")).toContain("[Full report](https://example.com/report)");
   });
 
   it("never falls back to the real GITHUB_STEP_SUMMARY / GITHUB_OUTPUT (like in CI)", () => {
@@ -124,11 +238,27 @@ describe("getFileAnnotations()", () => {
     const annotations = getFileAnnotations(
       report(
         [
-          broken("missing.md", { line: 7 }),
-          broken("no-line.md"),
+          broken("missing.md", {
+            line: 7,
+            result: { ok: false, error: "broken link", errorDetail: "File not found: missing.md" },
+          }),
           broken("#nope", {
             line: 2,
-            result: { ok: false, error: "hash not found", status: 200, errorDetail: "No heading" },
+            result: {
+              ok: false,
+              error: "hash not found",
+              status: 200,
+              errorDetail: "No heading matching #nope in docs/a.md",
+            },
+          }),
+          broken("https://x.com", {
+            page: "README.md",
+            result: {
+              ok: false,
+              error: "broken link",
+              status: 404,
+              errorDetail: "Not Found <!doctype html>",
+            },
           }),
           broken("https://blocked.com", {
             line: 9,
@@ -141,15 +271,13 @@ describe("getFileAnnotations()", () => {
       ),
     );
     expect(annotations).toEqual([
-      "::error file=docs/a.md,line=7,title=Broken link::missing.md: broken link: File not found",
-      "::error file=docs/a.md,title=Broken link::no-line.md: broken link: File not found",
-      "::error file=docs/a.md,line=2,title=Anchor not found::#nope: hash not found (200): No heading",
-      "::warning file=docs/a.md,line=9,title=Could not check link::https://blocked.com: could not check (403)",
+      "::error file=docs/a.md,line=7,title=File not found::no file missing.md",
+      "::error file=README.md,title=HTTP 404::https://x.com: Not Found",
+      "::error file=docs/a.md,line=2,title=Anchor not found::no heading #nope in docs/a.md",
+      "::warning file=docs/a.md,line=9,title=Could not check (403)::https://blocked.com",
     ]);
   });
-});
 
-describe("getFileAnnotations() escaping", () => {
   it("escapes workflow command properties and messages", () => {
     const [annotation] = getFileAnnotations(
       report([
@@ -161,7 +289,7 @@ describe("getFileAnnotations() escaping", () => {
       ]),
     );
     expect(annotation).toBe(
-      "::error file=docs/a%2Cb%3Ac.md,line=3,title=Broken link::x.md: broken link: 50%25 done%0Anext",
+      "::error file=docs/a%2Cb%3Ac.md,line=3,title=File not found::x.md: 50%25 done next",
     );
   });
 });
