@@ -79,7 +79,7 @@ const linkCell = ({ link }: TargetGroup<IgnoredLink>, siteOrigin: string | undef
       ? `redirects to ${displayUrl(link.result.redirectedTo, siteOrigin)}`
       : "",
   ].filter(Boolean);
-  const target = codeCell(isHttpUrl(link.href) ? displayUrl(link.href) : link.href);
+  const target = codeCell(isHttpUrl(link.href) ? displayUrl(link.href, siteOrigin) : link.href);
   return notes.length > 0
     ? `${target}<br><sub>${escapeTableCell(notes.join(" · "))}</sub>`
     : target;
@@ -154,7 +154,7 @@ export const renderJobSummary = (report: LinkCheckReport, options: SummaryOption
         ignored,
         limit,
         ({ link, pages }) =>
-          `| ${codeCell(isHttpUrl(link.href) ? displayUrl(link.href) : link.href)} | ${escapeTableCell(link.ignoreReason ?? "")} | ${pages.length} |`,
+          `| ${codeCell(isHttpUrl(link.href) ? displayUrl(link.href, siteOrigin) : link.href)} | ${escapeTableCell(link.ignoreReason ?? "")} | ${pages.length} |`,
       ),
       "",
       "</details>",

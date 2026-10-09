@@ -449,4 +449,9 @@ describe("getJSONReport() metadata", () => {
     });
     expect(report).not.toHaveProperty("diff");
   });
+
+  it("shows a duration just under 2 minutes as 2m 0s", () => {
+    const report = getJSONReport({ ...RUN, durationMs: 119_999, links: [], siteName: "site" });
+    expect(cheerio.load(renderReportToHTML(report))("header").text()).toContain("2m 0s");
+  });
 });

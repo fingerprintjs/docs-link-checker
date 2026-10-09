@@ -55,7 +55,8 @@ export const getMyOctokit = (): MyOctokitInstance => {
       log: {
         debug: () => {},
         info: (message: string) => getTerminal().verbose(message),
-        warn: (message: string) => console.warn(message),
+        // Rate limit warnings stay visible, through the terminal so they don't break the progress line
+        warn: (message: string) => getTerminal().line(message),
         error: (message: string) => getTerminal().verbose(message),
       },
       request: { fetch: fetchOfRun },

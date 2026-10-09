@@ -421,9 +421,11 @@ const formatDuration = (ms: number): string => {
   if (ms < 60_000) {
     return `${(ms / 1000).toFixed(1)}s`;
   }
-  const minutes = Math.floor(ms / 60_000);
+  // Round once, then split: rounding the seconds alone turns 119.9s into `1m 0s`
+  const seconds = Math.round(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
   return minutes < 60
-    ? `${minutes}m ${Math.round(ms / 1000) % 60}s`
+    ? `${minutes}m ${seconds % 60}s`
     : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 };
 

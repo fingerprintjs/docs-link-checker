@@ -143,6 +143,19 @@ describe("renderJobSummary()", () => {
     expect(markdown).toContain("[/guide/a](http://127.0.0.1:8080/guide/a)");
   });
 
+  it("shortens links to the checked site like its pages", () => {
+    const markdown = renderJobSummary(
+      getJSONReport({
+        ...RUN,
+        siteName: "docs.example.com",
+        links: [
+          broken("https://docs.example.com/gone", { page: "https://docs.example.com/guide" }),
+        ],
+      }),
+    );
+    expect(markdown).toContain("| `/gone`<br>");
+  });
+
   it("lists ignored links in a collapsed section with reason and page count", () => {
     const markdown = renderJobSummary(
       getJSONReport({
