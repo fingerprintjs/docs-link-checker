@@ -242,9 +242,18 @@ const Reason = ({ link, siteOrigin }: ViewProps & { link: LinkWithResult | Ignor
   );
 };
 
-const Problem = ({ link }: { link: LinkWithResult }) => (
-  <span class={problemKind(link) === "check" ? "warn" : "bad"}>{problemLabel(link)}</span>
-);
+/** Status glyph in the status color, label in ink: color never carries the meaning alone */
+const Problem = ({ link }: { link: LinkWithResult }) => {
+  const kind = problemKind(link);
+  return (
+    <>
+      <span class={`g ${kind}`} aria-hidden="true">
+        {kind === "check" ? "○" : "●"}
+      </span>
+      {problemLabel(link)}
+    </>
+  );
+};
 
 /** A page of a link: `/path "link text"`, or `file:line` for local files */
 const PageRef = ({ link, options, siteOrigin }: ViewProps & { link: Link }) => {

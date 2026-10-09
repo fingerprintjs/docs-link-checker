@@ -4,24 +4,26 @@
  */
 
 export const REPORT_CSS = `
-:root{color-scheme:light dark;--fg:#1f2328;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--bad:#c62828;--ok:#1a7f37;--warn:#9a6700;--hash:#b35900;--hover:#f6f8fa}
-@media(prefers-color-scheme:dark){:root{--fg:#d8dee4;--muted:#8b949e;--line:#30363d;--bg:#0d1117;--bad:#ff7b72;--ok:#56d364;--warn:#e3b341;--hash:#f0883e;--hover:#161b22}}
+:root{color-scheme:light dark;--fg:#1f2328;--muted:#59636e;--line:#d8dee4;--ctl:#8c959f;--bg:#fff;--hover:#f6f8fa;--bad:#c62828;--warn:#9a6700;--ok:#1a7f37;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media(prefers-color-scheme:dark){:root{--fg:#d8dee4;--muted:#9198a1;--line:#30363d;--ctl:#6e7681;--bg:#0d1117;--hover:#161b22;--bad:#ff7b72;--warn:#e3b341;--ok:#56d364}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{margin:6px auto;padding:0 10px;max-width:1400px;font:13px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+body{margin:6px auto;padding:0 10px;max-width:1400px;font:13px/1.35 var(--sans);color:var(--fg);background:var(--bg)}
 a{color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
 a:hover{text-decoration-color:currentColor}
 h1{margin:0;font-size:15px;font-weight:600}
 p{margin:2px 0}
 .muted,.txt{color:var(--muted)}
-.bad{color:var(--bad)}.ok{color:var(--ok)}.warn{color:var(--warn)}
-.stats button,.view button,.cp,summary{font:inherit;color:inherit}
+.bad{color:var(--bad)}.ok{color:var(--ok)}
+.g{margin-right:4px}.g.broken,.g.network{color:var(--bad)}.g.anchor{color:var(--warn)}.g.check{color:var(--muted)}
+a:focus-visible,button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid currentColor;outline-offset:1px}
+.stats button,.view button,.cp{font:inherit;color:inherit}
 button{background:none;border:0;padding:0;cursor:pointer}
 .stats button{text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
 button[aria-pressed=true]{font-weight:600;text-decoration-color:currentColor}
 .sep{color:var(--muted);margin:0 4px}
 .bar{display:flex;gap:12px;align-items:center;margin:6px 0;padding:4px 0;border-bottom:1px solid var(--line)}
-.bar input{flex:1;max-width:420px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:2px 6px}
+.bar input{flex:1;max-width:420px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--ctl);border-radius:3px;padding:2px 6px}
 .view button{padding:0 2px}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font-weight:400;color:var(--muted);padding:2px 10px 2px 0;white-space:nowrap}
@@ -31,17 +33,19 @@ tr:hover td{background:var(--hover)}
 .pb{white-space:nowrap}
 .lk,.mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 .lk{word-break:break-all}
-.hash{color:var(--hash)}
-.rs{color:var(--muted);font-size:12px}
+.hash{color:var(--warn)}
+.rs{color:var(--muted);font:12px var(--sans)}
 .pg{overflow-wrap:anywhere}
 .txt{display:inline-block;margin-left:4px;max-width:32ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .ph td{font-weight:600;border-top:1px solid var(--line);padding-top:6px}
-.cp{color:var(--muted);font-size:12px;white-space:nowrap}
+.cp{color:var(--muted);font-size:12px;white-space:nowrap;opacity:0}
+tr:hover .cp,tr:focus-within .cp{opacity:1}
+@media(hover:none){.cp{opacity:1}}
 .cp:hover{color:var(--fg)}
 details{display:block}
-summary{cursor:pointer;color:var(--muted);display:inline-block}
+summary{cursor:pointer;color:var(--muted);display:inline-block;font:12px var(--sans)}
 details[open]>summary{margin-bottom:2px}
-pre{margin:2px 0;padding:4px 6px;max-height:12em;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;border:1px solid var(--line)}
+pre{margin:2px 0;padding:4px 6px;max-height:12em;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px;border:1px solid var(--line)}
 section{margin-top:12px}
 @media(max-width:700px){
 body{margin:4px auto;padding:0 6px}

@@ -48,6 +48,12 @@ describe("renderReportToHTML()", () => {
     expect(buttons.first().attr("data-copy-href")).toBe(EVIL_HREF);
   });
 
+  it("shows the status as a decorative glyph plus a text label", () => {
+    const cell = $("#by-link tbody tr").first().find("td").first();
+    expect(cell.find("[aria-hidden=true]").text()).toBe("●");
+    expect(cell.clone().children().remove().end().text()).toBe("HTTP 404");
+  });
+
   it("escapes all dynamic text", () => {
     // Injected markup must not become elements or script code
     expect($("script").text()).not.toContain("alert(");
