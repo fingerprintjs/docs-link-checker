@@ -16,9 +16,13 @@ afterEach(() => {
 });
 
 describe("parallelProcess() progress", () => {
-  const output = async (run: () => Promise<unknown>, verbose = false) => {
+  const output = async (
+    run: () => Promise<unknown>,
+    { verbose = false, now }: { verbose?: boolean; now?: () => number } = {},
+  ) => {
     let text = "";
     const terminal = createTerminal({
+      now,
       write: (chunk) => {
         text += chunk;
       },
@@ -33,25 +37,36 @@ describe("parallelProcess() progress", () => {
 
   it("shows the progress of a labelled batch every 10% with the failing count", async () => {
     let done = 0;
-    const text = await output(() =>
-      parallelProcess({
-        items,
-        label: "Checking",
-        concurrencyLimit: 1,
-        failing: () => done,
-        processFn: async (item) => {
-          done = item;
-        },
-      }),
+    // Every clock read is 10s later: each progress update is past the quiet start of the step
+    let time = 0;
+    const text = await output(
+      () =>
+        parallelProcess({
+          items,
+          label: "Checking",
+          concurrencyLimit: 1,
+          failing: () => done,
+          processFn: async (item) => {
+            done = item;
+          },
+        }),
+      { now: () => (time += 10_000) },
     );
     expect(text).toContain("Checking 50% (10/20, 9 failing so far)\n");
     expect(text.match(/Checking \d+%/g)).toHaveLength(10);
   });
 
+  it("prints no progress lines for a batch that ends within seconds", async () => {
+    const text = await output(() =>
+      parallelProcess({ items, label: "Checking", processFn: async () => {} }),
+    );
+    expect(text).not.toMatch(/Checking \d+%/);
+  });
+
   it("shows nothing without a label, and the time of the batch only with --verbose", async () => {
     const run = () => parallelProcess({ items, processFn: async () => {} });
     expect(await output(run)).toBe("");
-    expect(await output(run, true)).toMatch(/^Batch: 20 items in \d+ms\n/);
+    expect(await output(run, { verbose: true })).toMatch(/^Batch: 20 items in \d+ms\n/);
   });
 });
 

@@ -514,11 +514,10 @@ describe("runCli()", () => {
     expect(plain(stdout)).toContain("Run metrics:");
   });
 
-  it("sends the output to stderr with --json and prints the progress of non-TTY runs in steps", async () => {
+  it("sends the output to stderr with --json", async () => {
     await runCli(["site", siteUrl, "--output-dir", tempDir(), "--json"], io());
     expect(() => JSON.parse(stdout)).not.toThrow();
     expect(plain(stderr)).toContain("✗ 3 links to fix");
-    expect(plain(stderr)).toContain("Checking URLs 100% (3/3, 2 failing so far)");
   });
 
   it("redraws one progress line on a TTY instead of printing a line per step", async () => {

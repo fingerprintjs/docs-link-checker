@@ -50,12 +50,13 @@ export const getMyOctokit = (): MyOctokitInstance => {
     client = new MyOctokit({
       auth: token,
       throttle: throttleOptions,
-      // The default logs every request (`GET /repos/... - 200 with id ...`) as info, shown with --verbose only
+      // The default logs every request (`GET /repos/... - 200 with id ...`) as info, failed ones as error.
+      // Both are shown with --verbose only: callers handle failed requests (a 401 falls back to the browser).
       log: {
         debug: () => {},
         info: (message: string) => getTerminal().verbose(message),
         warn: (message: string) => console.warn(message),
-        error: (message: string) => console.error(message),
+        error: (message: string) => getTerminal().verbose(message),
       },
       request: { fetch: fetchOfRun },
     });

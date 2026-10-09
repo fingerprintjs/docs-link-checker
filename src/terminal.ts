@@ -2,7 +2,7 @@
  * Terminal output of a run: finished steps (`✓ Found 21 links in 5 files  36ms`), live progress and colors.
  * - Colors use `styleText`, it follows NO_COLOR / FORCE_COLOR and prints plain text when the stream is not a TTY:
  *   https://nodejs.org/api/util.html#utilstyletextformat-text-options
- * - On a TTY the progress is one line that is redrawn, otherwise a line is printed at most every 10%.
+ * - On a TTY the progress is one line that is redrawn, otherwise a line is printed at most every 10%, after the first 5s of a step.
  * - Results and the verdict are formatted in `src/cli_report.ts`.
  */
 import { styleText } from "node:util";
@@ -17,7 +17,7 @@ export type Terminal = {
   line: (text?: string) => void;
   /** A finished step, with the time since the previous one: `✓ label detail  219ms` */
   done: (label: string, detail?: string) => void;
-  /** Step in progress: a redrawn line on a TTY, a line at most every 10% otherwise */
+  /** Step in progress: a redrawn line on a TTY, a line at most every 10% otherwise (after 5s) */
   progress: (label: string, done: number, total: number, failing?: number) => void;
   /** Removes the progress line (if any), to print something else or to leave */
   clear: () => void;
@@ -56,6 +56,8 @@ export const plural = (count: number, noun: string): string =>
 const BAR_WIDTH = 24;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const REDRAW_INTERVAL_MS = 100;
+/** Without a TTY, no progress lines in the first seconds of a step */
+const QUIET_STEP_MS = 5000;
 const CLEAR_LINE = "\r\u001B[2K";
 
 export const createTerminal = ({
@@ -126,7 +128,8 @@ export const createTerminal = ({
         return;
       }
       const bucket = total > 0 ? Math.floor((done / total) * 10) : 0;
-      if (bucket > current.lastBucket) {
+      // Short steps print only their done line, progress lines would just be noise in CI logs
+      if (bucket > current.lastBucket && now() - current.start >= QUIET_STEP_MS) {
         current.lastBucket = bucket;
         const failingText = failing > 0 ? `, ${failing} failing so far` : "";
         write(
