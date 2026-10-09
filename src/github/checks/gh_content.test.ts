@@ -18,7 +18,9 @@ vi.mock("../github_client", () => ({
   }),
 }));
 
-import { checkLinkWithGithubApi } from "../gh_check_link";
+import { checkLinkWithGithubApi as checkLink } from "../gh_check_link";
+
+const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
 
 const readme = readFileSync(
   join(import.meta.dirname, "..", "..", "__fixtures__", "readme.md"),
@@ -113,7 +115,12 @@ describe("checkLinkWithGithubApi() with blob links (mocked GitHub API)", () => {
         error: "hash not found",
         errorDetail: "big.txt has only 200000 lines",
       });
-      expect(getBlob).toHaveBeenCalledWith({ owner: "owner", repo: "repo", file_sha: "bigsha" });
+      expect(getBlob).toHaveBeenCalledWith({
+        owner: "owner",
+        repo: "repo",
+        file_sha: "bigsha",
+        request: { signal: expect.any(AbortSignal) },
+      });
     });
 
     it("reports line anchors on binary files as 'hash not found'", async () => {

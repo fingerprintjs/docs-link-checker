@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { closeRunBrowser } from "../run";
-import { checkLinkWithGithubApi } from "./gh_check_link";
+import { checkLinkWithGithubApi as checkLink } from "./gh_check_link";
+
+const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
 
 // Checks outside of a run share one browser, close it when done
 afterAll(closeRunBrowser);

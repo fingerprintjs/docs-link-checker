@@ -15,7 +15,13 @@ import { getGithubPathSegments } from "./gh_url";
 /** Sections whose index page (`/owner/repo/issues`) exists for every repository */
 const SECTIONS_WITH_INDEX_PAGE = new Set(["issues", "discussions", "releases", "pulls"]);
 
-type SectionCheckArgs = { url: URL; owner: string; repo: string; pathParts: string[] };
+type SectionCheckArgs = {
+  url: URL;
+  owner: string;
+  repo: string;
+  pathParts: string[];
+  signal: AbortSignal;
+};
 
 type SectionCheck = (args: SectionCheckArgs) => Promise<LinkCheckResult>;
 
@@ -24,18 +30,34 @@ type SectionCheck = (args: SectionCheckArgs) => Promise<LinkCheckResult>;
  * `constructor` or `__proto__` from the URL never resolves an inherited object property.
  */
 const SECTION_CHECKS = new Map<string, SectionCheck>([
-  ["issues", ({ owner, repo, pathParts }) => checkGitHubIssueLink(owner, repo, pathParts)],
+  [
+    "issues",
+    ({ owner, repo, pathParts, signal }) => checkGitHubIssueLink(owner, repo, pathParts, signal),
+  ],
   [
     "discussions",
-    ({ owner, repo, pathParts }) =>
-      checkGitHubDiscussionLink(owner, repo, parseInt(pathParts[1] ?? "", 10)),
+    ({ owner, repo, pathParts, signal }) =>
+      checkGitHubDiscussionLink(owner, repo, parseInt(pathParts[1] ?? "", 10), signal),
   ],
   // The blob and its hash: a heading, or a code line like `#L12`
-  ["blob", ({ url, owner, repo, pathParts }) => checkGitHubBlobLink(url, owner, repo, pathParts)],
-  ["tree", ({ owner, repo, pathParts }) => checkGitHubTreeLink(owner, repo, pathParts)],
-  ["releases", ({ owner, repo, pathParts }) => checkGitHubReleaseLink(owner, repo, pathParts)],
-  ["pull", ({ owner, repo, pathParts }) => checkGitHubPullRequestLink(owner, repo, pathParts)],
-  ["commit", ({ owner, repo, pathParts }) => checkGitHubCommitLink(owner, repo, pathParts)],
+  ["blob", checkGitHubBlobLink],
+  [
+    "tree",
+    ({ owner, repo, pathParts, signal }) => checkGitHubTreeLink(owner, repo, pathParts, signal),
+  ],
+  [
+    "releases",
+    ({ owner, repo, pathParts, signal }) => checkGitHubReleaseLink(owner, repo, pathParts, signal),
+  ],
+  [
+    "pull",
+    ({ owner, repo, pathParts, signal }) =>
+      checkGitHubPullRequestLink(owner, repo, pathParts, signal),
+  ],
+  [
+    "commit",
+    ({ owner, repo, pathParts, signal }) => checkGitHubCommitLink(owner, repo, pathParts, signal),
+  ],
 ]);
 
 /**
@@ -44,10 +66,14 @@ const SECTION_CHECKS = new Map<string, SectionCheck>([
  * @param url A GitHub link to a public repository, for example:
  * https://github.com/fingerprintjs/fingerprintjs-pro-angular/blob/main/README.md#documentation
  * Callers must route wiki links, GitHub's own pages and non-GitHub URLs elsewhere (see `getInitialCheckMethod`).
+ * @param signal Aborts the API requests (the check timed out)
  *
  * @returns LinkCheckResult
  */
-export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResult> => {
+export const checkLinkWithGithubApi = async (
+  url: string,
+  signal: AbortSignal,
+): Promise<LinkCheckResult> => {
   // Parse the GitHub URL. Segments are decoded (`%40` -> `@`), Octokit encodes them again in the API request.
   const githubUrl = new URL(url);
   const [owner, repo, ...pathParts] = getGithubPathSegments(githubUrl);
@@ -59,7 +85,7 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
 
   // `https://github.com/owner` (with or without a trailing slash): a user or an organization, not a repository
   if (!repo) {
-    const result = await checkIfOwnerExists(owner);
+    const result = await checkIfOwnerExists(owner, signal);
     // Not an account: maybe one of GitHub's own pages missing from the reserved routes, check the page itself
     if (!result.ok && result.error === "broken link") {
       const page = await checkLinkWithFetch(url);
@@ -74,17 +100,17 @@ export const checkLinkWithGithubApi = async (url: string): Promise<LinkCheckResu
 
   // If pathParts is empty, it's a repository link, just check if it exists
   if (section === undefined) {
-    return checkIfRepositoryExists(owner, repo);
+    return checkIfRepositoryExists(owner, repo, signal);
   }
 
   // If nothings follows the section path segment, just check that the repository exists
   if (sectionParts.length === 0 && SECTIONS_WITH_INDEX_PAGE.has(section)) {
-    return checkIfRepositoryExists(owner, repo);
+    return checkIfRepositoryExists(owner, repo, signal);
   }
 
   const checkSection = SECTION_CHECKS.get(section);
   if (checkSection) {
-    return checkSection({ url: githubUrl, owner, repo, pathParts });
+    return checkSection({ url: githubUrl, owner, repo, pathParts, signal });
   }
 
   return {

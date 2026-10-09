@@ -12,9 +12,14 @@ import { isGithubCodeLineLink } from "../gh_url";
  * the ref ends.
  */
 
-const getContent = (owner: string, repo: string, ref: string, path: string) =>
+const getContent = (
+  { owner, repo }: { owner: string; repo: string },
+  ref: string,
+  path: string,
+  signal: AbortSignal,
+) =>
   cachedRequest(["content", owner.toLowerCase(), repo.toLowerCase(), ref, path], (octokit) =>
-    octokit.repos.getContent({ owner, repo, ref, path }),
+    octokit.repos.getContent({ owner, repo, ref, path, request: { signal } }),
   );
 
 /**
@@ -22,7 +27,12 @@ const getContent = (owner: string, repo: string, ref: string, path: string) =>
  * (`feature` or `feature/...`, not `feature-2`), one cached listing of branches and one of tags per repository and
  * first segment. A missing repository has no refs.
  */
-const getRefCandidates = async (owner: string, repo: string, first: string): Promise<string[]> => {
+const getRefCandidates = async (
+  owner: string,
+  repo: string,
+  first: string,
+  signal: AbortSignal,
+): Promise<string[]> => {
   const listings = await Promise.all(
     (["heads", "tags"] as const).map(async (kind) => {
       // `GET /repos/{owner}/{repo}/git/matching-refs/{ref}` (all pages): refs whose name starts with the prefix
@@ -34,6 +44,7 @@ const getRefCandidates = async (owner: string, repo: string, first: string): Pro
               owner,
               repo,
               ref: `${kind}/${first}`,
+              request: { signal },
             }),
         ),
       );
@@ -71,16 +82,17 @@ type RefPathContent =
  * Only "not found" can mean the ref is longer, any other error is the answer.
  * @param segments decoded path segments after `blob` or `tree`
  * @param requirePath `true` for blobs (a file), `false` for trees (`tree/feature/x` is the root of `feature/x`)
+ * @param signal aborts the API requests (the check timed out)
  */
 const getRefPathContent = async (
   owner: string,
   repo: string,
   segments: string[],
-  { requirePath }: { requirePath: boolean },
+  { requirePath, signal }: { requirePath: boolean; signal: AbortSignal },
 ): Promise<RefPathContent> => {
   const [first = "", ...rest] = segments;
   const path = rest.join("/");
-  const firstTry = await tryCatch(getContent(owner, repo, first, path));
+  const firstTry = await tryCatch(getContent({ owner, repo }, first, path, signal));
   if (firstTry.data) {
     return { found: true, ref: first, path, response: firstTry.data };
   }
@@ -89,7 +101,7 @@ const getRefPathContent = async (
   }
 
   const { data: candidates, error: listError } = await tryCatch(
-    getRefCandidates(owner, repo, first),
+    getRefCandidates(owner, repo, first, signal),
   );
   if (listError) {
     return { found: false, error: listError };
@@ -111,7 +123,7 @@ const getRefPathContent = async (
       // The listing proves the ref exists
       return { found: true, ref, path: refPath, response: undefined };
     }
-    const { data, error } = await tryCatch(getContent(owner, repo, ref, refPath));
+    const { data, error } = await tryCatch(getContent({ owner, repo }, ref, refPath, signal));
     if (data) {
       return { found: true, ref, path: refPath, response: data };
     }
@@ -137,7 +149,12 @@ type FileData = { content: string; encoding?: string; sha: string; size?: number
  * Text of a file. Files over 1 MB have no content in the contents API (`encoding: "none"`), they are read with
  * `GET /repos/{owner}/{repo}/git/blobs/{sha}` (up to 100 MB). A blob never changes, cached per sha.
  */
-const getFileText = (owner: string, repo: string, file: FileData): Promise<FileText> => {
+const getFileText = (
+  owner: string,
+  repo: string,
+  file: FileData,
+  signal: AbortSignal,
+): Promise<FileText> => {
   let text = textByFile.get(file);
   if (!text) {
     text = (async () => {
@@ -146,7 +163,8 @@ const getFileText = (owner: string, repo: string, file: FileData): Promise<FileT
         ? (
             await cachedRequest(
               ["blob", owner.toLowerCase(), repo.toLowerCase(), file.sha],
-              (octokit) => octokit.git.getBlob({ owner, repo, file_sha: file.sha }),
+              (octokit) =>
+                octokit.git.getBlob({ owner, repo, file_sha: file.sha, request: { signal } }),
             )
           ).data.content
         : file.content;
@@ -181,22 +199,33 @@ const hasHeadingAnchor = (fileText: FileText, hash: string) =>
  * Check if a GitHub blob exists, and its hash: a heading of a markdown file, or a code line (`#L12`, `#L12-L15`,
  * `#L12C3-L15C1`, the file must have enough lines, see `checkLineAnchor`). Code lines are checked with the API, not in the browser:
  * github.com refuses blob pages to headless browsers on CI runners (503).
- * @param fullUrl - The full URL of the blob
+ * @param url - The full URL of the blob
  * @param owner - The owner of the repository
  * @param repo - The repository name
  * @param pathParts - The path parts of the URL
+ * @param signal - Aborts the API requests (the check timed out)
  * @returns - A LinkCheckResult object
  */
-export const checkGitHubBlobLink = async (
-  fullUrl: URL,
-  owner: string,
-  repo: string,
-  pathParts: string[],
-): Promise<LinkCheckResult> => {
+export const checkGitHubBlobLink = async ({
+  url: fullUrl,
+  owner,
+  repo,
+  pathParts,
+  signal,
+}: {
+  url: URL;
+  owner: string;
+  repo: string;
+  pathParts: string[];
+  signal: AbortSignal;
+}): Promise<LinkCheckResult> => {
   // Remove the # character, decode percent-encoding and make it lowercase
   const hash = decodeHash(fullUrl.hash).toLowerCase();
 
-  const content = await getRefPathContent(owner, repo, pathParts.slice(1), { requirePath: true });
+  const content = await getRefPathContent(owner, repo, pathParts.slice(1), {
+    requirePath: true,
+    signal,
+  });
   if (!content.found) {
     return getApiErrorResult(content.error, "File not found in repository");
   }
@@ -217,7 +246,7 @@ export const checkGitHubBlobLink = async (
     };
   }
 
-  const { data: fileText, error } = await tryCatch(getFileText(owner, repo, fileData));
+  const { data: fileText, error } = await tryCatch(getFileText(owner, repo, fileData, signal));
   if (error) {
     return getApiErrorResult(error, "File content not found in repository");
   }
@@ -257,17 +286,22 @@ export const checkGitHubBlobLink = async (
  * @param owner - The owner of the repository
  * @param repo - The repository name
  * @param pathParts - The path parts of the URL
+ * @param signal - Aborts the API requests (the check timed out)
  * @returns - A LinkCheckResult object
  */
 export const checkGitHubTreeLink = async (
   owner: string,
   repo: string,
   pathParts: string[],
+  signal: AbortSignal,
 ): Promise<LinkCheckResult> => {
   // The ref can contain slashes: `tree/feature/x/src` (see `getRefPathContent`)
   const [, ref = "", ...restOfPath] = pathParts;
   const path = restOfPath.join("/");
-  const content = await getRefPathContent(owner, repo, pathParts.slice(1), { requirePath: false });
+  const content = await getRefPathContent(owner, repo, pathParts.slice(1), {
+    requirePath: false,
+    signal,
+  });
   if (content.found) {
     return { ok: true, status: 200 };
   }

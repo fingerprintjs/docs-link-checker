@@ -1,13 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { octokit } = vi.hoisted(() => ({
-  octokit: { repos: { get: vi.fn(), getContent: vi.fn() } },
+  octokit: {
+    repos: { get: vi.fn(), getContent: vi.fn() },
+    git: { listMatchingRefs: vi.fn() },
+    paginate: vi.fn(),
+  },
 }));
 
 vi.mock("./github_client", () => ({ getMyOctokit: () => octokit }));
 
+import { withTimeout } from "../limiter";
 import { getRunContext, withRun } from "../run";
-import { checkLinkWithGithubApi } from "./gh_check_link";
+import { checkLinkWithGithubApi as checkLink } from "./gh_check_link";
+
+const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
 
 const delayed = <T>(value: T, ms = 10) =>
   new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
@@ -123,5 +130,34 @@ describe("GitHub API cache (through checkLinkWithGithubApi)", () => {
       ]);
       expect(getRunContext()!.metrics.counters).toMatchObject({ githubCacheHits: 1 });
     });
+  });
+
+  it("sends no more requests once the check timed out", async () => {
+    // Fails with "not found" after 20 ms, or with an abort error as soon as its signal aborts
+    octokit.repos.getContent.mockReset().mockImplementation(
+      ({ request }: { request: { signal?: AbortSignal } }) =>
+        new Promise((_, reject) => {
+          const timer = setTimeout(
+            () => reject(Object.assign(new Error("Not Found"), { status: 404 })),
+            20,
+          );
+          request.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+    octokit.paginate.mockReset().mockResolvedValue([]);
+
+    // `feature/x` can be a branch: after "not found" for `feature`, the check lists branches and tags
+    const check = withTimeout(
+      (signal) => checkLink("https://github.com/owner/repo/blob/feature/x/README.md", signal),
+      5,
+      "timed out",
+    );
+    await expect(check).rejects.toThrow("timed out");
+    await delayed(undefined, 40);
+
+    expect(octokit.paginate).not.toHaveBeenCalled();
   });
 });

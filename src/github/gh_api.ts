@@ -47,6 +47,8 @@ export const getApiErrorResult = (error: unknown, notFoundDetail: string): LinkC
 /**
  * Runs `request` once per `key` in a run. GitHub names (owner, repo, user) are case-insensitive, callers lowercase
  * them in the key.
+ * A `signal` in `request` (Octokit `request: { signal }`) belongs to the first caller. If it aborts, concurrent callers
+ * sharing the request fail too (and re-check in the browser), the failure is not cached.
  * "Not found" is a definitive answer worth caching. Other errors (rate limits, 401/403, 5xx) are retried on the next
  * call.
  */
@@ -62,7 +64,7 @@ export const cachedRequest = <T>(
   });
 
 /** `GET /repos/{owner}/{repo}`, cached per repository */
-export const getRepoCached = (owner: string, repo: string) =>
+export const getRepoCached = (owner: string, repo: string, signal?: AbortSignal) =>
   cachedRequest(["repo", owner.toLowerCase(), repo.toLowerCase()], (octokit) =>
-    octokit.repos.get({ owner, repo }),
+    octokit.repos.get({ owner, repo, request: { signal } }),
   );

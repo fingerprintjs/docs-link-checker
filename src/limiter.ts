@@ -109,12 +109,24 @@ export const parseRetryAfter = (value: string | null, now = Date.now()): number 
 };
 
 /**
- * Rejects if `promise` does not settle within `ms` milliseconds (the underlying work is not cancelled).
+ * Runs `work` and rejects with `message` if it does not settle within `ms` milliseconds.
+ * - On timeout the signal passed to `work` is aborted, so work that supports it (Octokit, fetch) stops.
+ * - Work that ignores the signal keeps running in the background, only the caller stops waiting.
  */
-export const withTimeout = <T>(promise: Promise<T>, ms: number, message: string): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
+export const withTimeout = async <T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutError = new Error(message);
+  const timer = setTimeout(() => controller.abort(timeoutError), ms);
+  const timedOut = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => reject(timeoutError), { once: true });
   });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  try {
+    return await Promise.race([work(controller.signal), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
 };

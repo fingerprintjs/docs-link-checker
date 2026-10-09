@@ -106,9 +106,36 @@ describe("parseRetryAfter()", () => {
 });
 
 describe("withTimeout()", () => {
-  it("rejects when the promise takes too long", async () => {
-    await expect(withTimeout(sleep(50), 5, "too slow")).rejects.toThrow("too slow");
-    await expect(withTimeout(Promise.resolve("fast"), 50, "too slow")).resolves.toBe("fast");
+  it("rejects when the work takes too long", async () => {
+    await expect(withTimeout(() => sleep(50), 5, "too slow")).rejects.toThrow("too slow");
+    await expect(withTimeout(() => Promise.resolve("fast"), 50, "too slow")).resolves.toBe("fast");
+  });
+
+  it("aborts the signal of the work on timeout, not when the work is fast", async () => {
+    let slowSignal: AbortSignal | undefined;
+    await expect(
+      withTimeout(
+        (signal) => {
+          slowSignal = signal;
+          return sleep(50);
+        },
+        5,
+        "too slow",
+      ),
+    ).rejects.toThrow("too slow");
+    expect(slowSignal?.aborted).toBe(true);
+    expect(slowSignal?.reason).toEqual(new Error("too slow"));
+
+    let fastSignal: AbortSignal | undefined;
+    await withTimeout(
+      async (signal) => {
+        fastSignal = signal;
+      },
+      20,
+      "too slow",
+    );
+    await sleep(40);
+    expect(fastSignal?.aborted).toBe(false);
   });
 });
 

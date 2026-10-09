@@ -102,7 +102,7 @@ const checkLinkFirstPass = async (
     case "github-api":
       return {
         result: await withTimeout(
-          checkLinkWithGithubApi(href),
+          (signal) => checkLinkWithGithubApi(href, signal),
           TASK_TIMEOUT,
           `GitHub API check timed out after ${TASK_TIMEOUT}ms`,
         ),

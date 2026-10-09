@@ -34,15 +34,19 @@ const checkExists = async (
   return error ? getApiErrorResult(error, notFoundDetail) : OK;
 };
 
-export const checkIfRepositoryExists = (owner: string, repo: string): Promise<LinkCheckResult> =>
-  checkExists(getRepoCached(owner, repo), `Repository ${owner}/${repo} not found`);
+export const checkIfRepositoryExists = (
+  owner: string,
+  repo: string,
+  signal: AbortSignal,
+): Promise<LinkCheckResult> =>
+  checkExists(getRepoCached(owner, repo, signal), `Repository ${owner}/${repo} not found`);
 
 /** `GET /users/{owner}` works for both a user and an organization (`https://github.com/owner`) */
-export const checkIfOwnerExists = (owner: string): Promise<LinkCheckResult> =>
+export const checkIfOwnerExists = (owner: string, signal: AbortSignal): Promise<LinkCheckResult> =>
   checkExists(
     // Users and organizations, names are case-insensitive
     cachedRequest(["user", owner.toLowerCase()], (octokit) =>
-      octokit.users.getByUsername({ username: owner }),
+      octokit.users.getByUsername({ username: owner, request: { signal } }),
     ),
     `User or organization ${owner} not found`,
   );
@@ -51,9 +55,12 @@ export const checkGitHubCommitLink = async (
   owner: string,
   repo: string,
   pathParts: string[],
+  signal: AbortSignal,
 ): Promise<LinkCheckResult> => {
   const [, commit = ""] = pathParts;
-  const { error } = await tryCatch(getMyOctokit().repos.getCommit({ owner, repo, ref: commit }));
+  const { error } = await tryCatch(
+    getMyOctokit().repos.getCommit({ owner, repo, ref: commit, request: { signal } }),
+  );
   if (!error) {
     return OK;
   }
@@ -69,6 +76,7 @@ export const checkGitHubPullRequestLink = (
   owner: string,
   repo: string,
   pathParts: string[],
+  signal: AbortSignal,
 ): Promise<LinkCheckResult> => {
   const [, prNumberPart = ""] = pathParts;
   const prNumber = parseInt(prNumberPart, 10);
@@ -76,7 +84,7 @@ export const checkGitHubPullRequestLink = (
     return Promise.resolve(brokenLink("Invalid pull request number", 404));
   }
   return checkExists(
-    getMyOctokit().pulls.get({ owner, repo, pull_number: prNumber }),
+    getMyOctokit().pulls.get({ owner, repo, pull_number: prNumber, request: { signal } }),
     `Pull request #${prNumberPart} not found in repository ${owner}/${repo}`,
   );
 };
@@ -85,6 +93,7 @@ export const checkGitHubIssueLink = (
   owner: string,
   repo: string,
   pathParts: string[],
+  signal: AbortSignal,
 ): Promise<LinkCheckResult> => {
   const [, issueNumberPart = ""] = pathParts;
   if (issueNumberPart === "new") {
@@ -96,7 +105,7 @@ export const checkGitHubIssueLink = (
   }
   // 410: the issue was deleted
   return checkExists(
-    getMyOctokit().issues.get({ owner, repo, issue_number: issueNumber }),
+    getMyOctokit().issues.get({ owner, repo, issue_number: issueNumber, request: { signal } }),
     `Issue #${issueNumber} not found in repository ${owner}/${repo}`,
   );
 };
@@ -117,6 +126,7 @@ export const checkGitHubDiscussionLink = async (
   owner: string,
   repo: string,
   discussionNumber: number,
+  signal: AbortSignal,
 ): Promise<LinkCheckResult> => {
   const { data, error } = await tryCatch(
     getMyOctokit().graphql(
@@ -127,7 +137,7 @@ export const checkGitHubDiscussionLink = async (
           }
         }
       }`,
-      { owner, repo, number: discussionNumber },
+      { owner, repo, number: discussionNumber, request: { signal } },
     ),
   );
   if (data) {
@@ -145,6 +155,7 @@ export const checkGitHubReleaseLink = async (
   owner: string,
   repo: string,
   pathParts: string[],
+  signal: AbortSignal,
 ): Promise<LinkCheckResult> => {
   const octokit = getMyOctokit();
   const [, kind = "", ...rest] = pathParts;
@@ -153,7 +164,7 @@ export const checkGitHubReleaseLink = async (
   if (kind === "download") {
     const [tag = "", assetName = ""] = rest;
     const { data: release, error } = await tryCatch(
-      octokit.repos.getReleaseByTag({ owner, repo, tag }),
+      octokit.repos.getReleaseByTag({ owner, repo, tag, request: { signal } }),
     );
     if (error) {
       return getApiErrorResult(
@@ -171,7 +182,7 @@ export const checkGitHubReleaseLink = async (
   // `/releases/latest`: the repository has at least one release
   if (kind === "latest") {
     const { data: releases, error } = await tryCatch(
-      octokit.repos.listReleases({ owner, repo, per_page: 1 }),
+      octokit.repos.listReleases({ owner, repo, per_page: 1, request: { signal } }),
     );
     if (error) {
       return getApiErrorResult(error, `Repository ${owner}/${repo} not found`);
@@ -182,14 +193,14 @@ export const checkGitHubReleaseLink = async (
     // Tags can contain slashes (`@fingerprint/vue@2.0.0`), written encoded (`%2F`) or not
     const tag = rest.join("/");
     return checkExists(
-      octokit.repos.getReleaseByTag({ owner, repo, tag }),
+      octokit.repos.getReleaseByTag({ owner, repo, tag, request: { signal } }),
       `Release tag ${tag} not found in repository ${owner}/${repo}`,
     );
   }
   const releaseId = parseInt(kind, 10);
   if (!Number.isNaN(releaseId)) {
     return checkExists(
-      octokit.repos.getRelease({ owner, repo, release_id: releaseId }),
+      octokit.repos.getRelease({ owner, repo, release_id: releaseId, request: { signal } }),
       `Release #${releaseId} not found in repository ${owner}/${repo}`,
     );
   }
