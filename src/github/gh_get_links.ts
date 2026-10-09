@@ -59,17 +59,22 @@ async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFil
   return mdFiles;
 }
 
+/** The repositories of an organization cannot be listed (bad token, rate limit, unknown organization...) */
+export class OrgListingError extends Error {
+  override name = "OrgListingError";
+}
+
 /**
  * Lists README files in all public, non-archived repositories of the organization
  * (sampled according to `sampleRate`, default `LINK_CHECK_SAMPLE_RATE`).
- * @throws {Error} if the repositories cannot be listed
+ * @throws {OrgListingError} if the repositories cannot be listed
  */
 export async function getReadmesFromOrg(orgName: string, sampleRate?: number): Promise<MdFile[]> {
   let repos: Awaited<ReturnType<typeof getOrgRepos>>;
   try {
     repos = await getOrgRepos(orgName);
   } catch (error) {
-    throw new Error(
+    throw new OrgListingError(
       `Failed to list repositories of GitHub organization ${orgName}: ${getErrorMessage(error)}`,
       { cause: error },
     );

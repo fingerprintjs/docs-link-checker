@@ -282,9 +282,12 @@ describe("collectLinksFromFiles()", () => {
   });
 
   it("fails when no markdown file matches", async () => {
-    await expect(collectLinksFromFiles({ patterns: ["nope/*.md"], cwd: FIXTURE })).rejects.toThrow(
-      'No markdown files match "nope/*.md".',
-    );
+    await expect(
+      collectLinksFromFiles({ patterns: ["nope/*.md"], cwd: FIXTURE }),
+    ).rejects.toMatchObject({
+      name: "NoMarkdownFilesError",
+      message: 'No markdown files match "nope/*.md".',
+    });
   });
 });
 

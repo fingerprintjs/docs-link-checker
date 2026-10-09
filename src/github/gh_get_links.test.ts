@@ -85,9 +85,10 @@ describe("getReadmesFromOrg()", () => {
 
   it("throws a clear error when the repositories cannot be listed", async () => {
     octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
-    await expect(getReadmesFromOrg("org")).rejects.toThrow(
-      "Failed to list repositories of GitHub organization org: Bad credentials",
-    );
+    await expect(getReadmesFromOrg("org")).rejects.toMatchObject({
+      name: "OrgListingError",
+      message: "Failed to list repositories of GitHub organization org: Bad credentials",
+    });
   });
 
   it("samples README files deterministically with LINK_CHECK_SAMPLE_RATE", async () => {

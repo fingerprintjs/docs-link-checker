@@ -304,7 +304,8 @@ describe("runCli()", () => {
 
   it("files: returns 1 when no file matches", async () => {
     expect(await runCli(["files", "nope/*.md"], io())).toBe(1);
-    expect(stderr).toContain('No markdown files match "nope/*.md"');
+    // Only the message, no stack trace
+    expect(stderr).toBe('Error: No markdown files match "nope/*.md".\n');
   });
 
   it("baseline: ignores matching links, --update-baseline writes failures and passes", async () => {
