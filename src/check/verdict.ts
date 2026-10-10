@@ -103,12 +103,24 @@ export type PageLoad =
 /** A loaded page: its links can be checked (`ok`), or they all get `result` */
 export type PageVerdict = { ok: true; status: number } | { ok: false; result: LinkCheckResult };
 
+// Longest part of an error page body kept in the result detail (results of every link are kept until the report)
+const MAX_BODY_SNIPPET_LENGTH = 500;
+
+/** `summary` and the start of the error page body, for the result detail */
+const withBodySnippet = (summary: string, body: string): string => {
+  const trimmed = body.trim();
+  const snippet =
+    trimmed.length > MAX_BODY_SNIPPET_LENGTH
+      ? `${trimmed.slice(0, MAX_BODY_SNIPPET_LENGTH)}…`
+      : trimmed;
+  return [summary, snippet].filter(Boolean).join(" ");
+};
+
 /**
  * What a loaded page means for the links to it. Retries (see `planRetry`) are done, this is the final answer.
- * The checkers differ on purpose:
+ * - Every failed status has the start of the error page body in its detail
  * - 401, 403: `fetch` says "broken link", so they are re-checked with Playwright (see `shouldRecheckWithPlaywright`),
  *   which says "could not check" (bot protection, login)
- * - Error page bodies are in the detail of every `fetch` failure, but only of forbidden pages in Playwright
  * - Errors are "broken link": `fetch` errors are re-checked with Playwright, so a server that is down ends as a
  *   broken link
  */
@@ -127,46 +139,35 @@ export const judgePage = async (checker: PageChecker, load: PageLoad): Promise<P
   if (isOkayStatus(status)) {
     return { ok: true, status };
   }
-  const fail = (result: LinkCheckResult): PageVerdict => ({ ok: false, result });
+  const fail = async (
+    error: "broken link" | "could not check",
+    summary: string,
+  ): Promise<PageVerdict> => ({
+    ok: false,
+    result: { ok: false, error, status, errorDetail: withBodySnippet(summary, await readBody()) },
+  });
 
   // Still rate limited after the retries (or asked to wait longer than we do): says nothing about the link
   if (status === 429) {
-    return fail({
-      ok: false,
-      error: "could not check",
-      status,
-      // Raw header without a unit: it can be seconds or an HTTP date
-      errorDetail: retryAfter
+    // Raw header without a unit: it can be seconds or an HTTP date
+    return fail(
+      "could not check",
+      retryAfter
         ? `Rate limited, gave up (Retry-After: ${retryAfter})`
         : "Rate limited, no Retry-After",
-    });
+    );
   }
   // Still failing after the retries: the server is overloaded, not the link broken
   if (SERVER_ERROR_STATUS_CODES.has(status)) {
-    return fail({
-      ok: false,
-      error: "could not check",
-      status,
-      errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
-    });
+    return fail(
+      "could not check",
+      `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
+    );
   }
   if (checker === "playwright" && FORBIDDEN_STATUS_CODES.has(status)) {
-    return fail({
-      ok: false,
-      error: "could not check",
-      status,
-      errorDetail: `${statusText} ${await readBody()}`,
-    });
+    return fail("could not check", statusText);
   }
-  if (checker === "playwright") {
-    return fail({ ok: false, error: "broken link", status });
-  }
-  return fail({
-    ok: false,
-    error: "broken link",
-    status,
-    errorDetail: `${statusText} ${await readBody()}`,
-  });
+  return fail("broken link", statusText);
 };
 
 /**

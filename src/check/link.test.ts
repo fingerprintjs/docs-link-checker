@@ -505,7 +505,7 @@ describe("redirects", () => {
     });
   });
 
-  it("playwright: a failed page reports the redirect too", async () => {
+  it("playwright: a failed page reports the redirect and its body too", async () => {
     playwrightState.finalUrlByUrl = { "https://example.com/old": "https://example.com/gone" };
     playwrightState.status = 404;
 
@@ -513,6 +513,7 @@ describe("redirects", () => {
       ok: false,
       error: "broken link",
       status: 404,
+      errorDetail: "Forbidden page",
       redirectedTo: "https://example.com/gone",
     });
   });
