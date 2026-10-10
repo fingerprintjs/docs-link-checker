@@ -109,12 +109,14 @@ const validated =
     }
   };
 
-const parseUrl = validated((value) => {
+const parseHttpUrl = (value: string, name = "URL") => {
   if (!URL.canParse(value) || !/^https?:$/.test(new URL(value).protocol)) {
-    throw new Error(`Invalid URL "${value}", expected an http(s) URL.`);
+    throw new Error(`Invalid ${name} "${value}", expected an http(s) URL.`);
   }
   return value;
-});
+};
+
+const parseUrl = validated((value) => parseHttpUrl(value));
 
 const parseOrg = validated((value) => {
   if (!/^[A-Za-z\d](?:[A-Za-z\d-]*[A-Za-z\d])?$/.test(value)) {
@@ -193,8 +195,6 @@ const buildProgram = (
         "--index-url <url>",
         "Page listing all reports, linked from the HTML report",
         parseUrl,
-        // An empty LINK_CHECK_INDEX_URL means no link
-        env.LINK_CHECK_INDEX_URL || undefined,
       )
       .option("--json", "Print the JSON report to stdout (logs go to stderr)", false)
       .option("--verbose", "Also show run metrics, timings and request details", false)
@@ -225,6 +225,12 @@ const buildProgram = (
     const hostConcurrency = fromEnv(options.hostConcurrency, () =>
       parseHostConcurrency(env.LINK_CHECK_HOST_CONCURRENCY),
     );
+    // An empty LINK_CHECK_INDEX_URL means no link
+    const indexUrl = fromEnv(options.indexUrl, () =>
+      env.LINK_CHECK_INDEX_URL
+        ? parseHttpUrl(env.LINK_CHECK_INDEX_URL, "LINK_CHECK_INDEX_URL")
+        : undefined,
+    );
     if (options.pruneBaseline && !options.updateBaseline) {
       command.error("--prune-baseline can only be used with --update-baseline.");
     }
@@ -237,6 +243,7 @@ const buildProgram = (
       ...options,
       sampleRate,
       hostConcurrency,
+      indexUrl,
       baseline: options.baseline ?? (options.updateBaseline ? DEFAULT_BASELINE_FILE : undefined),
     };
   };
