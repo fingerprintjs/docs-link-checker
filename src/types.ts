@@ -8,6 +8,7 @@ export type Link = {
 
 export type LinkWithResult = Link & { result: LinkCheckResult };
 
+/** Result of a link check. Which response or error gets which `error` is decided in `check/verdict.ts`. */
 export type LinkCheckResult =
   | {
       ok: true;

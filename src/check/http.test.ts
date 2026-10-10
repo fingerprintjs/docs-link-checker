@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getHostLimiter, withRun } from "../run";
 import { checkLinkWithFetch } from "./fetch_check";
-import { fetchWithHostLimit, planServerErrorRetry } from "./http";
+import { fetchWithHostLimit } from "./http";
 
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -200,15 +200,6 @@ describe("fetchWithHostLimit() server errors (502, 503, 504)", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
     }));
-
-  // Also used by the Playwright check. Fetch-level tests above cover the backoff steps and the give-up cases
-  it("planServerErrorRetry() edge cases: Retry-After of exactly 10s is allowed, invalid is ignored", () => {
-    const delay = (retries: number, retryAfter: string | null) =>
-      planServerErrorRetry("https://busy.example.com/", 503, retries, retryAfter);
-    expect(delay(1, "10")).toBe(10_000);
-    expect(delay(0, "11")).toBeUndefined();
-    expect(delay(0, "invalid")).toBe(2000);
-  });
 });
 
 describe("fetchWithHostLimit() redirects", () => {

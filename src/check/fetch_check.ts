@@ -1,27 +1,25 @@
+/**
+ * Link checks with plain `fetch`, for server-side rendered pages: fetches each page once (see `PageFetchCache`) and
+ * looks for hashes in its HTML. What the response means is decided by `judgePage` (see `verdict.ts`).
+ */
 import { incrementMetric } from "../run";
 import type { LinkCheckResult } from "../types";
 import {
   type AnchorIndex,
   buildAnchorIndex,
-  getSpecialFragmentNote,
   hasHash,
   isHashInAnchorIndex,
   stripHash,
 } from "./hash";
-import {
-  classifyStatus,
-  fetchWithHostLimit,
-  getRedirectTarget,
-  getUserAgent,
-  serverErrorResult,
-} from "./http";
+import { fetchWithHostLimit, getRedirectTarget, getUserAgent } from "./http";
+import { judgeLink, judgePage, type PageVerdict } from "./verdict";
 
-/**
- * Result of fetching a page (URL without hash): either a final failure, or the status and the anchors of the page.
- */
-export type FetchedPage =
-  | { ok: true; status: number; redirectedTo?: string; getAnchors?: () => AnchorIndex }
-  | { ok: false; result: LinkCheckResult };
+/** A fetched page (URL without hash), with its anchors when its body was needed */
+type FetchedPage = {
+  verdict: PageVerdict;
+  redirectedTo?: string;
+  getAnchors?: () => AnchorIndex;
+};
 
 /** Parses the HTML on first use and then drops it, so cached pages only keep their (much smaller) anchor index */
 const lazyAnchorIndex = (html: string) => {
@@ -52,70 +50,29 @@ const fetchPage = async (
   }
 
   try {
-    // Limited per host (every redirect hop too), a 429 with Retry-After pauses the host and is retried,
-    // unread bodies are cancelled (see `fetchWithHostLimit`).
-    const response = await fetchWithHostLimit(url, { headers }, async (res) =>
-      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead.
-      // An error page body is kept for the error detail.
-      needBody || classifyStatus(res.status) !== "okay" ? res.text() : "",
-    );
-
-    const redirectedTo = getRedirectTarget(url, response.url);
-    const withRedirect = (result: LinkCheckResult): LinkCheckResult =>
-      redirectedTo ? { ...result, redirectedTo } : result;
-
-    // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
-    const retryAfter = response.headers.get("Retry-After");
-    if (response.status === 429 && retryAfter) {
-      return {
-        ok: false,
-        result: withRedirect({
-          ok: false,
-          error: "unexpected error",
-          status: response.status,
-          // Raw header without a unit: it can be seconds or an HTTP date
-          errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
-        }),
-      };
-    }
-
-    // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
-    const statusClass = classifyStatus(response.status);
-    if (statusClass === "server-error") {
-      return {
-        ok: false,
-        result: withRedirect(serverErrorResult(response.status, response.statusText)),
-      };
-    }
-
-    // 401 and 403 are broken here on purpose: they are re-checked with Playwright, which reports "could not check"
-    if (statusClass !== "okay") {
-      return {
-        ok: false,
-        result: withRedirect({
-          ok: false,
-          error: "broken link",
-          status: response.status,
-          errorDetail: `${response.statusText} ${response.data}`,
-        }),
-      };
-    }
-
+    // Limited per host (every redirect hop too), 429 and server errors are retried, unread bodies are cancelled
+    // (see `fetchWithHostLimit`)
+    const response = await fetchWithHostLimit(url, { headers }, async (res) => {
+      const verdict = await judgePage("fetch", {
+        type: "response",
+        url,
+        status: res.status,
+        statusText: res.statusText,
+        retryAfter: res.headers.get("Retry-After"),
+        readBody: () => res.text(),
+      });
+      // Don't download the body when it's not needed (it might be a large file), it is cancelled instead
+      const html = verdict.ok && needBody ? await res.text() : undefined;
+      return { verdict, html };
+    });
+    const { verdict, html } = response.data;
     return {
-      ok: true,
-      status: response.status,
-      redirectedTo,
-      getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
+      verdict,
+      redirectedTo: getRedirectTarget(url, response.url),
+      getAnchors: html === undefined ? undefined : lazyAnchorIndex(html),
     };
   } catch (error) {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        error: "broken link",
-        errorDetail: String(error),
-      },
-    };
+    return { verdict: await judgePage("fetch", { type: "error", error }) };
   }
 };
 
@@ -143,29 +100,6 @@ export class PageFetchCache {
   }
 }
 
-/** Result for a URL (possibly with a hash) based on its fetched page */
-const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
-  if (!page.ok) {
-    return page.result;
-  }
-  const { status, redirectedTo } = page;
-  const redirect = redirectedTo ? { redirectedTo } : {};
-  const hash = new URL(url).hash;
-  if (!hash) {
-    return { ok: true, status, ...redirect };
-  }
-
-  const note = getSpecialFragmentNote(hash.slice(1), url);
-  if (note) {
-    return { ok: true, status, note, ...redirect };
-  }
-
-  if (!page.getAnchors || !isHashInAnchorIndex(page.getAnchors(), hash)) {
-    return { ok: false, status, error: "hash not found", ...redirect };
-  }
-  return { ok: true, status, ...redirect };
-};
-
 /**
  * Check a link with fetch, assuming page is server-side rendered
  * @param url link URL
@@ -181,5 +115,9 @@ export const checkLinkWithFetch = async (
   const page = pageCache
     ? await pageCache.get(pageUrl, needBody)
     : await fetchPage(pageUrl, { needBody });
-  return getResultFromPage(page, url);
+  return judgeLink(url, page.verdict, {
+    redirectedTo: page.redirectedTo,
+    isHashPresent: (fragment) =>
+      page.getAnchors !== undefined && isHashInAnchorIndex(page.getAnchors(), fragment),
+  });
 };

@@ -90,6 +90,7 @@ const fakeChromium = (() => {
                   status: () => 200,
                   statusText: () => "",
                   url: () => url,
+                  headers: () => ({}),
                   text: async () => "",
                   ok: () => true,
                 };
