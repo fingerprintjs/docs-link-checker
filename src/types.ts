@@ -20,11 +20,15 @@ export type LinkCheckResult =
   | {
       ok: false;
       error:
-        | "broken link" // 404 or some other non-successful response code
-        | "hash not found" // Link works but the anchor hash is not found on the page
-        | "unexpected error" // Fetch failed, server completely dead, wrong protocol, etc.
-        // Recaptcha or other anti-scraping measures returning 403, 401 or the link requires a login,
-        // or a server error (502, 503, 504) persisting after retries
+        // The reader can't reach the target: 404 or another failed status, or a network error or timeout that
+        // persists in the browser re-check (no `status`, reported as "Network error")
+        | "broken link"
+        // The page works but the anchor hash is not found on it
+        | "hash not found"
+        // The checker itself failed (API error, check timeout, a check that threw). Counted as a link to fix.
+        | "unexpected error"
+        // We can't tell: bot blocking or a login (401, 403), rate limiting (429), a server error (502, 503, 504)
+        // persisting after retries. Not counted as a link to fix.
         | "could not check";
       status?: number;
       errorDetail?: string;
