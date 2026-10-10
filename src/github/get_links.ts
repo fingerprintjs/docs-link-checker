@@ -7,7 +7,7 @@ import { plural } from "../terminal";
 import type { Link, LinkWithResult } from "../types";
 import { getErrorMessage } from "../utils/errors";
 import { parallelProcess, sampleItems } from "../utils/parallel";
-import { getGithubApi, getRepo } from "./client";
+import { getRepo, githubRequest } from "./client";
 
 /** Deprecated integrations: READMEs are unmaintained and would only add noise to org-wide checks. */
 const GITHUB_ORG_EXCLUDED_REPOS = new Set(["fingerprint-pro-segment-source-function"]);
@@ -18,12 +18,11 @@ export interface MdFile {
 }
 
 async function getOrgRepos(orgName: string) {
-  const octokit = getGithubApi();
-  const repos = await octokit.paginate(octokit.repos.listForOrg, {
-    org: orgName,
-    type: "public",
-    per_page: 100,
-  });
+  const repos = await githubRequest(
+    "org-repos",
+    { org: orgName, type: "public" as const, per_page: 100 },
+    (api, params) => api.paginate(api.repos.listForOrg, params),
+  );
 
   return repos
     .filter((repo) => repo.archived === false && !GITHUB_ORG_EXCLUDED_REPOS.has(repo.name))
@@ -35,18 +34,16 @@ async function getOrgRepos(orgName: string) {
 }
 
 async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFile[]> {
-  const octokit = getGithubApi();
   // Get the default branch (cached, links to the repository reuse the response)
   const { data: repoData } = await getRepo(owner, repo);
   const defaultBranch = repoData.default_branch;
 
   // Get the complete tree with all files
-  const { data: treeData } = await octokit.git.getTree({
-    owner,
-    repo,
-    tree_sha: defaultBranch,
-    recursive: "1",
-  });
+  const { data: treeData } = await githubRequest(
+    "tree",
+    { owner, repo, tree_sha: defaultBranch, recursive: "1" as const },
+    (api, params) => api.git.getTree(params),
+  );
 
   // Filter only markdown files
   const mdFiles = treeData.tree
