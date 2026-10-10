@@ -253,15 +253,15 @@ const getLargeFileText = (owner: string, repo: string, sha: string, signal: Abor
   );
 
 /**
- * Names of the branches and tags that start with the first segment of a `<ref>/<path>` URL part and could be the ref
- * (`feature` or `feature/...`, not `feature-2`). A missing repository has no refs.
+ * Names of the branches and tags that start with the first segment of a `<ref>/<path>` URL part (a prefix match:
+ * `feature` lists `feature-2` too). A missing repository has no refs.
  */
 const getRefCandidates = async (
   owner: string,
   repo: string,
   first: string,
   signal: AbortSignal,
-): Promise<string[]> => {
+): Promise<Set<string>> => {
   const listings = await Promise.all(
     (["heads", "tags"] as const).map(async (kind) => {
       // `GET /repos/{owner}/{repo}/git/matching-refs/{ref}`: refs whose name starts with the prefix
@@ -283,9 +283,7 @@ const getRefCandidates = async (
       return data.flatMap(({ ref }) => (ref.startsWith(prefix) ? [ref.slice(prefix.length)] : []));
     }),
   );
-  return [...new Set(listings.flat())].filter(
-    (name) => name === first || name.startsWith(`${first}/`),
-  );
+  return new Set(listings.flat());
 };
 
 type RefPathContent =
@@ -321,14 +319,13 @@ const getRefPathContent = async (
     return { found: false, error: firstTry.error };
   }
 
-  const { data: candidates, error: listError } = await tryCatch(
+  const { data: candidateRefs, error: listError } = await tryCatch(
     getRefCandidates(owner, repo, first, signal),
   );
   if (listError) {
     return { found: false, error: listError };
   }
   const maxRefSegments = segments.length - (requirePath ? 1 : 0);
-  const candidateRefs = new Set(candidates);
   // The URL prefixes that are listed refs, longest first: a branch `a/b` and a tag `a/b/c` can both exist
   const refSegmentCounts: number[] = [];
   for (let count = maxRefSegments; count >= 2; count--) {

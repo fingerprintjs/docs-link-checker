@@ -598,6 +598,17 @@ describe("checkLinkWithGithubApi() refs with slashes", () => {
     expect(await blob("a/b/c/f.ts#L1")).toEqual(OK);
   });
 
+  it("prefers the longest ref when shorter ones have the path too", async () => {
+    mockRefs(["heads/a/b", "tags/a/b/c"]);
+    api.repos.getContent.mockImplementation(async ({ ref, path }) => {
+      if (ref === "a/b/c" && path === "f.ts") return fileContent("1\n2\n3\n");
+      if (ref === "a/b" && path === "c/f.ts") return fileContent("1\n");
+      throw notFound();
+    });
+
+    expect(await blob("a/b/c/f.ts#L3")).toEqual(OK);
+  });
+
   it("never takes the whole path of a blob as the ref", async () => {
     api.repos.getContent.mockRejectedValue(notFound());
     mockRefs(["heads/a-b", "heads/a/b/c/d/e/f/g.ts"]);
@@ -808,6 +819,16 @@ describe("checkLinkWithGithubApi() timeouts", () => {
       expect(await check("https://github.com/o/r/issues/1")).toEqual(OK);
     });
     expect(api.issues.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends no request for an already aborted check", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("timed out"));
+
+    const result = await run(() => check("https://github.com/o/r/issues/1", controller.signal));
+
+    expect(result).toMatchObject({ ok: false, error: "unexpected error" });
+    expect(api.issues.get).not.toHaveBeenCalled();
   });
 
   it("sends no more requests once the check timed out", async () => {
