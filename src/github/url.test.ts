@@ -42,6 +42,12 @@ describe("isGithubCodeLineLink()", () => {
     expect(isGithubCodeLineLink(`${file}${hash}`)).toBe(true);
   });
 
+  it("matches the host like isGithubUrl, ignoring an explicit port", () => {
+    const withPort = "https://github.com:8443/owner/repo/blob/main/file.js#L5";
+    expect(isGithubUrl(withPort)).toBe(true);
+    expect(isGithubCodeLineLink(withPort)).toBe(true);
+  });
+
   it.each([
     "#L",
     "#L5-",

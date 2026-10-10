@@ -18,7 +18,7 @@ export const isGithubUrl = (url: string) => {
 export const isGithubCodeLineLink = (href: string) => {
   const url = new URL(href);
   return (
-    url.host === "github.com" &&
+    url.hostname === "github.com" &&
     url.pathname.includes("/blob/") &&
     parseLineAnchor(safeDecode(url.hash).replace(/^#/, "")) !== undefined
   );
