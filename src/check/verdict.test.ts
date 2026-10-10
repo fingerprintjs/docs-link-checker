@@ -18,7 +18,6 @@ const response = (
 ) => {
   const load = {
     type: "response" as const,
-    url: PAGE_URL,
     status,
     statusText,
     retryAfter,
@@ -74,19 +73,34 @@ describe("judgePage()", () => {
     [
       "429 without Retry-After",
       response(429),
-      fail({ ok: false, error: "broken link", status: 429, errorDetail: "Text BODY" }),
-      fail({ ok: false, error: "broken link", status: 429 }),
+      fail({
+        ok: false,
+        error: "could not check",
+        status: 429,
+        errorDetail: "Rate limited, no Retry-After",
+      }),
+      fail({
+        ok: false,
+        error: "could not check",
+        status: 429,
+        errorDetail: "Rate limited, no Retry-After",
+      }),
     ],
     [
-      "429 with Retry-After (still limited after the retries)",
+      "429 with Retry-After (still limited after the retries, or asked to wait too long)",
       response(429, { retryAfter: "120" }),
       fail({
         ok: false,
-        error: "unexpected error",
+        error: "could not check",
         status: 429,
-        errorDetail: `\n Rate limited and gave up, Retry-After: 120 for link ${PAGE_URL}`,
+        errorDetail: "Rate limited, gave up (Retry-After: 120)",
       }),
-      fail({ ok: false, error: "broken link", status: 429 }),
+      fail({
+        ok: false,
+        error: "could not check",
+        status: 429,
+        errorDetail: "Rate limited, gave up (Retry-After: 120)",
+      }),
     ],
     [
       "500 (not a transient server error)",
@@ -148,103 +162,52 @@ describe("judgePage()", () => {
 
 describe("planRetry()", () => {
   const none = { "rate-limited": 0, "server-error": 0 };
-  type Row = [
-    string,
-    "fetch" | "playwright",
-    number,
-    string | null,
-    typeof none,
-    ReturnType<typeof planRetry>,
-  ];
+  const rateLimited = (delayMs: number) => ({ reason: "rate-limited", delayMs }) as const;
+  const serverError = (delayMs: number) => ({ reason: "server-error", delayMs }) as const;
+  type Row = [string, number, string | null, typeof none, ReturnType<typeof planRetry>];
+  // The same for requests and Playwright navigations
   const rows: Row[] = [
-    ["ok status", "fetch", 200, null, none, undefined],
-    ["404", "fetch", 404, "5", none, undefined],
-    ["500", "fetch", 500, null, none, undefined],
+    ["ok status", 200, null, none, undefined],
+    ["404", 404, "5", none, undefined],
+    ["500", 500, null, none, undefined],
     // Rate limits
-    ["429 with Retry-After", "fetch", 429, "3", none, { reason: "rate-limited", delayMs: 3000 }],
-    [
-      "429 with Retry-After of 79s",
-      "fetch",
-      429,
-      "79",
-      none,
-      { reason: "rate-limited", delayMs: 79_000 },
-    ],
-    ["429 with Retry-After of 80s", "fetch", 429, "80", none, undefined],
-    ["429 without Retry-After", "fetch", 429, null, none, undefined],
-    ["429 with invalid Retry-After", "fetch", 429, "soon", none, undefined],
-    ["429 after 2 retries", "fetch", 429, "1", { ...none, "rate-limited": 2 }, undefined],
-    [
-      "429 after server error retries",
-      "fetch",
-      429,
-      "1",
-      { ...none, "server-error": 2 },
-      { reason: "rate-limited", delayMs: 1000 },
-    ],
-    ["429 in Playwright", "playwright", 429, "1", none, undefined],
-    // Server errors, the same for both checkers
-    ["502, first retry", "fetch", 502, null, none, { reason: "server-error", delayMs: 2000 }],
-    [
-      "504, second retry",
-      "fetch",
-      504,
-      null,
-      { ...none, "server-error": 1 },
-      { reason: "server-error", delayMs: 5000 },
-    ],
-    ["503 after 2 retries", "fetch", 503, null, { ...none, "server-error": 2 }, undefined],
-    [
-      "503 with a longer Retry-After",
-      "fetch",
-      503,
-      "8",
-      none,
-      { reason: "server-error", delayMs: 8000 },
-    ],
+    ["429 with Retry-After", 429, "3", none, rateLimited(3000)],
+    ["429 with Retry-After of 79s", 429, "79", none, rateLimited(79_000)],
+    ["429 with Retry-After of 80s", 429, "80", none, undefined],
+    ["429 without Retry-After", 429, null, none, undefined],
+    ["429 with invalid Retry-After", 429, "soon", none, undefined],
+    ["429 after 2 retries", 429, "1", { ...none, "rate-limited": 2 }, undefined],
+    ["429 after server error retries", 429, "1", { ...none, "server-error": 2 }, rateLimited(1000)],
+    // Server errors
+    ["502, first retry", 502, null, none, serverError(2000)],
+    ["504, second retry", 504, null, { ...none, "server-error": 1 }, serverError(5000)],
+    ["503 after 2 retries", 503, null, { ...none, "server-error": 2 }, undefined],
+    ["503 with a longer Retry-After", 503, "8", none, serverError(8000)],
     [
       "503 with a shorter Retry-After (backoff is the minimum)",
-      "fetch",
       503,
       "1",
       { ...none, "server-error": 1 },
-      { reason: "server-error", delayMs: 5000 },
+      serverError(5000),
     ],
     [
       "503 with Retry-After of exactly 10s",
-      "fetch",
       503,
       "10",
       { ...none, "server-error": 1 },
-      { reason: "server-error", delayMs: 10_000 },
+      serverError(10_000),
     ],
-    ["503 with Retry-After over 10s", "fetch", 503, "11", none, undefined],
-    [
-      "503 with invalid Retry-After",
-      "fetch",
-      503,
-      "soon",
-      none,
-      { reason: "server-error", delayMs: 2000 },
-    ],
-    ["503 in Playwright", "playwright", 503, null, none, { reason: "server-error", delayMs: 2000 }],
-    [
-      "503 in Playwright after 2 retries",
-      "playwright",
-      503,
-      null,
-      { ...none, "server-error": 2 },
-      undefined,
-    ],
+    ["503 with Retry-After over 10s", 503, "11", none, undefined],
+    ["503 with invalid Retry-After", 503, "soon", none, serverError(2000)],
   ];
 
-  it.each(rows)("%s", (...[, checker, status, retryAfter, retries, plan]: Row) => {
-    expect(planRetry(checker, { status, retryAfter }, retries)).toEqual(plan);
+  it.each(rows)("%s", (...[, status, retryAfter, retries, plan]: Row) => {
+    expect(planRetry({ status, retryAfter }, retries)).toEqual(plan);
   });
 
   it("accepts Retry-After as an HTTP date", () => {
     const inFiveSeconds = new Date(Date.now() + 5500).toUTCString();
-    const plan = planRetry("fetch", { status: 429, retryAfter: inFiveSeconds }, none);
+    const plan = planRetry({ status: 429, retryAfter: inFiveSeconds }, none);
     expect(plan?.reason).toBe("rate-limited");
     expect(plan?.delayMs).toBeGreaterThan(4000);
     expect(plan?.delayMs).toBeLessThanOrEqual(5500);
@@ -360,7 +323,7 @@ describe("shouldRecheckWithPlaywright()", () => {
     ["broken 404", broken(404), false, false],
     ["broken 410", broken(410), false, false],
     ["broken 400", broken(400), false, false],
-    ...[401, 403, 405, 406, 408, 429].map((status): Row => [
+    ...[401, 403, 405, 406, 408].map((status): Row => [
       `broken ${status}`,
       broken(status),
       true,
@@ -372,6 +335,7 @@ describe("shouldRecheckWithPlaywright()", () => {
     ["broken with status 0 (no response)", broken(0), false, false],
     ["hash not found", { ok: false, error: "hash not found", status: 200 }, true, false],
     ["could not check", { ok: false, error: "could not check", status: 503 }, true, false],
+    ["rate limited", { ok: false, error: "could not check", status: 429 }, true, false],
     ["unexpected error", { ok: false, error: "unexpected error", status: 429 }, true, true],
   ];
 

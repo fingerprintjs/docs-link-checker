@@ -420,13 +420,14 @@ describe("checkLinkWithFetch()", () => {
     });
   });
 
-  it("reports a 429 with Retry-After that persists after the retries as unexpected error", async () => {
+  it("reports a 429 with Retry-After that persists after the retries as 'could not check'", async () => {
     stubFetch(() => new Response(null, { status: 429, headers: { "Retry-After": "0" } }));
 
     expect(await checkLinkWithFetch("https://always-limited.example.com/")).toMatchObject({
       ok: false,
-      error: "unexpected error",
+      error: "could not check",
       status: 429,
+      errorDetail: "Rate limited, gave up (Retry-After: 0)",
     });
   });
 
@@ -880,6 +881,32 @@ describe("server errors (502, 503, 504)", () => {
     expect(result).toEqual({ ok: true, status: 200 });
     expect(playwrightState.visited).toHaveLength(2);
     expect(took).toBe(8000);
+  });
+
+  it("Playwright: retries a 429 navigation after its Retry-After", async () => {
+    playwrightState.statuses = [429];
+    playwrightState.headers = { "retry-after": "4" };
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithPlaywright("https://limited.example.com/page"),
+    );
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toHaveLength(2);
+    expect(took).toBe(4000);
+  });
+
+  it("checkLinks(): a fetch 429 persisting in the browser too is 'could not check'", async () => {
+    stubFetch(() => new Response(null, { status: 429, headers: { "Retry-After": "1" } }));
+    playwrightState.status = 429;
+    playwrightState.headers = { "retry-after": "1" };
+    const href = "https://limited.example.com/page";
+
+    const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
+
+    expect(result[0]!.result).toMatchObject({ ok: false, error: "could not check", status: 429 });
+    // 1 navigation and 2 retries, no more
+    expect(playwrightState.visited).toEqual([href, href, href]);
   });
 
   it("checkLinks(): a fetch 503 persisting in the browser too is 'could not check'", async () => {

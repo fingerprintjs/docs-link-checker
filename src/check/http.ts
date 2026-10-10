@@ -134,7 +134,7 @@ export const fetchWithHostLimit = async <T>(
           return { type: "redirect", location };
         }
         const retryAfter = response.headers.get("Retry-After");
-        const plan = planRetry("fetch", { status: response.status, retryAfter }, retries);
+        const plan = planRetry({ status: response.status, retryAfter }, retries);
         if (plan) {
           pauseHostForRetry(requestUrl, response.status, retryAfter, plan);
           return { type: "retry", plan };

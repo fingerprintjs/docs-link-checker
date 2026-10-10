@@ -11,7 +11,7 @@ import { withPage } from "./browser";
 import { getHashSelectors } from "./hash";
 import { getRedirectTarget, getUserAgent, pauseHostForRetry } from "./http";
 import { withTimeout } from "./limiter";
-import { judgeLink, judgePage, type PageVerdict, planRetry } from "./verdict";
+import { judgeLink, judgePage, type PageVerdict, planRetry, type RetryPlan } from "./verdict";
 
 // Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own
 export const PAGE_OPERATION_TIMEOUT = 30000;
@@ -158,9 +158,10 @@ export async function checkUrlsOnPageWithPlaywright(
   }
 
   const hostLimiter = getHostLimiter();
-  // Host to wait for before the next navigation: the navigated URL's, then (after a server error) the final URL's
+  // Host to wait for before the next navigation: the navigated URL's, then (after a retry) the final URL's
   let waitForUrl = firstUrl;
-  for (let retries = 0; ; retries++) {
+  const retries = { "rate-limited": 0, "server-error": 0 };
+  for (;;) {
     // Back off while the host is paused (after a server error or a 429 of this or another check), before taking a
     // page slot, so the other checks keep the browser busy in the meantime
     await hostLimiter.waitUntilResumed(waitForUrl);
@@ -168,12 +169,16 @@ export async function checkUrlsOnPageWithPlaywright(
     if (outcome instanceof Map) {
       return outcome;
     }
+    retries[outcome.reason]++;
     waitForUrl = outcome.pausedUrl;
   }
 }
 
-/** A navigation to retry after a 502, 503 or 504 (the host of `pausedUrl`, the final URL after redirects, is paused) */
-type NavigationRetry = { pausedUrl: string };
+/**
+ * A navigation to retry after a 429, 502, 503 or 504 (the host of `pausedUrl`, the final URL after redirects, is
+ * paused)
+ */
+type NavigationRetry = { pausedUrl: string; reason: RetryPlan["reason"] };
 
 /**
  * One navigation of `checkUrlsOnPageWithPlaywright`. Returns a retry if `planRetry` asks for one (the host of the
@@ -181,8 +186,8 @@ type NavigationRetry = { pausedUrl: string };
  */
 async function navigateAndCheck(
   urls: string[],
-  /** Server error retries done so far */
-  retries: number,
+  /** Retries done so far, by reason */
+  retries: Parameters<typeof planRetry>[1],
 ): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
   const [firstUrl = ""] = urls;
   // Final URL of the navigation, set once the page answered
@@ -217,22 +222,17 @@ async function navigateAndCheck(
         const status = response.status();
         redirectedTo = getRedirectTarget(firstUrl, response.url());
         const retryAfter = response.headers()["retry-after"] ?? null;
-        const plan = planRetry(
-          "playwright",
-          { status, retryAfter },
-          { "rate-limited": 0, "server-error": retries },
-        );
+        const plan = planRetry({ status, retryAfter }, retries);
         if (plan) {
           // After a redirect, the error comes from the final URL: back off for its host.
           // The page is closed right away, the retry waits for the pause outside of the page slot.
           const failedUrl = response.url() || firstUrl;
           pauseHostForRetry(failedUrl, status, retryAfter, plan);
-          return { pausedUrl: failedUrl };
+          return { pausedUrl: failedUrl, reason: plan.reason };
         }
 
         const verdict = await judgePage("playwright", {
           type: "response",
-          url: firstUrl,
           status,
           statusText: response.statusText(),
           retryAfter,
