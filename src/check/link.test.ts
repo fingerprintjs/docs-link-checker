@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cheerio from "cheerio";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GithubApi } from "../github/client";
+import { createFakeGithubApi, fileContent, notFound } from "../github/fake_github_api";
 import { getHostLimiter, getRunContext, withRun } from "../run";
 import type { LinkCheckResult } from "../types";
 import { checkLinkWithFetch as fetchCheck } from "./fetch_check";
@@ -138,15 +140,9 @@ const stubFetch = (handler: FetchHandler) => {
   return fetchMock;
 };
 
-// Fake GitHub API client with the calls the tests need
-const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
-const octokit = {
-  issues: { get: vi.fn() },
-  repos: { getContent: vi.fn() },
-  git: { listMatchingRefs: vi.fn() },
-  paginate: vi.fn(),
-};
-const getOctokit = vi.fn(() => octokit as never);
+// Fake GitHub API client, a fresh one per test
+let octokit = createFakeGithubApi();
+const getOctokit = vi.fn<() => GithubApi>(() => octokit);
 
 /** Runs `fn` as a run with all external dependencies faked (`stubFetch` can be called inside of `fn`) */
 const run = <T>(fn: () => Promise<T>, hostConcurrency?: number) =>
@@ -166,15 +162,6 @@ const checkLinks = (options: Parameters<typeof checkLinksInRun>[0]) =>
   run(() => checkLinksInRun(options));
 const checkLinkWithFetch = (url: string) => run(() => fetchCheck(url));
 const checkUrlsOnPageWithPlaywright = (urls: string[]) => run(() => playwrightCheck(urls));
-
-const fileContent = (text: string) => ({
-  data: {
-    type: "file",
-    sha: "abc",
-    size: text.length,
-    content: Buffer.from(text).toString("base64"),
-  },
-});
 
 const link = (href: string, page = "https://example.com/page") => ({ href, page, text: "link" });
 
@@ -219,11 +206,9 @@ beforeEach(() => {
   playwrightState.statuses = [];
   playwrightState.headers = {};
   // Some tests make it throw (no `GH_TOKEN`), restore the fake client
-  getOctokit.mockReset().mockImplementation(() => octokit as never);
-  octokit.issues.get.mockReset().mockResolvedValue({ data: {} });
-  octokit.repos.getContent.mockReset().mockRejectedValue(notFound());
-  octokit.git.listMatchingRefs.mockReset().mockResolvedValue({ data: [] });
-  octokit.paginate.mockReset().mockResolvedValue([]);
+  octokit = createFakeGithubApi();
+  getOctokit.mockReset().mockImplementation(() => octokit);
+  octokit.repos.getContent.mockRejectedValue(notFound());
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
