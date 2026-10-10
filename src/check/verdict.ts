@@ -14,15 +14,17 @@ import { parseRetryAfter } from "./limiter";
 /** Checks that load a page: plain `fetch` (first pass) or a Playwright navigation (re-check) */
 type PageChecker = "fetch" | "playwright";
 
-// 3xx are only "okay" when they end a request: `fetch` follows redirects with a Location, Playwright all of them
-const OKAY_STATUS_CODES = new Set([200, 301, 302, 303, 307, 308]);
+// Redirects are only "okay" when they end a request: `fetch` follows those with a Location, Playwright all of them
+const OKAY_REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const isOkayStatus = (status: number) =>
+  (status >= 200 && status < 300) || OKAY_REDIRECT_STATUS_CODES.has(status);
 // Some websites have ReCaptcha or other anti-scraping measures that prevent us from checking their links
 const FORBIDDEN_STATUS_CODES = new Set([401, 403]);
 // The server is overloaded or restarting (or rate limiting, like github.com under load), says nothing about the link.
 // Retried with a backoff, reported as "could not check" if it persists.
 const SERVER_ERROR_STATUS_CODES = new Set([502, 503, 504]);
-// Statuses of a `fetch` "broken link" that might be caused by bot protection, rate limiting or the request itself
-const RECHECK_STATUS_CODES = new Set([401, 403, 405, 406, 408, 429]);
+// Statuses of a `fetch` "broken link" that might be caused by bot protection or the request itself
+const RECHECK_STATUS_CODES = new Set([401, 403, 405, 406, 408]);
 
 // How many times a request is retried after a 429 with `Retry-After`
 const MAX_RATE_LIMIT_RETRIES = 2;
@@ -41,20 +43,19 @@ type RetryReason = "rate-limited" | "server-error";
 export type RetryPlan = { reason: RetryReason; delayMs: number };
 
 /**
- * Decides if a response is retried, and after how long. `undefined` to give up and judge the response as it is.
- * - 429 (`fetch` only): after its `Retry-After`, if it has one shorter than `MAX_RATE_LIMIT_WAIT`
+ * Decides if a response (of a request or a Playwright navigation) is retried, and after how long. `undefined` to give
+ * up and judge the response as it is.
+ * - 429: after its `Retry-After`, if it has one shorter than `MAX_RATE_LIMIT_WAIT`
  * - 502, 503, 504: after a backoff, or a longer `Retry-After` up to `MAX_SERVER_ERROR_RETRY_DELAY`
  * @param response.retryAfter raw `Retry-After` header (seconds or an HTTP date)
  * @param retries retries done so far, by reason
  */
 export const planRetry = (
-  checker: PageChecker,
   { status, retryAfter }: { status: number; retryAfter: string | null },
   retries: Readonly<Record<RetryReason, number>>,
 ): RetryPlan | undefined => {
   const retryAfterMs = parseRetryAfter(retryAfter);
-  // Playwright does not retry a 429, the navigation is reported as is
-  if (status === 429 && checker === "fetch") {
+  if (status === 429) {
     if (
       retries["rate-limited"] < MAX_RATE_LIMIT_RETRIES &&
       retryAfterMs !== undefined &&
@@ -87,8 +88,6 @@ export const planRetry = (
 export type PageLoad =
   | {
       type: "response";
-      /** Requested page URL */
-      url: string;
       status: number;
       statusText: string;
       /** Raw `Retry-After` header */
@@ -104,20 +103,30 @@ export type PageLoad =
 /** A loaded page: its links can be checked (`ok`), or they all get `result` */
 export type PageVerdict = { ok: true; status: number } | { ok: false; result: LinkCheckResult };
 
+// Longest part of an error page body kept in the result detail (results of every link are kept until the report)
+const MAX_BODY_SNIPPET_LENGTH = 500;
+
+/** `summary` and the start of the error page body, for the result detail */
+const withBodySnippet = (summary: string, body: string): string => {
+  const trimmed = body.trim();
+  const snippet =
+    trimmed.length > MAX_BODY_SNIPPET_LENGTH
+      ? `${trimmed.slice(0, MAX_BODY_SNIPPET_LENGTH)}…`
+      : trimmed;
+  return [summary, snippet].filter(Boolean).join(" ");
+};
+
 /**
  * What a loaded page means for the links to it. Retries (see `planRetry`) are done, this is the final answer.
- * The checkers differ on purpose:
+ * - Every failed status has the start of the error page body in its detail
  * - 401, 403: `fetch` says "broken link", so they are re-checked with Playwright (see `shouldRecheckWithPlaywright`),
  *   which says "could not check" (bot protection, login)
- * - 429: `fetch` says "unexpected error" when the server asked to wait (`Retry-After`) longer than we do, otherwise
- *   both say "broken link" (`fetch` re-checks it in the browser)
- * - Error page bodies are in the detail of every `fetch` failure, but only of forbidden pages in Playwright
  * - Errors are "broken link": `fetch` errors are re-checked with Playwright, so a server that is down ends as a
  *   broken link
  */
 export const judgePage = async (checker: PageChecker, load: PageLoad): Promise<PageVerdict> => {
   if (load.type === "no-response") {
-    return { ok: false, result: { ok: false, error: "broken link", status: 0 } };
+    return { ok: false, result: { ok: false, error: "broken link", errorDetail: "No response" } };
   }
   if (load.type === "error") {
     return {
@@ -126,48 +135,39 @@ export const judgePage = async (checker: PageChecker, load: PageLoad): Promise<P
     };
   }
 
-  const { url, status, statusText, retryAfter, readBody } = load;
-  if (OKAY_STATUS_CODES.has(status)) {
+  const { status, statusText, retryAfter, readBody } = load;
+  if (isOkayStatus(status)) {
     return { ok: true, status };
   }
-  const fail = (result: LinkCheckResult): PageVerdict => ({ ok: false, result });
+  const fail = async (
+    error: "broken link" | "could not check",
+    summary: string,
+  ): Promise<PageVerdict> => ({
+    ok: false,
+    result: { ok: false, error, status, errorDetail: withBodySnippet(summary, await readBody()) },
+  });
 
-  // Still rate limited after the retries
-  if (checker === "fetch" && status === 429 && retryAfter) {
-    return fail({
-      ok: false,
-      error: "unexpected error",
-      status,
-      // Raw header without a unit: it can be seconds or an HTTP date
-      errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
-    });
+  // Still rate limited after the retries (or asked to wait longer than we do): says nothing about the link
+  if (status === 429) {
+    // Raw header without a unit: it can be seconds or an HTTP date
+    return fail(
+      "could not check",
+      retryAfter
+        ? `Rate limited, gave up (Retry-After: ${retryAfter})`
+        : "Rate limited, no Retry-After",
+    );
   }
   // Still failing after the retries: the server is overloaded, not the link broken
   if (SERVER_ERROR_STATUS_CODES.has(status)) {
-    return fail({
-      ok: false,
-      error: "could not check",
-      status,
-      errorDetail: `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
-    });
+    return fail(
+      "could not check",
+      `Server error ${status}${statusText ? ` ${statusText}` : ""} (overloaded or rate limiting), still failing after up to ${MAX_SERVER_ERROR_RETRIES} retries`,
+    );
   }
   if (checker === "playwright" && FORBIDDEN_STATUS_CODES.has(status)) {
-    return fail({
-      ok: false,
-      error: "could not check",
-      status,
-      errorDetail: `${statusText} ${await readBody()}`,
-    });
+    return fail("could not check", statusText);
   }
-  if (checker === "playwright") {
-    return fail({ ok: false, error: "broken link", status });
-  }
-  return fail({
-    ok: false,
-    error: "broken link",
-    status,
-    errorDetail: `${statusText} ${await readBody()}`,
-  });
+  return fail("broken link", statusText);
 };
 
 /**

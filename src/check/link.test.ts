@@ -295,6 +295,18 @@ describe("checkLinks() Playwright escalation", () => {
     expect(results[0]!.result).toEqual({ ok: true, status: 200 });
   });
 
+  it("re-checks a GitHub API check that timed out in the browser", async () => {
+    const href = "https://github.com/owner/repo/issues/1";
+    // Never answers, like a request waiting out a long rate limit
+    octokit.issues.get.mockImplementation(() => new Promise(() => {}));
+
+    const { result, took } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
+
+    expect(playwrightState.visited).toEqual([href]);
+    expect(result[0]!.result).toEqual({ ok: true, status: 200 });
+    expect(took).toBe(80_000);
+  });
+
   it("reports unparsable URLs as broken without any request or Playwright re-check", async () => {
     const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
 
@@ -420,13 +432,14 @@ describe("checkLinkWithFetch()", () => {
     });
   });
 
-  it("reports a 429 with Retry-After that persists after the retries as unexpected error", async () => {
+  it("reports a 429 with Retry-After that persists after the retries as 'could not check'", async () => {
     stubFetch(() => new Response(null, { status: 429, headers: { "Retry-After": "0" } }));
 
     expect(await checkLinkWithFetch("https://always-limited.example.com/")).toMatchObject({
       ok: false,
-      error: "unexpected error",
+      error: "could not check",
       status: 429,
+      errorDetail: "Rate limited, gave up (Retry-After: 0)",
     });
   });
 
@@ -504,7 +517,7 @@ describe("redirects", () => {
     });
   });
 
-  it("playwright: a failed page reports the redirect too", async () => {
+  it("playwright: a failed page reports the redirect and its body too", async () => {
     playwrightState.finalUrlByUrl = { "https://example.com/old": "https://example.com/gone" };
     playwrightState.status = 404;
 
@@ -512,6 +525,7 @@ describe("redirects", () => {
       ok: false,
       error: "broken link",
       status: 404,
+      errorDetail: "Forbidden page",
       redirectedTo: "https://example.com/gone",
     });
   });
@@ -880,6 +894,32 @@ describe("server errors (502, 503, 504)", () => {
     expect(result).toEqual({ ok: true, status: 200 });
     expect(playwrightState.visited).toHaveLength(2);
     expect(took).toBe(8000);
+  });
+
+  it("Playwright: retries a 429 navigation after its Retry-After", async () => {
+    playwrightState.statuses = [429];
+    playwrightState.headers = { "retry-after": "4" };
+
+    const { result, took } = await withFakeTimers(() =>
+      checkLinkWithPlaywright("https://limited.example.com/page"),
+    );
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(playwrightState.visited).toHaveLength(2);
+    expect(took).toBe(4000);
+  });
+
+  it("checkLinks(): a fetch 429 persisting in the browser too is 'could not check'", async () => {
+    stubFetch(() => new Response(null, { status: 429, headers: { "Retry-After": "1" } }));
+    playwrightState.status = 429;
+    playwrightState.headers = { "retry-after": "1" };
+    const href = "https://limited.example.com/page";
+
+    const { result } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
+
+    expect(result[0]!.result).toMatchObject({ ok: false, error: "could not check", status: 429 });
+    // 1 navigation and 2 retries, no more
+    expect(playwrightState.visited).toEqual([href, href, href]);
   });
 
   it("checkLinks(): a fetch 503 persisting in the browser too is 'could not check'", async () => {

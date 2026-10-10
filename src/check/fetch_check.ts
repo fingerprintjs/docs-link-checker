@@ -37,7 +37,7 @@ const lazyAnchorIndex = (html: string) => {
 /**
  * Fetches a page with `GET`, also when only its status matters: some servers refuse `HEAD` or answer it differently
  * (support.google.com and chatgpt.com return 404 to HEAD and 200 to GET), and a failed HEAD needed a second request.
- * Limited per host, honours `Retry-After` on 429 (pauses the whole host), retries 502, 503 and 504. Never throws.
+ * Limited per host, retries 429 and 502, 503, 504 (see `planRetry`). Never throws.
  */
 const fetchPage = async (
   url: string,
@@ -55,7 +55,6 @@ const fetchPage = async (
     const response = await fetchWithHostLimit(url, { headers }, async (res) => {
       const verdict = await judgePage("fetch", {
         type: "response",
-        url,
         status: res.status,
         statusText: res.statusText,
         retryAfter: res.headers.get("Retry-After"),
