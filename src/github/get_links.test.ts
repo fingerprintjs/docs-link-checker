@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type RunDeps, withRun } from "../run";
+import { createFakeGithubApi } from "./fake_github_api";
 import { getReadmeLinks, getReadmesFromOrg, resolveReadmeHref } from "./get_links";
 
-const octokit = {
-  paginate: vi.fn(),
-  repos: { listForOrg: {}, get: vi.fn() },
-  git: { getTree: vi.fn() },
-};
+let octokit = createFakeGithubApi();
 const run = <T>(fn: () => Promise<T>, deps: RunDeps = {}) =>
-  withRun({ deps: { octokit: () => octokit as never, ...deps } }, fn);
+  withRun({ deps: { octokit: () => octokit, ...deps } }, fn);
 
 const repos = ["repo-c", "repo-a", "repo-b", "repo-d"].map((name) => ({
   full_name: `org/${name}`,
@@ -21,9 +18,9 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  octokit.paginate.mockReset().mockResolvedValue(repos);
-  octokit.repos.get.mockReset().mockResolvedValue({ data: { default_branch: "main" } });
-  octokit.git.getTree.mockReset().mockResolvedValue({
+  octokit = createFakeGithubApi();
+  octokit.repos.listForOrg.mockResolvedValue({ data: repos });
+  octokit.git.getTree.mockResolvedValue({
     data: {
       tree: [
         { type: "blob", path: "README.md" },
@@ -49,15 +46,17 @@ describe("getReadmesFromOrg()", () => {
   });
 
   it("skips deprecated repositories excluded from org-wide checks", async () => {
-    octokit.paginate.mockResolvedValue([
-      ...repos,
-      {
-        full_name: "org/fingerprint-pro-segment-source-function",
-        owner: { login: "org" },
-        name: "fingerprint-pro-segment-source-function",
-        archived: false,
-      },
-    ]);
+    octokit.repos.listForOrg.mockResolvedValue({
+      data: [
+        ...repos,
+        {
+          full_name: "org/fingerprint-pro-segment-source-function",
+          owner: { login: "org" },
+          name: "fingerprint-pro-segment-source-function",
+          archived: false,
+        },
+      ],
+    });
 
     const readmes = await run(() => getReadmesFromOrg("org"));
     expect(readmes).toHaveLength(8);
@@ -69,10 +68,12 @@ describe("getReadmesFromOrg()", () => {
   });
 
   it("skips archived repositories", async () => {
-    octokit.paginate.mockResolvedValue([
-      ...repos,
-      { full_name: "org/old", owner: { login: "org" }, name: "old", archived: true },
-    ]);
+    octokit.repos.listForOrg.mockResolvedValue({
+      data: [
+        ...repos,
+        { full_name: "org/old", owner: { login: "org" }, name: "old", archived: true },
+      ],
+    });
 
     const readmes = await run(() => getReadmesFromOrg("org"));
     expect(readmes).toHaveLength(8);
@@ -80,7 +81,7 @@ describe("getReadmesFromOrg()", () => {
   });
 
   it("throws a clear error when the repositories cannot be listed", async () => {
-    octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
+    octokit.repos.listForOrg.mockRejectedValue(new Error("Bad credentials"));
     await expect(run(() => getReadmesFromOrg("org"))).rejects.toMatchObject({
       name: "OrgListingError",
       message: "Failed to list repositories of GitHub organization org: Bad credentials",
@@ -90,7 +91,7 @@ describe("getReadmesFromOrg()", () => {
   it("samples README files deterministically with LINK_CHECK_SAMPLE_RATE", async () => {
     vi.stubEnv("LINK_CHECK_SAMPLE_RATE", "0.25");
     const first = await run(() => getReadmesFromOrg("org"));
-    octokit.paginate.mockResolvedValue(repos.toReversed());
+    octokit.repos.listForOrg.mockResolvedValue({ data: repos.toReversed() });
     const second = await run(() => getReadmesFromOrg("org"));
 
     expect(first).toHaveLength(2);
