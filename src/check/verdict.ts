@@ -14,8 +14,10 @@ import { parseRetryAfter } from "./limiter";
 /** Checks that load a page: plain `fetch` (first pass) or a Playwright navigation (re-check) */
 type PageChecker = "fetch" | "playwright";
 
-// 3xx are only "okay" when they end a request: `fetch` follows redirects with a Location, Playwright all of them
-const OKAY_STATUS_CODES = new Set([200, 301, 302, 303, 307, 308]);
+// Redirects are only "okay" when they end a request: `fetch` follows those with a Location, Playwright all of them
+const OKAY_REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const isOkayStatus = (status: number) =>
+  (status >= 200 && status < 300) || OKAY_REDIRECT_STATUS_CODES.has(status);
 // Some websites have ReCaptcha or other anti-scraping measures that prevent us from checking their links
 const FORBIDDEN_STATUS_CODES = new Set([401, 403]);
 // The server is overloaded or restarting (or rate limiting, like github.com under load), says nothing about the link.
@@ -122,7 +124,7 @@ export const judgePage = async (checker: PageChecker, load: PageLoad): Promise<P
   }
 
   const { status, statusText, retryAfter, readBody } = load;
-  if (OKAY_STATUS_CODES.has(status)) {
+  if (isOkayStatus(status)) {
     return { ok: true, status };
   }
   const fail = (result: LinkCheckResult): PageVerdict => ({ ok: false, result });

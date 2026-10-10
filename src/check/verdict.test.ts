@@ -46,11 +46,14 @@ describe("judgePage()", () => {
       { ok: true, status: 301 },
     ],
     ["308", response(308), { ok: true, status: 308 }, { ok: true, status: 308 }],
+    ["201", response(201), { ok: true, status: 201 }, { ok: true, status: 201 }],
+    ["204", response(204), { ok: true, status: 204 }, { ok: true, status: 204 }],
+    ["299", response(299), { ok: true, status: 299 }, { ok: true, status: 299 }],
     [
-      "204 (only 200 and redirects are okay)",
-      response(204),
-      fail({ ok: false, error: "broken link", status: 204, errorDetail: "Text BODY" }),
-      fail({ ok: false, error: "broken link", status: 204 }),
+      "300 (not a redirect that ends a request)",
+      response(300),
+      fail({ ok: false, error: "broken link", status: 300, errorDetail: "Text BODY" }),
+      fail({ ok: false, error: "broken link", status: 300 }),
     ],
     [
       "404",
