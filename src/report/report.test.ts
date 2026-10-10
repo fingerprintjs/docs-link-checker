@@ -95,6 +95,17 @@ describe("renderReportToHTML() header", () => {
     expect($("header a[href]").attr("href")).toBe("-b-site--b-.json");
   });
 
+  it("links to the index of all reports only when its http(s) URL is given", () => {
+    const report = getJSONReport({ ...RUN, links, siteName: "site" });
+    const nav = (indexUrl?: string) =>
+      cheerio.load(renderReportToHTML(report, { indexUrl }))("nav a");
+    expect(nav("https://example.github.io/reports/").attr("href")).toBe(
+      "https://example.github.io/reports/",
+    );
+    expect(nav().length).toBe(0);
+    expect(nav("javascript:alert(1)").length).toBe(0);
+  });
+
   it("shows the trend only when there is a previous report", () => {
     expect($("header").text()).not.toContain("fixed");
     const withDiff = render({

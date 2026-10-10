@@ -53,6 +53,8 @@ export type CommonOptions = {
   /** With `updateBaseline`: also remove exact entries that no longer fail (only for full-scope runs) */
   pruneBaseline: boolean;
   outputDir: string;
+  /** Page listing all reports, linked from the HTML report */
+  indexUrl?: string;
   json: boolean;
   /** Also show run metrics, timings and request details */
   verbose: boolean;
@@ -86,6 +88,7 @@ Environment variables:
   LINK_CHECK_HOST_CONCURRENCY     Default for --host-concurrency
   LINK_CHECK_BASELINE             Default for --baseline
   LINK_CHECK_COMPARE              Default for --compare
+  LINK_CHECK_INDEX_URL            Default for --index-url
 
 Exit codes: 0 no links to fix (or not failing), 1 links to fix or the check crashed, 2 invalid arguments or baseline.`;
 
@@ -106,12 +109,14 @@ const validated =
     }
   };
 
-const parseUrl = validated((value) => {
+const parseHttpUrl = (value: string, name = "URL") => {
   if (!URL.canParse(value) || !/^https?:$/.test(new URL(value).protocol)) {
-    throw new Error(`Invalid URL "${value}", expected an http(s) URL.`);
+    throw new Error(`Invalid ${name} "${value}", expected an http(s) URL.`);
   }
   return value;
-});
+};
+
+const parseUrl = validated((value) => parseHttpUrl(value));
 
 const parseOrg = validated((value) => {
   if (!/^[A-Za-z\d](?:[A-Za-z\d-]*[A-Za-z\d])?$/.test(value)) {
@@ -186,6 +191,11 @@ const buildProgram = (
         nonEmpty,
         DEFAULT_OUTPUT_DIR,
       )
+      .option(
+        "--index-url <url>",
+        "Page listing all reports, linked from the HTML report",
+        parseUrl,
+      )
       .option("--json", "Print the JSON report to stdout (logs go to stderr)", false)
       .option("--verbose", "Also show run metrics, timings and request details", false)
       .option(
@@ -215,6 +225,12 @@ const buildProgram = (
     const hostConcurrency = fromEnv(options.hostConcurrency, () =>
       parseHostConcurrency(env.LINK_CHECK_HOST_CONCURRENCY),
     );
+    // An empty LINK_CHECK_INDEX_URL means no link
+    const indexUrl = fromEnv(options.indexUrl, () =>
+      env.LINK_CHECK_INDEX_URL
+        ? parseHttpUrl(env.LINK_CHECK_INDEX_URL, "LINK_CHECK_INDEX_URL")
+        : undefined,
+    );
     if (options.pruneBaseline && !options.updateBaseline) {
       command.error("--prune-baseline can only be used with --update-baseline.");
     }
@@ -227,6 +243,7 @@ const buildProgram = (
       ...options,
       sampleRate,
       hostConcurrency,
+      indexUrl,
       baseline: options.baseline ?? (options.updateBaseline ? DEFAULT_BASELINE_FILE : undefined),
     };
   };
@@ -387,6 +404,7 @@ const runCommand = (
     });
     saveReport(report, outputDir, {
       sourceBaseUrl: command.command === "files" ? getGithubBlobBaseUrl(env, cwd) : undefined,
+      indexUrl: command.options.indexUrl,
     });
     return report;
   });

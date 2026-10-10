@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import * as cheerio from "cheerio";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "./cli";
 
@@ -147,6 +148,24 @@ describe("runCli()", () => {
       expect(report.summary).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
     });
 
+    it("LINK_CHECK_INDEX_URL and --index-url link the HTML report to the index of all reports", async () => {
+      const indexLink = async (args: string[], env: Record<string, string> = {}) => {
+        const outputDir = tempDir();
+        await runCli(["files", "docs/*.md", "--output-dir", outputDir, ...args], io(env));
+        const $ = cheerio.load(readFileSync(join(outputDir, "local-files.html"), "utf8"));
+        return $('a:contains("All reports")').attr("href");
+      };
+      expect(await indexLink([])).toBeUndefined();
+      expect(await indexLink([], { LINK_CHECK_INDEX_URL: "https://a.example/" })).toBe(
+        "https://a.example/",
+      );
+      expect(
+        await indexLink(["--index-url", "https://b.example/"], {
+          LINK_CHECK_INDEX_URL: "https://a.example/",
+        }),
+      ).toBe("https://b.example/");
+    });
+
     it("--update-baseline writes the default baseline file and reads a relative --baseline in io.cwd, not process.cwd()", async () => {
       const cwd = tempDir();
       mkdirSync(join(cwd, "docs"));
@@ -196,6 +215,7 @@ describe("runCli()", () => {
     const badEnv = [
       ["LINK_CHECK_SAMPLE_RATE", "abc"],
       ["LINK_CHECK_HOST_CONCURRENCY", "-1"],
+      ["LINK_CHECK_INDEX_URL", "not-a-url"],
     ] as const;
 
     it("rejects invalid environment variables when they are used (exit code 2)", async () => {
@@ -210,7 +230,8 @@ describe("runCli()", () => {
       const env = Object.fromEntries(badEnv);
       expect(await runCli(["--help"], io(env))).toBe(0);
       expect(await runCli(["site", "--help"], io(env))).toBe(0);
-      expect(await filesChecked(["--sample-rate", "0.5", "--host-concurrency", "3"], env)).toBe(2);
+      const flags = ["--sample-rate", "0.5", "--host-concurrency", "3"];
+      expect(await filesChecked([...flags, "--index-url", "https://a.example/"], env)).toBe(2);
     });
 
     it("prints help for help, --help and <command> --help to stdout", async () => {
