@@ -295,6 +295,18 @@ describe("checkLinks() Playwright escalation", () => {
     expect(results[0]!.result).toEqual({ ok: true, status: 200 });
   });
 
+  it("re-checks a GitHub API check that timed out in the browser", async () => {
+    const href = "https://github.com/owner/repo/issues/1";
+    // Never answers, like a request waiting out a long rate limit
+    octokit.issues.get.mockImplementation(() => new Promise(() => {}));
+
+    const { result, took } = await withFakeTimers(() => checkLinks({ links: [link(href)] }));
+
+    expect(playwrightState.visited).toEqual([href]);
+    expect(result[0]!.result).toEqual({ ok: true, status: 200 });
+    expect(took).toBe(80_000);
+  });
+
   it("reports unparsable URLs as broken without any request or Playwright re-check", async () => {
     const fetchMock = stubFetch(() => new Response(null, { status: 200 }));
 

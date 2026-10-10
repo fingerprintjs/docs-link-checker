@@ -83,11 +83,18 @@ const checkLinkFirstPass = async (
       return { result, recheck: shouldRecheckWithPlaywright("fetch", result) };
     }
     case "github-api": {
+      const timeoutMessage = `GitHub API check timed out after ${GITHUB_API_CHECK_TIMEOUT}ms`;
       const result = await withTimeout(
         (signal) => checkLinkWithGithubApi(href, signal),
         GITHUB_API_CHECK_TIMEOUT,
-        `GitHub API check timed out after ${GITHUB_API_CHECK_TIMEOUT}ms`,
-      );
+        timeoutMessage,
+      ).catch((error: unknown): LinkCheckResult => {
+        // The API did not answer (e.g. waiting out a rate limit): the browser might still check the link
+        if (error instanceof Error && error.message === timeoutMessage) {
+          return { ok: false, error: "unexpected error", errorDetail: timeoutMessage };
+        }
+        throw error;
+      });
       return { result, recheck: shouldRecheckWithPlaywright("github-api", result) };
     }
   }
