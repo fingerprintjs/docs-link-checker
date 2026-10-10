@@ -1,0 +1,14 @@
+{
+  "ignore": [
+    {
+      "href": "missing.md",
+      "page": "src/__fixtures__/action/README.md",
+      "reason": "Intentionally broken, tests the baseline in the action self-test"
+    },
+    {
+      "href": "guide.md#no-such-heading",
+      "page": "src/__fixtures__/action/README.md",
+      "reason": "Intentionally broken, tests the baseline in the action self-test"
+    }
+  ]
+}

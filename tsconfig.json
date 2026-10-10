@@ -30,6 +30,6 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["src/**/*", "checks/**/*", "bench/**/*"],
+  "include": ["src/**/*", "scripts/**/*", "bench/**/*"],
   "exclude": ["node_modules", "dist"]
 }
