@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRunContext, incrementMetric, runCached, timePhase, withRun } from "./run";
+import { createTerminal } from "./terminal";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -17,11 +18,19 @@ describe("run context", () => {
     expect(getRunContext()).toBeUndefined();
   });
 
-  it("logs metrics and phase timings at the end of the run, also after an error", async () => {
+  it("shows metrics and phase timings at the end of the run with --verbose, also after an error", async () => {
     vi.useFakeTimers();
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    let output = "";
+    const terminal = createTerminal({
+      write: (text) => {
+        output += text;
+      },
+      stream: process.stdout,
+      tty: false,
+      verbose: true,
+    });
     const run = async (fail: boolean) => {
-      await withRun({}, async () => {
+      await withRun({ terminal }, async () => {
         incrementMetric("playwrightNavigations");
         await timePhase("Slow phase", () => vi.advanceTimersByTimeAsync(1500));
         if (fail) {
@@ -34,11 +43,23 @@ describe("run context", () => {
     await expect(run(true)).rejects.toThrow("failed");
     vi.useRealTimers();
 
-    const output = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
     expect(output.match(/Run metrics:/g)).toHaveLength(2);
     expect(output).toContain("Playwright navigations: 1");
     // 1.5s are shown in seconds
     expect(output).toContain("Slow phase: 1.5s");
+  });
+
+  it("shows nothing without --verbose", async () => {
+    let output = "";
+    const terminal = createTerminal({
+      write: (text) => {
+        output += text;
+      },
+      stream: process.stdout,
+      tty: false,
+    });
+    await withRun({ terminal }, async () => incrementMetric("playwrightNavigations"));
+    expect(output).toBe("");
   });
 
   it("caching is a no-op outside of a run", async () => {

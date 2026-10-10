@@ -6,7 +6,13 @@ import {
   isHashInAnchorIndex,
   stripHash,
 } from "./hash";
-import { classifyStatus, fetchWithHostLimit, getUserAgent, serverErrorResult } from "./http";
+import {
+  classifyStatus,
+  fetchWithHostLimit,
+  getRedirectTarget,
+  getUserAgent,
+  serverErrorResult,
+} from "./http";
 import { incrementMetric } from "./run";
 import type { LinkCheckResult } from "./types";
 
@@ -14,7 +20,7 @@ import type { LinkCheckResult } from "./types";
  * Result of fetching a page (URL without hash): either a final failure, or the status and the anchors of the page.
  */
 export type FetchedPage =
-  | { ok: true; status: number; getAnchors?: () => AnchorIndex }
+  | { ok: true; status: number; redirectedTo?: string; getAnchors?: () => AnchorIndex }
   | { ok: false; result: LinkCheckResult };
 
 /** Parses the HTML on first use and then drops it, so cached pages only keep their (much smaller) anchor index */
@@ -54,43 +60,51 @@ const fetchPage = async (
       needBody || classifyStatus(res.status) !== "okay" ? res.text() : "",
     );
 
+    const redirectedTo = getRedirectTarget(url, response.url);
+    const withRedirect = (result: LinkCheckResult): LinkCheckResult =>
+      redirectedTo ? { ...result, redirectedTo } : result;
+
     // Still rate limited after the retries (GitHub web rate limit makes you wait 60 seconds after 500 requests)
     const retryAfter = response.headers.get("Retry-After");
     if (response.status === 429 && retryAfter) {
       return {
         ok: false,
-        result: {
+        result: withRedirect({
           ok: false,
           error: "unexpected error",
           status: response.status,
           // Raw header without a unit: it can be seconds or an HTTP date
           errorDetail: `\n Rate limited and gave up, Retry-After: ${retryAfter} for link ${url}`,
-        },
+        }),
       };
     }
 
     // Still failing after the retries (see `fetchWithHostLimit`): the server is overloaded, not the link broken
     const statusClass = classifyStatus(response.status);
     if (statusClass === "server-error") {
-      return { ok: false, result: serverErrorResult(response.status, response.statusText) };
+      return {
+        ok: false,
+        result: withRedirect(serverErrorResult(response.status, response.statusText)),
+      };
     }
 
     // 401 and 403 are broken here on purpose: they are re-checked with Playwright, which reports "could not check"
     if (statusClass !== "okay") {
       return {
         ok: false,
-        result: {
+        result: withRedirect({
           ok: false,
           error: "broken link",
           status: response.status,
           errorDetail: `${response.statusText} ${response.data}`,
-        },
+        }),
       };
     }
 
     return {
       ok: true,
       status: response.status,
+      redirectedTo,
       getAnchors: needBody ? lazyAnchorIndex(response.data) : undefined,
     };
   } catch (error) {
@@ -134,20 +148,22 @@ const getResultFromPage = (page: FetchedPage, url: string): LinkCheckResult => {
   if (!page.ok) {
     return page.result;
   }
+  const { status, redirectedTo } = page;
+  const redirect = redirectedTo ? { redirectedTo } : {};
   const hash = new URL(url).hash;
   if (!hash) {
-    return { ok: true, status: page.status };
+    return { ok: true, status, ...redirect };
   }
 
   const note = getSpecialFragmentNote(hash.slice(1), url);
   if (note) {
-    return { ok: true, status: page.status, note };
+    return { ok: true, status, note, ...redirect };
   }
 
   if (!page.getAnchors || !isHashInAnchorIndex(page.getAnchors(), hash)) {
-    return { ok: false, status: page.status, error: "hash not found" };
+    return { ok: false, status, error: "hash not found", ...redirect };
   }
-  return { ok: true, status: page.status };
+  return { ok: true, status, ...redirect };
 };
 
 /**

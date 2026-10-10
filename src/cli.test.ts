@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatFileProblems, runCli } from "./cli";
-import { getJSONReport } from "./report/report";
+import { runCli } from "./cli";
 
 // GitHub organizations need GH_TOKEN and the network: fake client and README downloads
 const repo = (name: string) => ({
@@ -34,12 +34,17 @@ beforeAll(async () => {
       res.end(body);
     };
     if (req.url === "/sitemap.xml") {
-      send(200, `<urlset><url><loc>${siteUrl}/page</loc></url></urlset>`);
+      send(
+        200,
+        `<urlset><url><loc>${siteUrl}/page</loc></url><url><loc>${siteUrl}/page2</loc></url></urlset>`,
+      );
     } else if (req.url === "/page") {
       send(
         200,
         `<a href="/keep/ok">ok</a><a href="/keep/missing">a</a><a href="/other/missing">b</a>`,
       );
+    } else if (req.url === "/page2") {
+      send(200, `<a href="/keep/missing">same target</a>`);
     } else {
       send(req.url === "/keep/ok" ? 200 : 404);
     }
@@ -60,33 +65,11 @@ afterAll(() => {
 const FIXTURE = resolve(import.meta.dirname, "__fixtures__/local");
 const tempDir = () => mkdtempSync(join(tmpdir(), "cli-test-"));
 
-describe("formatFileProblems()", () => {
-  it("prints one line per link to fix, collapsing and shortening error details", () => {
-    const report = getJSONReport({
-      siteName: "local files",
-      links: [
-        {
-          page: "a.md",
-          line: 3,
-          href: "https://x.com",
-          text: "",
-          result: { ok: false, error: "unexpected error", errorDetail: `boom\n${"x".repeat(300)}` },
-        },
-        { page: "b.md", href: "c.md", text: "", result: { ok: false, error: "broken link" } },
-      ],
-    });
-    // Report order: broken links first, then unexpected errors
-    const [first, second] = formatFileProblems(report);
-    expect(first).toBe("b.md: c.md: broken link");
-    expect(second?.startsWith("a.md:3: https://x.com: unexpected error: boom xxx")).toBe(true);
-    expect(second).not.toContain("\n");
-    expect(second?.endsWith("…")).toBe(true);
-  });
-});
-
 describe("runCli()", () => {
   let stdout: string;
   let stderr: string;
+  // Colors depend on the environment of the test run
+  const plain = (text: string) => stripVTControlCharacters(text);
   const io = (env: Record<string, string> = {}) => ({
     env,
     cwd: FIXTURE,
@@ -252,13 +235,76 @@ describe("runCli()", () => {
       io({ GITHUB_OUTPUT: githubOutput, GITHUB_STEP_SUMMARY: summary }),
     );
     expect(code).toBe(1);
-    expect(stdout).toBe("docs/guide.md:8: ../nope.md: broken link: File not found: nope.md\n");
+    expect(plain(stdout)).toContain(
+      "docs/guide.md:8  File not found  ../nope.md  no file nope.md\n",
+    );
     expect(readFileSync(githubOutput, "utf8")).toBe(
       `links-to-fix=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
     );
-    expect(readFileSync(summary, "utf8")).toContain("| docs/guide.md:8 | ../nope.md |");
+    expect(readFileSync(summary, "utf8")).toContain(
+      "| `../nope.md`<br><sub>no file nope.md</sub> | `docs/guide.md:8` |",
+    );
     const report = JSON.parse(readFileSync(join(out, "local-files.json"), "utf8"));
     expect(report.summary.totalLinksToFix).toBe(1);
+  });
+
+  describe("--compare", () => {
+    const link = (page: string, href: string, error = "broken link") => ({
+      page,
+      href,
+      text: "",
+      result: { ok: false, error },
+    });
+    const previousReport = (brokenLinks: unknown[]) => {
+      const file = join(tempDir(), "previous.json");
+      writeFileSync(file, JSON.stringify({ brokenLinks, hashNotFound: [], networkErrors: [] }));
+      return file;
+    };
+    const runFiles = async (extra: string[], env: Record<string, string> = {}) => {
+      const out = tempDir();
+      await runCli(["files", "docs/*.md", "--output-dir", out, ...extra], io(env));
+      return JSON.parse(readFileSync(join(out, "local-files.json"), "utf8"));
+    };
+
+    it("adds the new and fixed links to fix since the previous report", async () => {
+      // Still broken: ../nope.md. Fixed: gone.md. The problem counts, not the status or message.
+      const previous = previousReport([
+        {
+          ...link("docs/guide.md", "../nope.md"),
+          result: { ok: false, error: "broken link", status: 404 },
+        },
+        link("docs/guide.md", "gone.md"),
+      ]);
+
+      expect((await runFiles(["--compare", previous])).diff).toEqual({ new: 0, fixed: 1 });
+      expect((await runFiles([], { LINK_CHECK_COMPARE: previous })).diff).toEqual({
+        new: 0,
+        fixed: 1,
+      });
+    });
+
+    it("counts a link that fails in a new way as new and fixed", async () => {
+      const previous = previousReport([link("docs/guide.md", "../nope.md", "hash not found")]);
+
+      expect((await runFiles(["--compare", previous])).diff).toEqual({ new: 1, fixed: 1 });
+    });
+
+    it("names the invalid field when the previous report has the wrong shape", async () => {
+      const file = join(tempDir(), "bad.json");
+      writeFileSync(file, JSON.stringify({ brokenLinks: 1, hashNotFound: [], networkErrors: [] }));
+
+      const report = await runFiles(["--compare", file]);
+
+      expect(report).not.toHaveProperty("diff");
+      expect(vi.mocked(console.log).mock.calls.join("\n")).toContain("(brokenLinks: ");
+    });
+
+    it("skips the comparison, without failing, when the previous report is missing", async () => {
+      const report = await runFiles(["--compare", join(tempDir(), "missing.json")]);
+
+      expect(report).not.toHaveProperty("diff");
+      expect(report.summary.totalLinksToFix).toBe(1);
+    });
   });
 
   it("files: emits annotations in GitHub Actions, and passes with --no-fail-on-broken", async () => {
@@ -267,16 +313,18 @@ describe("runCli()", () => {
       io({ GITHUB_ACTIONS: "true" }),
     );
     expect(code).toBe(0);
-    expect(stdout).toBe(
-      "::error file=docs/guide.md,line=8,title=Broken link::../nope.md: broken link: File not found: nope.md\n",
+    expect(stdout).toContain(
+      "::error file=docs/guide.md,line=8,title=File not found::../nope.md: no file nope.md\n",
     );
+    expect(stdout).not.toContain("File not found  ../nope.md");
 
     stdout = "";
     await runCli(
       ["files", "docs/*.md", "--output-dir", tempDir(), "--no-fail-on-broken", "--no-annotations"],
       io({ GITHUB_ACTIONS: "true" }),
     );
-    expect(stdout).toBe("");
+    expect(stdout).not.toContain("::error");
+    expect(stdout).not.toContain("../nope.md");
   });
 
   it("files: links local files to the checked commit in the HTML report in GitHub Actions", async () => {
@@ -360,7 +408,8 @@ describe("runCli()", () => {
     expect(
       await runCli(["files", "docs/*.md", "--baseline", baselinePath, "--output-dir", dir], io()),
     ).toBe(0);
-    expect(stdout).toBe("");
+    expect(plain(stdout)).toContain("✓ No links to fix");
+    expect(plain(stdout)).toContain("1 ignored by baseline");
     const report = JSON.parse(readFileSync(join(dir, "local-files.json"), "utf8"));
     expect(report.summary).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
   });
@@ -419,8 +468,8 @@ describe("runCli()", () => {
     expect(await runCli(args, io())).toBe(1);
     const reportPath = join(outputDir, "127-0-0-1.json");
     expect(JSON.parse(readFileSync(reportPath, "utf8")).summary).toMatchObject({
-      linksChecked: 2,
-      totalLinksToFix: 1,
+      linksChecked: 3,
+      totalLinksToFix: 2,
     });
 
     const baselinePath = join(tempDir(), "baseline.json");
@@ -428,8 +477,64 @@ describe("runCli()", () => {
     expect(await runCli([...args, "--baseline", baselinePath], io())).toBe(0);
     expect(JSON.parse(readFileSync(reportPath, "utf8")).summary).toMatchObject({
       totalLinksToFix: 0,
-      ignored: 1,
+      ignored: 2,
     });
+  });
+
+  it("site: groups links to fix by target with the pages below, then the verdict", async () => {
+    const outputDir = tempDir();
+    const code = await runCli(
+      ["site", siteUrl, "--include", `${siteUrl}/keep`, "--output-dir", outputDir],
+      io(),
+    );
+    expect(code).toBe(1);
+    const output = plain(stdout);
+    // One target on two pages, site origin dropped, pages with their link text
+    expect(output).toContain(
+      `HTTP 404  /keep/missing  on 2 pages  Not Found\n          ↳ /page  "a"\n          ↳ /page2  "same target"\n`,
+    );
+    expect(output).toContain("✗ 2 links to fix (2 broken)");
+    expect(output).toContain("3 checked · 0 ignored by baseline · 0 could not check");
+    expect(output).toMatch(/Report .*127-0-0-1\.html/);
+    expect(output).toContain("False positive? --update-baseline");
+  });
+
+  it("files: lists one aligned row per link to fix, with the hash and the reason", async () => {
+    await runCli(["files", "README.md", "--output-dir", tempDir()], io());
+    const output = plain(stdout);
+    expect(output).toContain(
+      [
+        "README.md:7   File not found     docs/missing.md  no file docs/missing.md",
+        "README.md:8   Anchor not found   docs/guide.md#nope  no heading #nope in docs/guide.md",
+        "README.md:10  Anchor not found   #nowhere  no heading #nowhere in README.md",
+        "README.md:16  Line out of range  src/code.ts#L99  src/code.ts has 3 lines",
+        "README.md:19  HTTP 404           example.com/page  Not Found",
+      ].join("\n"),
+    );
+  });
+
+  it("shows --verbose details (run metrics) only when asked for", async () => {
+    const args = ["site", siteUrl, "--output-dir", tempDir()];
+    await runCli(args, io());
+    expect(plain(stdout)).not.toContain("Run metrics");
+    expect(plain(stdout)).toContain("✓ Found 4 links in 2 pages");
+
+    stdout = "";
+    await runCli([...args, "--verbose"], io());
+    expect(plain(stdout)).toContain("Run metrics:");
+  });
+
+  it("sends the output to stderr with --json", async () => {
+    await runCli(["site", siteUrl, "--output-dir", tempDir(), "--json"], io());
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(plain(stderr)).toContain("✗ 3 links to fix");
+  });
+
+  it("redraws one progress line on a TTY instead of printing a line per step", async () => {
+    await runCli(["site", siteUrl, "--output-dir", tempDir()], { ...io(), tty: true });
+    expect(stdout).toContain("\r\u001B[2K");
+    expect(plain(stdout)).toMatch(/Checking URLs\s+\d\/3\s+━*─*\s+\d+%/);
+    expect(plain(stdout)).not.toContain("Checking URLs 100%");
   });
 
   it("github-org: passes the organization and sample rate, names the report", async () => {

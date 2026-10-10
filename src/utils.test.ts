@@ -1,11 +1,12 @@
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { withRun } from "./run";
+import { createTerminal } from "./terminal";
 import { getSampleRate, parallelProcess, sampleItems } from "./utils";
 
-let logSpy: MockInstance<typeof console.log>;
 let errorSpy: MockInstance<typeof console.error>;
 
 beforeEach(() => {
-  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -15,25 +16,73 @@ afterEach(() => {
 });
 
 describe("parallelProcess() progress", () => {
-  it("logs progress while running and stops when done", async () => {
-    vi.useFakeTimers();
-    let resolve = () => {};
-    const slow = new Promise<void>((done) => {
-      resolve = done;
+  const output = async (
+    run: () => Promise<unknown>,
+    { verbose = false, now }: { verbose?: boolean; now?: () => number } = {},
+  ) => {
+    let text = "";
+    const terminal = createTerminal({
+      now,
+      write: (chunk) => {
+        text += chunk;
+      },
+      stream: process.stdout,
+      tty: false,
+      verbose,
     });
+    await withRun({ terminal }, run);
+    return stripVTControlCharacters(text);
+  };
+  const items = Array.from({ length: 20 }, (_, i) => i);
 
-    const run = parallelProcess({
-      items: [1, 2],
-      processFn: async (item) => (item === 2 ? slow : undefined),
-    });
-    await vi.advanceTimersByTimeAsync(30000);
-    expect(logSpy).toHaveBeenCalledWith("Progress: 1/2");
+  it("shows the progress of a labelled batch every 10% with the failing count", async () => {
+    let done = 0;
+    // Every clock read is 10s later: each progress update is past the quiet start of the step
+    let time = 0;
+    const text = await output(
+      () =>
+        parallelProcess({
+          items,
+          label: "Checking",
+          concurrencyLimit: 1,
+          failing: () => done,
+          processFn: async (item) => {
+            done = item;
+          },
+        }),
+      { now: () => (time += 10_000) },
+    );
+    expect(text).toContain("Checking 50% (10/20, 9 failing so far)\n");
+    expect(text.match(/Checking \d+%/g)).toHaveLength(10);
+  });
 
-    resolve();
-    await run;
-    logSpy.mockClear();
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(logSpy).not.toHaveBeenCalled();
+  it("starts the step clock with the batch, not with the first finished item", async () => {
+    let time = 0;
+    const text = await output(
+      () =>
+        parallelProcess({
+          items: [1],
+          label: "Checking",
+          processFn: async () => {
+            time = 6000;
+          },
+        }),
+      { now: () => time },
+    );
+    expect(text).toContain("Checking 100% (1/1)\n");
+  });
+
+  it("prints no progress lines for a batch that ends within seconds", async () => {
+    const text = await output(() =>
+      parallelProcess({ items, label: "Checking", processFn: async () => {} }),
+    );
+    expect(text).not.toMatch(/Checking \d+%/);
+  });
+
+  it("shows nothing without a label, and the time of the batch only with --verbose", async () => {
+    const run = () => parallelProcess({ items, processFn: async () => {} });
+    expect(await output(run)).toBe("");
+    expect(await output(run, { verbose: true })).toMatch(/^Batch: 20 items in \d+ms\n/);
   });
 });
 
@@ -132,9 +181,17 @@ describe("sampleItems()", () => {
     expect(sampleItems({ items: [], key: (x: string) => x, rate: 0.5 })).toEqual([]);
   });
 
-  it("logs the sample size", () => {
-    sampleItems({ items, key: (x) => x, rate: 0.1 });
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Sampling 10 of 100 pages"));
+  it("shows the sample size", async () => {
+    let text = "";
+    const terminal = createTerminal({
+      write: (chunk) => {
+        text += chunk;
+      },
+      stream: process.stdout,
+      tty: false,
+    });
+    await withRun({ terminal }, async () => sampleItems({ items, key: (x) => x, rate: 0.1 }));
+    expect(stripVTControlCharacters(text)).toBe("Sampling 10 of 100 pages (sample rate 0.1)\n");
   });
 
   it("uses LINK_CHECK_SAMPLE_RATE by default", () => {

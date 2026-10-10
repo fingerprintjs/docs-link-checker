@@ -35,6 +35,14 @@ inputs:
     description: "Where to save the JSON and HTML reports. Defaults to a directory in RUNNER_TEMP."
     required: false
     default: ""
+  compare:
+    description: "Path of a previous JSON report. The summary shows how many links to fix are new and fixed since then."
+    required: false
+    default: ""
+  artifact-name:
+    description: "Upload the reports as a workflow artifact with this name and link it in the job summary. Empty: do not upload. Must be unique in the workflow run."
+    required: false
+    default: "link-check-report"
 
 outputs:
   links-to-fix:
@@ -46,6 +54,9 @@ outputs:
   report-html-path:
     description: "Path of the HTML report"
     value: ${{ steps.check.outputs.report-html-path }}
+  report-url:
+    description: "URL of the uploaded report artifact (empty if `artifact-name` is empty)"
+    value: ${{ steps.upload.outputs.artifact-url }}
 
 runs:
   using: "composite"
@@ -164,6 +175,7 @@ runs:
         LINK_CHECK_SAMPLE_RATE: ""
         LINK_CHECK_BASELINE: ""
         LINK_CHECK_HOST_CONCURRENCY: ""
+        LINK_CHECK_COMPARE: ${{ inputs.compare }}
       run: |
         set -f
         # shellcheck disable=SC2086
@@ -174,3 +186,23 @@ runs:
         if [ "$INPUT_ANNOTATIONS" = "false" ]; then args+=(--no-annotations); fi
         if [ -n "$INPUT_BASELINE" ]; then args+=(--baseline "$INPUT_BASELINE"); fi
         node "$ACTION_PATH/bin/docs-link-checker.js" "${args[@]}"
+
+    # The check step fails the job when links need fixing, the reports are still uploaded
+    - name: Upload reports
+      id: upload
+      if: ${{ !cancelled() && inputs.artifact-name != '' && steps.check.outputs.report-path != '' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ steps.check.outputs.report-path }}
+          ${{ steps.check.outputs.report-html-path }}
+        retention-days: 30
+
+    # The CLI writes the summary before the upload, so the artifact URL is only known now
+    - name: Link the report in the job summary
+      if: ${{ !cancelled() && steps.upload.outputs.artifact-url != '' }}
+      shell: bash
+      env:
+        REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+      run: echo "[Download report]($REPORT_URL)" >> "$GITHUB_STEP_SUMMARY"

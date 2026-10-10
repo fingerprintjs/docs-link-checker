@@ -1,7 +1,7 @@
 import { retry } from "@octokit/plugin-retry";
 import { throttling } from "@octokit/plugin-throttling";
 import { Octokit } from "@octokit/rest";
-import { getDeps, incrementMetric } from "../run";
+import { getDeps, getTerminal, incrementMetric } from "../run";
 
 const MyOctokit = Octokit.plugin(retry, throttling);
 
@@ -50,6 +50,15 @@ export const getMyOctokit = (): MyOctokitInstance => {
     client = new MyOctokit({
       auth: token,
       throttle: throttleOptions,
+      // The default logs every request (`GET /repos/... - 200 with id ...`) as info, failed ones as error.
+      // Both are shown with --verbose only: callers handle failed requests (a 401 falls back to the browser).
+      log: {
+        debug: () => {},
+        info: (message: string) => getTerminal().verbose(message),
+        // Rate limit warnings stay visible, through the terminal so they don't break the progress line
+        warn: (message: string) => getTerminal().line(message),
+        error: (message: string) => getTerminal().verbose(message),
+      },
       request: { fetch: fetchOfRun },
     });
     countRequests(client);

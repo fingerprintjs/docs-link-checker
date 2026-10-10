@@ -7,7 +7,8 @@ import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 import { checkLinks } from "./link";
 import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "./markdown";
 import { filterOutIrrelevantLinks } from "./page";
-import { timePhase } from "./run";
+import { getTerminal, timePhase } from "./run";
+import { plural } from "./terminal";
 import type { Link, LinkCheckResult, LinkWithResult } from "./types";
 import { compareStrings, sampleItems } from "./utils";
 
@@ -296,9 +297,10 @@ export const checkLocalFiles = async ({
   const collected = await timePhase("Extract links", () =>
     collectLinksFromFiles({ patterns, cwd: root, sampleRate }),
   );
-  console.log(
-    `Found ${collected.local.length + collected.external.length} links in ${collected.files.length} files ` +
-      `(${collected.local.length} local, ${collected.external.length} external, ${collected.skipped.length} skipped).`,
+  const terminal = getTerminal();
+  terminal.done(
+    `Found ${plural(collected.local.length + collected.external.length, "link")} in ${plural(collected.files.length, "file")}`,
+    `${collected.local.length} local · ${collected.external.length} external · ${collected.skipped.length} skipped`,
   );
 
   const anchorCache = new Map<string, Set<string>>();
@@ -306,6 +308,7 @@ export const checkLocalFiles = async ({
     ...link,
     result: checkLocalLink(resolve(root, link.page), link.href, { root, anchorCache }),
   }));
+  terminal.done("Checked local links");
 
   const externalLinks = filterOutIrrelevantLinks(collected.external);
   const externalResults =

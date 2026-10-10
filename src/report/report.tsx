@@ -1,27 +1,57 @@
 /** @jsx h */
 /** @jsxFrag Fragment */
 // npx/tsx defaults to React.createElement unless the factory is in this file.
+/* oxlint-disable react/jsx-key -- rendered once to static HTML, rows are never diffed or reordered */
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 // oxlint-disable-next-line eslint/no-unused-vars -- Fragment is used via @jsxFrag / tsconfig jsxFragmentFactory
 import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
 import type { Link, LinkWithResult } from "../types";
+import { diffLinksToFix, type PreviousReport } from "./compare";
+import {
+  countByKind,
+  displayUrl,
+  encodePath,
+  formatLocation,
+  groupByTarget,
+  type IgnoredLink,
+  findSiteOrigin,
+  isHttpUrl,
+  problemKind,
+  problemLabel,
+  shortReason,
+  type TargetGroup,
+} from "./format";
+import { REPORT_CSS, REPORT_SCRIPT } from "./report_assets";
 
 export type LinkCheckReport = ReturnType<typeof getJSONReport>;
-
-/** A failing link that matched an entry of the baseline file */
-type IgnoredLink = LinkWithResult & { ignoreReason?: string };
 
 type GetReportArgs = {
   links: LinkWithResult[];
   siteName: string;
   /** Failing links matching the baseline are moved to `ignored` and don't count towards `totalLinksToFix` */
   baseline?: Baseline;
+  /** When the check finished */
+  generatedAt: Date;
+  /** How long the check took */
+  durationMs: number;
+  /** Adds `diff` (new and fixed links to fix) when given, see `loadPreviousReport` */
+  previous?: PreviousReport;
 };
 
-export const getJSONReport = ({ links, siteName, baseline = EMPTY_BASELINE }: GetReportArgs) => {
+/** Version of the JSON report format, raised when a field is removed or changes its meaning */
+const REPORT_SCHEMA_VERSION = 1;
+
+export const getJSONReport = ({
+  links,
+  siteName,
+  baseline = EMPTY_BASELINE,
+  generatedAt,
+  durationMs,
+  previous,
+}: GetReportArgs) => {
   const ignored: IgnoredLink[] = [];
   const notIgnored: LinkWithResult[] = [];
   for (const link of links) {
@@ -40,11 +70,16 @@ export const getJSONReport = ({ links, siteName, baseline = EMPTY_BASELINE }: Ge
   const couldNotCheck = withError("could not check");
   const unexpectedErrors = withError("unexpected error");
 
+  const toFix = [...brokenLinks, ...hashNotFound, ...unexpectedErrors];
+
   return {
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    generatedAt: generatedAt.toISOString(),
+    durationMs,
     siteName,
     summary: {
       linksChecked: links.length,
-      totalLinksToFix: brokenLinks.length + hashNotFound.length + unexpectedErrors.length,
+      totalLinksToFix: toFix.length,
       brokenLinks: brokenLinks.length,
       hashNotFound: hashNotFound.length,
       networkErrors: unexpectedErrors.length,
@@ -56,6 +91,7 @@ export const getJSONReport = ({ links, siteName, baseline = EMPTY_BASELINE }: Ge
     networkErrors: unexpectedErrors,
     couldNotCheck,
     ignored,
+    ...(previous ? { diff: diffLinksToFix(previous, toFix) } : {}),
   };
 };
 
@@ -78,8 +114,6 @@ const safeHref = (url: string): string | undefined => {
   }
 };
 
-const isHttpUrl = (value: string) => safeHref(value) !== undefined;
-
 export type RenderOptions = {
   /**
    * Base URL of the checked files, ending with `/` (e.g. `https://github.com/owner/repo/blob/<sha>/`, see
@@ -93,8 +127,6 @@ export type RenderOptions = {
 /** Keeps a URL only if it is inside the base URL (a `../` link must not leave the repository) */
 const insideBase = (url: URL, base: string): string | undefined =>
   url.href.startsWith(base) ? safeHref(url.href) : undefined;
-
-const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
 /** URL of a local file (the page of a link), with its line: `<base>docs/a.md#L7` */
 const getLocalFileUrl = (
@@ -129,79 +161,16 @@ const getLocalLinkUrl = (
   }
 };
 
-const HrefRenderer = ({ link }: { link: LinkWithResult }) => {
-  const { href, result } = link;
-
-  if (result.ok) {
-    return href;
-  }
-
-  if (result.error === "hash not found") {
-    const [baseUrl, hash] = href.split("#");
-    return (
-      <span>
-        {baseUrl}
-        <span className="text-red-600">#{hash}</span>
-      </span>
-    );
-  }
-
-  return <span className="text-red-600">{href}</span>;
-};
-
-const pageLabel = (link: Link) => (link.line ? `${link.page}:${link.line}` : link.page);
-
-const ResultRenderer = ({ link }: { link: LinkWithResult | IgnoredLink }) =>
-  link.result.ok ? (
-    <span className="text-green-600">OK</span>
+/** Link text for display: site origin dropped, the #hash highlighted */
+const LinkLabel = ({ href, siteOrigin }: { href: string; siteOrigin?: string }) => {
+  const label = displayUrl(href, siteOrigin);
+  const hashStart = label.indexOf("#");
+  return hashStart < 0 ? (
+    <>{label}</>
   ) : (
-    <span className="text-red-600">
-      {link.result.error === "broken link" && "🔴 "}
-      {link.result.error === "hash not found" && "#️⃣ "}
-      {link.result.error === "could not check" && "⚠️ "}
-      {link.result.error === "unexpected error" && "❌ "}
-      {link.result.error}
-      {link.result.status ? ` (Status: ${link.result.status})` : null}
-      {"ignoreReason" in link && link.ignoreReason ? (
-        <div className="text-gray-600">Ignored: {link.ignoreReason}</div>
-      ) : null}
-      {link.result.errorDetail ? (
-        <details>
-          <summary>Error detail</summary>
-          <pre>{link.result.errorDetail}</pre>
-        </details>
-      ) : null}
-    </span>
-  );
-
-const PageCell = ({ link, options }: { link: Link; options: RenderOptions }) => {
-  if (isHttpUrl(link.page)) {
-    return (
-      <>
-        {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}📄{" "}
-        <a
-          href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)}
-          target="_blank"
-          rel="noopener"
-        >
-          {pageLabel(link)}
-        </a>
-      </>
-    );
-  }
-  // Local file: link to the checked file if its URL is known, plain text otherwise
-  const url = getLocalFileUrl(options.sourceBaseUrl, link.page, link.line);
-  const label = <code>{pageLabel(link)}</code>;
-  return (
     <>
-      📄{" "}
-      {url ? (
-        <a href={url} target="_blank" rel="noopener">
-          {label}
-        </a>
-      ) : (
-        label
-      )}
+      {label.slice(0, hashStart)}
+      <span class="hash">{label.slice(hashStart)}</span>
     </>
   );
 };
@@ -218,209 +187,290 @@ const getLinkCellUrl = (link: LinkWithResult, options: RenderOptions): string | 
   return getLocalLinkUrl(options.sourceBaseUrl, link.page, link.href);
 };
 
-const LinkCell = ({
-  link,
-  options,
-  showText = true,
-}: {
-  link: LinkWithResult;
-  options: RenderOptions;
-  /** False when occurrences of this URL use different anchor texts (those are shown next to each page) */
-  showText?: boolean;
-}) => {
-  const content = showText ? (
-    <>
-      🔗"{link.text}" ➡️ <HrefRenderer link={link} />
-    </>
-  ) : (
-    <>
-      🔗 <HrefRenderer link={link} />
-    </>
-  );
+type ViewProps = { options: RenderOptions; siteOrigin?: string };
+
+const LinkCell = ({ link, options, siteOrigin }: ViewProps & { link: LinkWithResult }) => {
   const url = getLinkCellUrl(link, options);
+  const label = <LinkLabel href={link.href} siteOrigin={siteOrigin} />;
   return url ? (
     <a href={url} target="_blank" rel="noopener">
-      {content}
+      {label}
     </a>
   ) : (
-    <span data-local-link="">{isHttpUrl(link.href) ? content : <code>{content}</code>}</span>
+    <span data-local-link="">{label}</span>
   );
 };
 
-const LinksTable = ({
-  links,
-  options,
-}: {
-  links: Array<LinkWithResult | IgnoredLink>;
-  options: RenderOptions;
-}) => (
-  <table className="border-collapse border border-gray-300 mb-6">
+/** Copied by the script in `renderReportToHTML`, no inline JS so any URL is safe */
+const CopyButton = ({ href }: { href: string }) => (
+  <button type="button" class="cp" data-copy-href={href} title="Copy link to clipboard">
+    copy
+  </button>
+);
+
+/** Short reason, redirect target and the raw error detail (only when it says more than the reason) */
+const Reason = ({ link, siteOrigin }: ViewProps & { link: LinkWithResult | IgnoredLink }) => {
+  const { result } = link;
+  const reason = shortReason(link);
+  const detail = result.ok ? "" : (result.errorDetail?.trim() ?? "");
+  // The reason already says it unless a response body (markup) or a long text was cut off
+  const hasMoreDetail = /[<\n]/.test(detail) || reason.endsWith("…");
+  const redirect = result.redirectedTo;
+  const redirectUrl = redirect ? safeHref(redirect) : undefined;
+  return (
+    <>
+      {reason ? <div class="rs">{reason}</div> : null}
+      {redirect ? (
+        <div class="rs">
+          → redirects to{" "}
+          {redirectUrl ? (
+            <a href={redirectUrl} target="_blank" rel="noopener">
+              {displayUrl(redirect, siteOrigin)}
+            </a>
+          ) : (
+            displayUrl(redirect, siteOrigin)
+          )}
+        </div>
+      ) : null}
+      {hasMoreDetail ? (
+        <details>
+          <summary>response body</summary>
+          <pre>{detail}</pre>
+        </details>
+      ) : null}
+    </>
+  );
+};
+
+/** Status glyph in the status color, label in ink: color never carries the meaning alone */
+const Problem = ({ link }: { link: LinkWithResult }) => {
+  const kind = problemKind(link);
+  return (
+    <>
+      <span class={`g ${kind}`} aria-hidden="true">
+        {kind === "check" ? "○" : "●"}
+      </span>
+      {problemLabel(link)}
+    </>
+  );
+};
+
+/** A page of a link: `/path "link text"`, or `file:line` for local files */
+const PageRef = ({ link, options, siteOrigin }: ViewProps & { link: Link }) => {
+  const label = displayUrl(formatLocation(link), siteOrigin);
+  const text = link.text ? <span class="txt">"{link.text}"</span> : null;
+  if (isHttpUrl(link.page)) {
+    return (
+      <div class="pg">
+        {/* https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments */}
+        <a
+          href={safeHref(`${link.page}#:~:text=${encodeURIComponent(link.text)}`)}
+          target="_blank"
+          rel="noopener"
+        >
+          {label}
+        </a>
+        {text}
+      </div>
+    );
+  }
+  // Local file: link to the checked file if its URL is known, plain text otherwise
+  const url = getLocalFileUrl(options.sourceBaseUrl, link.page, link.line);
+  const code = <code>{label}</code>;
+  return (
+    <div class="pg">
+      {url ? (
+        <a href={url} target="_blank" rel="noopener">
+          {code}
+        </a>
+      ) : (
+        code
+      )}
+      {text}
+    </div>
+  );
+};
+
+const VISIBLE_PAGES = 3;
+
+const PagesCell = ({ pages, ...view }: ViewProps & { pages: Link[] }) => (
+  <>
+    {pages.slice(0, VISIBLE_PAGES).map((page) => (
+      <PageRef link={page} {...view} />
+    ))}
+    {pages.length > VISIBLE_PAGES ? (
+      <details>
+        <summary>+{pages.length - VISIBLE_PAGES} more</summary>
+        {pages.slice(VISIBLE_PAGES).map((page) => (
+          <PageRef link={page} {...view} />
+        ))}
+      </details>
+    ) : null}
+  </>
+);
+
+/** One row per target link, with the pages to fix it on. Ignored groups also show why they are ignored. */
+const GroupRow = ({
+  group,
+  ignored,
+  ...view
+}: ViewProps & { group: TargetGroup<IgnoredLink>; ignored: boolean }) => (
+  <tr data-row="" data-kind={problemKind(group.link)}>
+    <td class="pb">
+      <Problem link={group.link} />
+    </td>
+    <td class="lk">
+      <LinkCell link={group.link} {...view} />
+      <Reason link={group.link} {...view} />
+    </td>
+    <td>
+      <PagesCell pages={group.pages} {...view} />
+    </td>
+    {/* Baseline reasons are optional, the cell is always there to keep the columns aligned */}
+    {ignored ? <td class="rs">{group.link.ignoreReason ?? ""}</td> : null}
+    <td>
+      <CopyButton href={group.link.href} />
+    </td>
+  </tr>
+);
+
+const ByLinkTable = ({
+  groups,
+  ignored = false,
+  ...view
+}: ViewProps & { groups: TargetGroup<IgnoredLink>[]; ignored?: boolean }) => (
+  <table>
     <thead>
-      <tr className="bg-gray-100">
-        <th className="py-2 px-4 border-b text-left">Page</th>
-        <th className="py-2 px-4 border-b text-left">Link</th>
-        <th className="py-2 px-4 border-b text-left">Result</th>
+      <tr>
+        <th>Problem</th>
+        <th>Link</th>
+        <th>Pages</th>
+        {ignored ? <th>Ignored because</th> : null}
+        <th />
       </tr>
     </thead>
     <tbody>
-      {links.map((link, index) => (
-        // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
-        <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
-          <td className="py-2 px-4 border-b break-all sm:break-words">
-            <PageCell link={link} options={options} />
-          </td>
-          <td className="py-2 px-4 border-b break-all sm:break-words">
-            <LinkCell link={link} options={options} />
-            {/* Copied by the script in `renderReportToHTML`, no inline JS so any URL is safe */}
-            <button
-              type="button"
-              data-copy-href={link.href}
-              className="ml-2 hover:bg-gray-200 rounded p-1"
-              title="Copy link to clipboard"
-            >
-              📋
-            </button>
-          </td>
-
-          <td className="py-2 px-4 border-b">
-            <ResultRenderer link={link} />
-          </td>
-        </tr>
+      {groups.map((group) => (
+        <GroupRow group={group} ignored={ignored} {...view} />
       ))}
     </tbody>
   </table>
 );
 
-type IgnoredGroup = {
-  /** First occurrence. Its result and reason represent the group. */
-  link: IgnoredLink;
-  occurrences: IgnoredLink[];
-};
-
-const LOCAL_LINK_BASE = "https://local.invalid/";
-
-/**
- * What the ignored link points at.
- * An http(s) href is itself. Anything else is resolved against the page it was found on, the same way
- * `checkLocalLink` resolves it: `missing.md` in `a/README.md` and `b/README.md` are different files.
- */
-const ignoredTargetKey = (link: { href: string; page: string }): string => {
-  if (isHttpUrl(link.href)) {
-    return link.href;
-  }
-  try {
-    if (isHttpUrl(link.page)) {
-      return new URL(link.href, link.page).href;
-    }
-    const url = link.href.startsWith("/")
-      ? new URL(link.href.replace(/^\/+/, ""), LOCAL_LINK_BASE)
-      : new URL(link.href, new URL(encodePath(link.page), LOCAL_LINK_BASE));
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return JSON.stringify([link.page, link.href]);
-  }
-};
-
-const ignoredGroupKey = (link: IgnoredLink): string =>
-  JSON.stringify([
-    ignoredTargetKey(link),
-    link.result.ok ? "ok" : link.result.error,
-    link.result.ok ? "" : (link.result.status ?? ""),
-    link.ignoreReason ?? "",
-  ]);
-
-// One row per target, error, status, and ignore reason.
-// errorDetail stays out of the key. A Cloudflare challenge page changes on every request, so it would split the group into one row per page.
-const groupIgnoredLinks = (links: IgnoredLink[]): IgnoredGroup[] => {
-  const groups = new Map<string, IgnoredGroup>();
+const groupByPage = (links: LinkWithResult[]): Map<string, LinkWithResult[]> => {
+  const pages = new Map<string, LinkWithResult[]>();
   for (const link of links) {
-    const key = ignoredGroupKey(link);
-    const group = groups.get(key);
-    if (group) {
-      group.occurrences.push(link);
+    const pageLinks = pages.get(link.page);
+    if (pageLinks) {
+      pageLinks.push(link);
     } else {
-      groups.set(key, { link, occurrences: [link] });
+      pages.set(link.page, [link]);
     }
   }
-  return [...groups.values()];
+  return pages;
 };
 
-const IgnoredPages = ({
-  links,
-  options,
-  showText,
-}: {
-  links: IgnoredLink[];
-  options: RenderOptions;
-  showText: boolean;
-}) => {
-  const page = (link: IgnoredLink) => (
-    <>
-      <PageCell link={link} options={options} />
-      {showText ? <> 🔗"{link.text}"</> : null}
-    </>
-  );
-  const only = links[0];
-  if (links.length === 1 && only) {
-    return page(only);
-  }
+/** Links grouped by the page they are on (a page is a heading row, its links follow) */
+const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }) => {
+  // The line column is only for local files
+  const hasLines = links.some((link) => link.line);
   return (
-    <details>
-      <summary>{links.length} occurrences</summary>
-      <ul className="list-disc pl-5 mt-2">
-        {links.map((link, index) => (
-          // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
-          <li key={index}>{page(link)}</li>
-        ))}
-      </ul>
-    </details>
-  );
-};
-
-const IgnoredLinksTable = ({
-  groups,
-  options,
-}: {
-  groups: IgnoredGroup[];
-  options: RenderOptions;
-}) => (
-  <table className="border-collapse border border-gray-300 mb-6">
-    <thead>
-      <tr className="bg-gray-100">
-        <th className="py-2 px-4 border-b text-left">Link</th>
-        <th className="py-2 px-4 border-b text-left">Result</th>
-        <th className="py-2 px-4 border-b text-left">Pages</th>
-      </tr>
-    </thead>
-    <tbody>
-      {groups.map((group, index) => {
-        const sameText = group.occurrences.every((item) => item.text === group.link.text);
+    <table>
+      <thead>
+        <tr>
+          {hasLines ? <th>Line</th> : null}
+          <th>Problem</th>
+          <th>Link</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      {[...groupByPage(links)].map(([page, pageLinks]) => {
+        const url = isHttpUrl(page)
+          ? safeHref(page)
+          : getLocalFileUrl(view.options.sourceBaseUrl, page);
+        const name = displayUrl(page, view.siteOrigin);
         return (
-          // oxlint-disable-next-line react/no-array-index-key -- rendered once to static HTML, rows are never reordered, and the same link can appear twice
-          <tr key={index} className={index % 2 === 0 ? "bg-gray-50" : "bg-white"}>
-            <td className="py-2 px-4 border-b break-all sm:break-words">
-              <LinkCell link={group.link} options={options} showText={sameText} />
-              <button
-                type="button"
-                data-copy-href={group.link.href}
-                className="ml-2 hover:bg-gray-200 rounded p-1"
-                title="Copy link to clipboard"
-              >
-                📋
-              </button>
-            </td>
-            <td className="py-2 px-4 border-b">
-              <ResultRenderer link={group.link} />
-            </td>
-            <td className="py-2 px-4 border-b break-all sm:break-words">
-              <IgnoredPages links={group.occurrences} options={options} showText={!sameText} />
-            </td>
-          </tr>
+          <tbody data-page={page}>
+            <tr class="ph">
+              <td colSpan={hasLines ? 4 : 3}>
+                {url ? (
+                  <a href={url} target="_blank" rel="noopener">
+                    {name}
+                  </a>
+                ) : (
+                  name
+                )}{" "}
+                <span class="muted">{pageLinks.length}</span>
+              </td>
+            </tr>
+            {pageLinks.map((link) => (
+              <tr data-row="" data-kind={problemKind(link)} data-page={page}>
+                {hasLines ? <td class="mono muted">{link.line ? `:${link.line}` : ""}</td> : null}
+                <td class="pb">
+                  <Problem link={link} />
+                </td>
+                <td class="lk">
+                  <LinkCell link={link} {...view} />
+                  {link.text ? <span class="txt">"{link.text}"</span> : null}{" "}
+                  <CopyButton href={link.href} />
+                </td>
+                <td>
+                  <Reason link={link} {...view} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
         );
       })}
-    </tbody>
-  </table>
-);
+    </table>
+  );
+};
+
+const formatDuration = (ms: number): string => {
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+  // Round once, then split: rounding the seconds alone turns 119.9s into `1m 0s`
+  const seconds = Math.round(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60
+    ? `${minutes}m ${seconds % 60}s`
+    : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+};
+
+const Sep = () => <span class="sep">·</span>;
+
+const Stats = ({ report }: { report: LinkCheckReport }) => {
+  const { summary } = report;
+  const counts = countByKind([...getLinksToFix(report), ...report.couldNotCheck]);
+  const filters = [
+    ["broken", counts.broken, "broken"],
+    ["anchor", counts.anchor, "anchor"],
+    ["network", counts.network, "network error"],
+    ["check", counts.check, "could not check"],
+  ] as const;
+  return (
+    <p class="stats">
+      {filters
+        .filter(([kind, count]) => count > 0 || kind !== "network")
+        .map(([kind, count, label]) => (
+          <>
+            <button type="button" data-kind-filter={kind} aria-pressed="false">
+              {count} {label}
+            </button>
+            <Sep />
+          </>
+        ))}
+      {summary.ignored > 0 ? (
+        <a href="#ignored">{summary.ignored} ignored</a>
+      ) : (
+        <span class="muted">0 ignored</span>
+      )}
+      <Sep />
+      {summary.linksChecked.toLocaleString("en-US")} checked
+    </p>
+  );
+};
 
 const JSONReportRenderer = ({
   report,
@@ -429,58 +479,88 @@ const JSONReportRenderer = ({
   report: LinkCheckReport;
   options: RenderOptions;
 }) => {
-  const allBrokenLinks = [
-    ...report.brokenLinks,
-    ...report.hashNotFound,
-    ...report.networkErrors,
-    ...report.couldNotCheck,
-  ];
-  const ignoredGroups = groupIgnoredLinks(report.ignored);
-  const uniqueIgnoredLinks = new Set(report.ignored.map((link) => ignoredTargetKey(link))).size;
+  const { summary } = report;
+  const toFix = getLinksToFix(report);
+  const all = [...toFix, ...report.couldNotCheck];
+  // The checked site: pages are shown without its origin
+  const siteOrigin = findSiteOrigin([...all, ...report.ignored]);
+  const view: ViewProps = { options, ...(siteOrigin ? { siteOrigin } : {}) };
+  const ignoredGroups = groupByTarget(report.ignored);
+  // Links to fix first, then those that could not be checked
+  const groups = [...groupByTarget(toFix), ...groupByTarget(report.couldNotCheck)];
+  const failed = summary.totalLinksToFix > 0;
   return (
-    <div className="overflow-x-auto min-w-[720px] max-w-[1280px] mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold mb-6">Link Check Report for {report.siteName}</h1>
+    <>
+      <header>
+        <h1>
+          {report.siteName}{" "}
+          <span class={failed ? "bad" : "ok"}>
+            {failed ? `${summary.totalLinksToFix} to fix` : "✓ OK"}
+          </span>
+        </h1>
+        <Stats report={report} />
+        <p class="muted">
+          {report.generatedAt.slice(0, 16).replace("T", " ")} UTC
+          <Sep />
+          {formatDuration(report.durationMs)}
+          {report.diff ? (
+            <>
+              <Sep />+{report.diff.new} new, {report.diff.fixed} fixed
+            </>
+          ) : null}
+          <Sep />
+          <a href={basename(getReportPaths(report.siteName).json)}>JSON</a>
+        </p>
+      </header>
 
-      <div className="bg-gray-100 p-4 rounded-lg mb-6">
-        <h2 className="text-xl font-semibold mb-3">Summary</h2>
-        <ul className="list-disc pl-5">
-          <li>Links checked: {report.summary.linksChecked}</li>
-          <li>Total links to fix: {report.summary.totalLinksToFix}</li>
-          <li>Broken links: {report.summary.brokenLinks}</li>
-          <li>Hash not found: {report.summary.hashNotFound}</li>
-          <li>Network errors: {report.summary.networkErrors}</li>
-          <li>Could not check: {report.summary.couldNotCheck}</li>
-          <li>Ignored (baseline): {report.summary.ignored}</li>
-        </ul>
-      </div>
-
-      <LinksTable links={allBrokenLinks} options={options} />
+      {all.length > 0 ? (
+        <>
+          <div class="bar" id="bar" hidden>
+            <input
+              type="search"
+              id="q"
+              aria-label="Filter links"
+              placeholder="Filter by URL, page or text"
+            />
+            <span class="view">
+              <button type="button" data-view="link" aria-pressed="true">
+                By link
+              </button>
+              <Sep />
+              <button type="button" data-view="page" aria-pressed="false">
+                By page
+              </button>
+            </span>
+            <span class="muted" id="count" />
+          </div>
+          <main>
+            <div id="by-link">
+              <ByLinkTable groups={groups} {...view} />
+            </div>
+            <div id="by-page" hidden>
+              <ByPageTable links={all} {...view} />
+            </div>
+          </main>
+        </>
+      ) : (
+        // Not "all OK": baseline-ignored and unchecked links can still be in the report
+        <p class="ok">✓ No links to fix</p>
+      )}
 
       {ignoredGroups.length > 0 ? (
-        <section data-section="ignored">
-          <h2 className="text-xl font-semibold mb-3">Ignored (matched the baseline file)</h2>
-          {uniqueIgnoredLinks < report.ignored.length ? (
-            <p className="mb-3 text-gray-600">
-              {uniqueIgnoredLinks} unique {uniqueIgnoredLinks === 1 ? "link" : "links"} (
-              {report.ignored.length} occurrences)
-            </p>
-          ) : null}
-          <IgnoredLinksTable groups={ignoredGroups} options={options} />
+        <section>
+          <details id="ignored" data-section="ignored">
+            <summary>
+              {summary.ignored} ignored by baseline ({ignoredGroups.length}{" "}
+              {ignoredGroups.length === 1 ? "link" : "links"})
+            </summary>
+            <ByLinkTable groups={ignoredGroups} ignored {...view} />
+          </details>
         </section>
       ) : null}
-    </div>
+    </>
   );
 };
-
-// Copies the link from the `data-copy-href` attribute of the clicked copy button
-const COPY_LINK_SCRIPT = `
-document.addEventListener("click", function (event) {
-  var button = event.target instanceof Element ? event.target.closest("[data-copy-href]") : null;
-  if (button) {
-    navigator.clipboard.writeText(button.getAttribute("data-copy-href") || "");
-  }
-});
-`;
 
 /**
  * Renders the report as a full HTML page. All dynamic values are escaped by Preact.
@@ -489,22 +569,24 @@ export function renderReportToHTML(
   jsonReport: LinkCheckReport,
   options: RenderOptions = {},
 ): string {
-  const htmlString = renderToStaticMarkup(
-    <JSONReportRenderer report={jsonReport} options={options} />,
-  );
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Link Check Report</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-      </head>
-      <body>
-        <div id="root">${htmlString}</div>
-        <script>${COPY_LINK_SCRIPT}</script>
-      </body>
-    </html>
-  `;
+  const { siteName, summary } = jsonReport;
+  const status = summary.totalLinksToFix > 0 ? `✗ ${summary.totalLinksToFix} to fix` : "✓ OK";
+  const title = renderToStaticMarkup(<title>{`${status} · ${siteName}`}</title>);
+  const body = renderToStaticMarkup(<JSONReportRenderer report={jsonReport} options={options} />);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${title}
+<style>${REPORT_CSS}</style>
+</head>
+<body>
+${body}
+<script>${REPORT_SCRIPT}</script>
+</body>
+</html>
+`;
 }
 
 function renderReportToHTMLFile(
@@ -539,9 +621,7 @@ export function saveReport(
   mkdirSync(outputDir, { recursive: true });
 
   writeFileSync(paths.json, JSON.stringify(report, null, 2));
-  console.log(`Saved JSON report to ${paths.json}`);
 
   renderReportToHTMLFile(report, paths.html, options);
-  console.log(`Saved HTML report to ${paths.html}`);
   return paths;
 }

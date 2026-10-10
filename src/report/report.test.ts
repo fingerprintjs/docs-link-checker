@@ -4,6 +4,8 @@ import { createBaseline } from "../baseline";
 import type { LinkWithResult } from "../types";
 import { getJSONReport, renderReportToHTML } from "./report";
 
+const RUN = { generatedAt: new Date("2026-01-02T03:04:05Z"), durationMs: 1234 };
+
 const EVIL_HREF = `https://example.com/it's"quoted"?q=<script>alert(1)</script>`;
 
 const links: LinkWithResult[] = [
@@ -26,7 +28,7 @@ const links: LinkWithResult[] = [
   },
 ];
 
-const html = renderReportToHTML(getJSONReport({ links, siteName: `<b>site</b>` }));
+const html = renderReportToHTML(getJSONReport({ ...RUN, links, siteName: `<b>site</b>` }));
 const $ = cheerio.load(html);
 
 describe("renderReportToHTML()", () => {
@@ -35,17 +37,28 @@ describe("renderReportToHTML()", () => {
     expect($("[onclick], [onerror]").length).toBe(0);
   });
 
+  it("is self-contained: no external scripts, styles or requests", () => {
+    expect($("script[src], link[rel=stylesheet], img, iframe").length).toBe(0);
+    expect(html).not.toContain("tailwind");
+  });
+
   it("stores the link to copy in a data attribute, with the exact URL", () => {
-    const buttons = $("button[data-copy-href]");
+    const buttons = $("#by-link button[data-copy-href]");
     expect(buttons.length).toBe(2);
     expect(buttons.first().attr("data-copy-href")).toBe(EVIL_HREF);
+  });
+
+  it("shows the status as a decorative glyph plus a text label", () => {
+    const cell = $("#by-link tbody tr").first().find("td").first();
+    expect(cell.find("[aria-hidden=true]").text()).toBe("●");
+    expect(cell.clone().children().remove().end().text()).toBe("HTTP 404");
   });
 
   it("escapes all dynamic text", () => {
     // Injected markup must not become elements or script code
     expect($("script").text()).not.toContain("alert(");
     expect($("b").length).toBe(0);
-    expect($("h1").text()).toBe("Link Check Report for <b>site</b>");
+    expect($("h1").text()).toBe("<b>site</b> 2 to fix");
     expect($("pre").first().text()).toBe("<img src=x onerror=alert(1)>");
   });
 
@@ -56,10 +69,159 @@ describe("renderReportToHTML()", () => {
     expect(hrefs.some((href) => href.startsWith("javascript:"))).toBe(false);
     expect(hrefs).toContain(EVIL_HREF);
   });
+
+  it("links pages with a text fragment of the link text", () => {
+    const pageLink = $("#by-link tbody tr").first().find("td").eq(2).find("a");
+    expect(pageLink.attr("href")).toBe(
+      `https://example.com/page#:~:text=${encodeURIComponent(links[0]!.text)}`,
+    );
+    expect(pageLink.text()).toBe("/page");
+  });
+});
+
+describe("renderReportToHTML() header", () => {
+  const render = (overrides: Parameters<typeof getJSONReport>[0]) =>
+    cheerio.load(renderReportToHTML(getJSONReport(overrides)));
+
+  it("puts the status in the title and a short stats line in the header", () => {
+    expect($("title").text()).toBe("✗ 2 to fix · <b>site</b>");
+    const stats = $(".stats").text();
+    expect(stats).toContain("2 broken");
+    expect(stats).toContain("0 anchor");
+    expect(stats).toContain("0 ignored");
+    expect(stats).toContain("2 checked");
+    expect($("header").text()).toContain("2026-01-02 03:04 UTC");
+    expect($("header").text()).toContain("1.2s");
+    expect($("header a[href]").attr("href")).toBe("-b-site--b-.json");
+  });
+
+  it("shows the trend only when there is a previous report", () => {
+    expect($("header").text()).not.toContain("fixed");
+    const withDiff = render({
+      ...RUN,
+      links,
+      siteName: "site",
+      previous: {
+        linksToFix: [
+          { page: "https://example.com/old", href: "https://old/", error: "broken link" },
+        ],
+      },
+    });
+    expect(withDiff("header").text()).toContain("+2 new, 1 fixed");
+  });
+
+  it("shows one line when all links are OK", () => {
+    const ok = render({
+      ...RUN,
+      siteName: "site",
+      links: [
+        {
+          href: "https://example.com/",
+          page: "https://example.com/a",
+          text: "a",
+          result: { ok: true, status: 200 },
+        },
+      ],
+    });
+    expect(ok("title").text()).toBe("✓ OK · site");
+    expect(ok("h1").text()).toBe("site ✓ OK");
+    expect(ok("main").length).toBe(0);
+    expect(ok("body").text()).toContain("✓ No links to fix");
+  });
+
+  it("shows the redirect target and only the response body that adds information", () => {
+    const redirected = render({
+      ...RUN,
+      siteName: "site",
+      links: [
+        {
+          href: "https://old.example.com/x",
+          page: "https://example.com/a",
+          text: "a",
+          result: {
+            ok: false,
+            error: "broken link",
+            status: 404,
+            errorDetail: "Not Found",
+            redirectedTo: "https://new.example.com/x",
+          },
+        },
+        {
+          href: "https://example.com/missing",
+          page: "https://example.com/a",
+          text: "b",
+          result: {
+            ok: false,
+            error: "broken link",
+            status: 404,
+            errorDetail: "Not Found <!doctype html><p>Nothing here</p>",
+          },
+        },
+      ],
+    });
+    const rows = redirected("#by-link tbody tr");
+    expect(rows.eq(0).text()).toContain("→ redirects to new.example.com/x");
+    expect(rows.eq(0).find("pre")).toHaveLength(0);
+    expect(rows.eq(1).find("pre").text()).toBe("Not Found <!doctype html><p>Nothing here</p>");
+  });
+});
+
+describe("renderReportToHTML() views", () => {
+  const page = (path: string) => `https://example.com/${path}`;
+  const broken = (href: string, pageUrl: string, line?: number): LinkWithResult => ({
+    href,
+    page: pageUrl,
+    text: "text",
+    ...(line ? { line } : {}),
+    result: { ok: false, error: "broken link", status: 404, errorDetail: "Not Found" },
+  });
+  const report = getJSONReport({
+    ...RUN,
+    siteName: "site",
+    links: [
+      ...["a", "b", "c", "d", "e"].map((name) => broken("https://gone.example/x", page(name))),
+      broken("https://gone.example/y", page("a")),
+      {
+        href: "https://example.com/doc#nope",
+        page: page("b"),
+        text: "t",
+        result: { ok: false, error: "hash not found" },
+      },
+    ],
+  });
+  const $views = cheerio.load(renderReportToHTML(report));
+
+  it("by link: one row per target, most pages first, with the first 3 pages and the rest folded", () => {
+    const rows = $views("#by-link tbody tr");
+    expect(rows).toHaveLength(3);
+    expect(rows.eq(0).text()).toContain("gone.example/x");
+    expect(rows.eq(0).children("td").eq(2).children(".pg")).toHaveLength(3);
+    expect(rows.eq(0).find("details summary").text()).toBe("+2 more");
+    expect(rows.eq(0).find("details .pg")).toHaveLength(2);
+    expect(rows.eq(0).attr("data-kind")).toBe("broken");
+    expect(rows.eq(2).attr("data-kind")).toBe("anchor");
+    // The anchor is highlighted and the site origin is dropped
+    expect(rows.eq(2).find(".hash").text()).toBe("#nope");
+    expect(rows.eq(2).find("td").eq(1).text()).toContain("/doc#nope");
+  });
+
+  it("by page: links are grouped under their page", () => {
+    const pages = $views("#by-page tbody[data-page]");
+    expect(pages).toHaveLength(5);
+    const b = pages.filter((_, el) => $views(el).attr("data-page") === page("b"));
+    expect(b.find("tr[data-row]")).toHaveLength(2);
+    expect(b.find("tr.ph").text()).toContain("/b");
+    expect($views("#by-page").attr("hidden")).toBeDefined();
+  });
+
+  it("starts with the toolbar hidden (it needs the script)", () => {
+    expect($views("#bar").attr("hidden")).toBeDefined();
+  });
 });
 
 describe("renderReportToHTML() with ignored links", () => {
   const report = getJSONReport({
+    ...RUN,
     links: [
       { ...links[0]!, href: "https://broken.com/" },
       { ...links[0]!, href: "https://ignored.com/", page: "docs/a.md", line: 7 },
@@ -69,16 +231,17 @@ describe("renderReportToHTML() with ignored links", () => {
   });
   const $ignored = cheerio.load(renderReportToHTML(report));
 
-  it("renders ignored links in a separate section with the reason and line", () => {
+  it("renders ignored links in a collapsed section with the reason and line", () => {
     const section = $ignored("[data-section=ignored]");
     expect(section.length).toBe(1);
+    expect(section.attr("open")).toBeUndefined();
+    expect(section.find("summary").first().text()).toBe("1 ignored by baseline (1 link)");
     expect(section.find("tbody tr").length).toBe(1);
     expect(section.text()).toContain("docs/a.md:7");
-    expect(section.text()).toContain("Ignored: <i>known</i>");
-    expect(section.text()).not.toContain("unique");
+    expect(section.find("tbody td.rs").text()).toBe("<i>known</i>");
     expect(section.find("i").length).toBe(0);
-    expect($ignored("table").first().text()).toContain("https://broken.com/");
-    expect($ignored("table").first().text()).not.toContain("https://ignored.com/");
+    expect($ignored("#by-link").text()).toContain("broken.com/");
+    expect($ignored("#by-link").text()).not.toContain("ignored.com/");
   });
 
   it("has no ignored section without ignored links", () => {
@@ -93,6 +256,7 @@ describe("renderReportToHTML() with ignored links", () => {
       errorDetail: "<html>challenge</html>",
     };
     const groupedReport = getJSONReport({
+      ...RUN,
       siteName: "site",
       links: [
         {
@@ -115,6 +279,12 @@ describe("renderReportToHTML() with ignored links", () => {
         },
         {
           href: "https://twitter.com/x",
+          page: "https://docs.example.com/d",
+          text: "x",
+          result: couldNotCheck,
+        },
+        {
+          href: "https://twitter.com/x",
           page: "docs/local.md",
           text: "x",
           line: 4,
@@ -132,36 +302,35 @@ describe("renderReportToHTML() with ignored links", () => {
         { href: "https://other.example/", reason: "known" },
       ]),
     });
-    expect(groupedReport.summary.ignored).toBe(5);
+    expect(groupedReport.summary.ignored).toBe(6);
     const $grouped = cheerio.load(renderReportToHTML(groupedReport));
     const section = $grouped("[data-section=ignored]");
     const rows = section.find("tbody tr");
 
     expect(rows.length).toBe(3);
-    expect(section.text()).toContain("2 unique links (5 occurrences)");
+    expect(section.find("summary").first().text()).toBe("6 ignored by baseline (3 links)");
 
     const twitter = rows.eq(0);
-    expect(
-      twitter.find("summary").filter((_, el) => $grouped(el).text() === "3 occurrences"),
-    ).toHaveLength(1);
-    expect(twitter.find("ul li").length).toBe(3);
-    expect(twitter.text()).toContain("https://docs.example.com/a");
-    expect(twitter.text()).toContain("https://docs.example.com/c");
+    expect(twitter.children("td").eq(2).children(".pg")).toHaveLength(3);
+    expect(twitter.children("td").eq(2).find("summary").text()).toBe("+1 more");
+    expect(twitter.text()).toContain("/a");
     expect(twitter.text()).toContain('"follow"');
+    expect(twitter.find("td.rs").text()).toBe("bot wall");
     expect(twitter.find("pre")).toHaveLength(1);
     expect(twitter.find("pre").text()).toBe("<html>challenge</html>");
     expect(twitter.find("button[data-copy-href]")).toHaveLength(1);
 
     const twitterBroken = rows.eq(1);
     expect(twitterBroken.text()).toContain("docs/local.md:4");
-    expect(twitterBroken.text()).toContain("broken link");
-    expect(twitterBroken.find("ul")).toHaveLength(0);
-    expect(twitterBroken.find("pre").text()).toBe("missing");
+    expect(twitterBroken.text()).toContain("HTTP 404");
+    expect(twitterBroken.find("details")).toHaveLength(0);
+    // The response body only repeats the reason
+    expect(twitterBroken.find("pre")).toHaveLength(0);
 
     const other = rows.eq(2);
-    expect(other.find("ul")).toHaveLength(0);
+    expect(other.find("details")).toHaveLength(1); // the response body, no folded pages
     expect(other.text()).toContain('"Other"');
-    expect(other.text()).toContain("Ignored: known");
+    expect(other.find("td.rs").text()).toBe("known");
     expect(other.find("button[data-copy-href]").attr("data-copy-href")).toBe(
       "https://other.example/",
     );
@@ -174,6 +343,7 @@ describe("renderReportToHTML() with ignored links", () => {
       errorDetail: "File not found",
     };
     const localIgnored = getJSONReport({
+      ...RUN,
       siteName: "local files",
       links: [
         {
@@ -198,19 +368,23 @@ describe("renderReportToHTML() with ignored links", () => {
     const rows = $local("[data-section=ignored] tbody tr");
 
     expect(rows).toHaveLength(3);
-    expect($local("[data-section=ignored]").text()).toContain("3 unique links (5 occurrences)");
+    expect($local("[data-section=ignored] summary").first().text()).toBe(
+      "5 ignored by baseline (3 links)",
+    );
+    // No reason in the baseline: the reason cell is still there, the copy button stays in its column
+    const headerCells = $local("[data-section=ignored] thead th").length;
+    rows.each((_, row) => {
+      expect($local(row).children("td")).toHaveLength(headerCells);
+    });
 
-    const byDetail = (detail: string) =>
-      rows.filter((_, row) => $local(row).text().includes(detail));
-    expect(byDetail("missing in a")).toHaveLength(1);
-    expect(byDetail("missing in a").text()).toContain("a/README.md");
-    expect(byDetail("missing in b").text()).toContain("b/README.md");
+    const byReason = (reason: string) =>
+      rows.filter((_, row) => $local(row).text().includes(reason));
+    expect(byReason("missing in a")).toHaveLength(1);
+    expect(byReason("missing in a").text()).toContain("a/README.md");
+    expect(byReason("missing in b").text()).toContain("b/README.md");
 
-    const gone = byDetail("File not found");
+    const gone = rows.filter((_, row) => $local(row).find(".pg").length === 3);
     expect(gone).toHaveLength(1);
-    expect(
-      gone.find("summary").filter((_, el) => $local(el).text() === "3 occurrences"),
-    ).toHaveLength(1);
     expect(gone.text()).toContain("docs/guide.md:2");
     expect(gone.text()).toContain("README.md:9");
   });
@@ -226,6 +400,7 @@ describe("renderReportToHTML() for local files", () => {
     result: { ok: false, error: "broken link", errorDetail: "File not found" },
   });
   const report = getJSONReport({
+    ...RUN,
     siteName: "local files",
     links: [
       local("docs/guide.md", "../missing.md", 7),
@@ -237,7 +412,7 @@ describe("renderReportToHTML() for local files", () => {
   });
   const hrefs = (markup: string) => {
     const $markup = cheerio.load(markup);
-    return $markup("td a[href]")
+    return $markup("#by-link td a[href]")
       .map((_, a) => $markup(a).attr("href"))
       .get();
   };
@@ -246,24 +421,43 @@ describe("renderReportToHTML() for local files", () => {
     const $local = cheerio.load(renderReportToHTML(report));
     // Only the absolute link is a link
     expect(hrefs(renderReportToHTML(report))).toEqual(["https://example.com/x"]);
-    expect($local("td code").first().text()).toBe("docs/guide.md:7");
-    expect($local("[data-local-link] code").first().text()).toContain("../missing.md");
+    expect($local("#by-link code").first().text()).toBe("docs/guide.md:7");
+    expect($local("#by-link [data-local-link]").first().text()).toBe("../missing.md");
     // No anchor without href (nothing to click)
     expect($local("td a:not([href])").length).toBe(0);
   });
 
   it("links local pages (with the line) and relative links to the checked files", () => {
+    // Per row: the link, then its page
     expect(hrefs(renderReportToHTML(report, { sourceBaseUrl: BASE }))).toEqual([
-      `${BASE}docs/guide.md#L7`,
       `${BASE}missing.md`,
-      `${BASE}docs/guide.md#L3`,
+      `${BASE}docs/guide.md#L7`,
       `${BASE}docs/guide.md#nope`,
-      `${BASE}docs/my%20file.md`,
+      `${BASE}docs/guide.md#L3`,
       `${BASE}root.md`,
-      `${BASE}docs/guide.md#L9`,
+      `${BASE}docs/my%20file.md`,
       // ../../../../escape.md would leave the repository: not linked
-      `${BASE}docs/guide.md#L11`,
+      `${BASE}docs/guide.md#L9`,
       "https://example.com/x",
+      `${BASE}docs/guide.md#L11`,
     ]);
+  });
+});
+
+describe("getJSONReport() metadata", () => {
+  it("has the schema version and the time and duration it is given", () => {
+    const report = getJSONReport({ ...RUN, links: [], siteName: "site" });
+
+    expect(report).toMatchObject({
+      schemaVersion: 1,
+      generatedAt: "2026-01-02T03:04:05.000Z",
+      durationMs: 1234,
+    });
+    expect(report).not.toHaveProperty("diff");
+  });
+
+  it("shows a duration just under 2 minutes as 2m 0s", () => {
+    const report = getJSONReport({ ...RUN, durationMs: 119_999, links: [], siteName: "site" });
+    expect(cheerio.load(renderReportToHTML(report))("header").text()).toContain("2m 0s");
   });
 });
