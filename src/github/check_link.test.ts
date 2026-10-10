@@ -262,23 +262,42 @@ describe("checkLinkWithGithubApi() missing resources", () => {
       "https://github.com/o/r/releases/x",
       { status: 404, errorDetail: "Invalid release URL format" },
     ],
+    // The whole segment must be a positive integer, not just start with one
+    ["https://github.com/o/r/issues/12abc", { errorDetail: "Invalid issue number format: 12abc" }],
+    ["https://github.com/o/r/issues/0", { errorDetail: "Invalid issue number format: 0" }],
+    [
+      "https://github.com/o/r/pull/34abc",
+      { status: 404, errorDetail: "Invalid pull request number" },
+    ],
+    [
+      "https://github.com/o/r/pull/99999999999999999999",
+      { status: 404, errorDetail: "Invalid pull request number" },
+    ],
+    [
+      "https://github.com/o/r/releases/123abc",
+      { status: 404, errorDetail: "Invalid release URL format" },
+    ],
   ])("reports %s as broken link without a request", async (url, expected) => {
     noToken = true;
     expect(await checkInRun(url)).toEqual({ ok: false, error: "broken link", ...expected });
   });
 
-  it.each(["constructor/x", "toString/x", "__proto__/x", "wat", "discussions/categories/news"])(
-    "reports /o/r/%s as an unknown link type (re-checked in the browser)",
-    async (path) => {
-      noToken = true;
-      expect(await checkInRun(`https://github.com/o/r/${path}`)).toEqual({
-        ok: false,
-        error: "unexpected error",
-        status: 400,
-        errorDetail: `Unknown link type: ${path}`,
-      });
-    },
-  );
+  it.each([
+    "constructor/x",
+    "toString/x",
+    "__proto__/x",
+    "wat",
+    "discussions/categories/news",
+    "discussions/9abc",
+  ])("reports /o/r/%s as an unknown link type (re-checked in the browser)", async (path) => {
+    noToken = true;
+    expect(await checkInRun(`https://github.com/o/r/${path}`)).toEqual({
+      ok: false,
+      error: "unexpected error",
+      status: 400,
+      errorDetail: `Unknown link type: ${path}`,
+    });
+  });
 });
 
 describe("checkLinkWithGithubApi() unknown accounts", () => {

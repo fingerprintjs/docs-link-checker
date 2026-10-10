@@ -90,6 +90,12 @@ const checkExists = async (
 /** Sections whose index page (`/owner/repo/issues`) exists for every repository */
 const SECTIONS_WITH_INDEX_PAGE = new Set(["issues", "discussions", "releases", "pulls"]);
 
+/** A whole path segment that is a positive integer (`12`, not `12abc`, `0` or `1e3`), `undefined` otherwise */
+const parseNumber = (segment: string): number | undefined => {
+  const number = /^\d+$/.test(segment) ? Number(segment) : Number.NaN;
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
+};
+
 const parseRelease = (target: Repo, [kind = "", ...rest]: string[]): GithubTarget => {
   if (kind === "download") {
     const [tag = "", asset = ""] = rest;
@@ -102,8 +108,8 @@ const parseRelease = (target: Repo, [kind = "", ...rest]: string[]): GithubTarge
     // Tags can contain slashes (`@fingerprint/vue@2.0.0`), written encoded (`%2F`) or not
     return { kind: "release-tag", ...target, tag: rest.join("/") };
   }
-  const releaseId = parseInt(kind, 10);
-  if (!Number.isNaN(releaseId)) {
+  const releaseId = parseNumber(kind);
+  if (releaseId !== undefined) {
     return { kind: "release", ...target, releaseId };
   }
   return { kind: "result", result: brokenLink("Invalid release URL format", 404) };
@@ -139,21 +145,21 @@ const parseGithubUrl = (url: URL): GithubTarget => {
       if (first === "new") {
         return { kind: "result", result: OK };
       }
-      const issueNumber = parseInt(first, 10);
-      return Number.isNaN(issueNumber)
+      const issueNumber = parseNumber(first);
+      return issueNumber === undefined
         ? { kind: "result", result: brokenLink(`Invalid issue number format: ${first}`) }
         : { kind: "issue", ...target, issueNumber };
     }
     case "pull": {
-      const pullNumber = parseInt(first, 10);
-      return Number.isNaN(pullNumber)
+      const pullNumber = parseNumber(first);
+      return pullNumber === undefined
         ? { kind: "result", result: brokenLink("Invalid pull request number", 404) }
         : { kind: "pull", ...target, pullNumber };
     }
     case "discussions": {
-      const discussionNumber = parseInt(first, 10);
+      const discussionNumber = parseNumber(first);
       // Other discussion pages (`/discussions/categories/x`) are checked in the browser
-      return Number.isNaN(discussionNumber)
+      return discussionNumber === undefined
         ? unknown
         : { kind: "discussion", ...target, discussionNumber };
     }
