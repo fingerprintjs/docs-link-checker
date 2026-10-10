@@ -126,7 +126,7 @@ const withBodySnippet = (summary: string, body: string): string => {
  */
 export const judgePage = async (checker: PageChecker, load: PageLoad): Promise<PageVerdict> => {
   if (load.type === "no-response") {
-    return { ok: false, result: { ok: false, error: "broken link", status: 0 } };
+    return { ok: false, result: { ok: false, error: "broken link", errorDetail: "No response" } };
   }
   if (load.type === "error") {
     return {

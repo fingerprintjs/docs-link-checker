@@ -81,8 +81,8 @@ describe("judgePage()", () => {
     [
       "no response",
       { type: "no-response" },
-      fail({ ok: false, error: "broken link", status: 0 }),
-      fail({ ok: false, error: "broken link", status: 0 }),
+      fail({ ok: false, error: "broken link", errorDetail: "No response" }),
+      fail({ ok: false, error: "broken link", errorDetail: "No response" }),
     ],
   ];
 
@@ -303,7 +303,6 @@ describe("shouldRecheckWithPlaywright()", () => {
     ["broken 500", broken(500), true, false],
     ["broken 501", broken(501), true, false],
     ["broken without status (network error, timeout)", broken(), true, false],
-    ["broken with status 0 (no response)", broken(0), false, false],
     ["hash not found", { ok: false, error: "hash not found", status: 200 }, true, false],
     ["could not check", { ok: false, error: "could not check", status: 503 }, true, false],
     ["rate limited", { ok: false, error: "could not check", status: 429 }, true, false],
