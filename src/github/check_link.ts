@@ -555,13 +555,13 @@ const checkRepoTarget = async (
  * Callers must route wiki links, GitHub's own pages and non-GitHub URLs elsewhere (see `getInitialCheckMethod`).
  * @param signal stops the check (it timed out)
  */
-export const checkLinkWithGithubApi = (
+export const checkLinkWithGithubApi = async (
   url: string,
   signal: AbortSignal,
 ): Promise<LinkCheckResult> => {
   const target = parseGithubUrl(new URL(url));
   if (target.kind === "result") {
-    return Promise.resolve(target.result);
+    return target.result;
   }
   if (target.kind === "owner") {
     return checkOwner(url, target.owner, signal);
