@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { checkLinks } from "../src/link";
+import { checkLinks } from "../src/check/link";
 import { getRunContext, type RunMetrics, withRun } from "../src/run";
 import corpus from "./corpus.json";
 

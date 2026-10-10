@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import pLimit, { type LimitFunction } from "p-limit";
 import type { Browser, BrowserType } from "playwright";
-import type { MyOctokitInstance } from "./github/github_client";
-import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./limiter";
+import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./check/limiter";
+import type { MyOctokitInstance } from "./github/client";
 import { createSilentTerminal, formatDuration, type Terminal } from "./terminal";
 
 // How many Playwright pages (browser contexts) are open at the same time

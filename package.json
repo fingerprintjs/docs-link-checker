@@ -26,7 +26,7 @@
     "knip": "knip",
     "check": "pnpm run format:check && pnpm run lint && pnpm run tsc && pnpm run knip",
     "check:fix": "oxfmt && oxlint --fix",
-    "gh-limit": "tsx --env-file-if-exists=.env ./checks/gh_rate_limit.ts"
+    "gh-limit": "tsx --env-file-if-exists=.env ./scripts/gh_rate_limit.ts"
   },
   "keywords": [],
   "author": "Juraj Uhlar, Fingerprint",

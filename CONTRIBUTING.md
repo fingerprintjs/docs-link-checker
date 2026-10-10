@@ -19,15 +19,12 @@
 ## Code
 
 - `src/cli.ts`. Commands, run, reports
-- `src/website.ts`. `site`
-- `src/github/gh_get_links.ts`. `github-org`
-- `src/local_files.ts`. `files`
-- `src/link.ts`. Shared check pipeline
-- `src/fetch_check.ts`, `src/playwright_check.ts`. One link
+- `src/sources/`. Where links come from: `website.ts` (`site`), `local_files.ts` (`files`)
+- `src/github/get_links.ts`. `github-org`
+- `src/check/`. Checking links: `link.ts` shared pipeline, `fetch_check.ts`, `playwright_check.ts` one link
 - `src/github/`. GitHub URL and blob checks
 - `src/baseline.ts`. Ignore file
-- `src/report/report.tsx`. JSON/HTML report
-- `src/github_actions.ts`. Job summary, annotations
+- `src/report/`. JSON/HTML report, CLI output, GitHub Actions job summary and annotations
 - `action.yml`. Reusable action
 - How a link is checked is in those files, not here
 
@@ -36,9 +33,9 @@
 - Daily checks: `.github/workflows/checkLinks.yaml`
 - PR sampling: `LINK_CHECK_SAMPLE_RATE` in `.github/workflows/checkLinks.yaml` (full run on main/schedule)
 - Reports: [GitHub Pages](https://fingerprintjs.github.io/docs-link-checker/)
-- Action selftest: `.github/workflows/action-selftest.yaml` on `test/action-fixture/`
+- Action selftest: `.github/workflows/action-selftest.yaml` on `src/__fixtures__/action/`
 - `linkcheck.baseline.json` ignores hosts that login-wall or block bots
   - Add a `reason`
   - Do not baseline real broken links
   - Format: [CLI](docs/cli.md#baseline-file)
-- `github-org` skips deprecated repos listed in `GITHUB_ORG_EXCLUDED_REPOS` (`src/github/gh_get_links.ts`)
+- `github-org` skips deprecated repos listed in `GITHUB_ORG_EXCLUDED_REPOS` (`src/github/get_links.ts`)

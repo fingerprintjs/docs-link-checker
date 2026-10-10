@@ -10,27 +10,17 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
-import { formatFileProblems, formatTargetGroups, formatVerdict } from "./cli_report";
-import {
-  checkReadmesInGithubOrg,
-  getGithubOrgSiteName,
-  OrgListingError,
-} from "./github/gh_get_links";
+import { parseHostConcurrency } from "./check/limiter";
+import { checkReadmesInGithubOrg, getGithubOrgSiteName, OrgListingError } from "./github/get_links";
+import { formatFileProblems, formatTargetGroups, formatVerdict } from "./report/cli";
+import { loadPreviousReport } from "./report/compare";
+import { formatLocation } from "./report/format";
 import {
   getFileAnnotations,
   getGithubBlobBaseUrl,
   writeGithubOutputs,
   writeJobSummary,
-} from "./github_actions";
-import { parseHostConcurrency } from "./limiter";
-import {
-  checkLocalFiles,
-  collectLinksFromFiles,
-  LOCAL_FILES_SITE_NAME,
-  NoMarkdownFilesError,
-} from "./local_files";
-import { loadPreviousReport } from "./report/compare";
-import { formatLocation } from "./report/format";
+} from "./report/github_actions";
 import {
   DEFAULT_OUTPUT_DIR,
   getJSONReport,
@@ -40,11 +30,17 @@ import {
   saveReport,
 } from "./report/report";
 import { type RunDeps, withRun } from "./run";
+import {
+  checkLocalFiles,
+  collectLinksFromFiles,
+  LOCAL_FILES_SITE_NAME,
+  NoMarkdownFilesError,
+} from "./sources/local_files";
+import { checkWebsite, createPrefixFilter } from "./sources/website";
 import { createTerminal, type Terminal } from "./terminal";
 import type { LinkWithResult } from "./types";
-import { getSampleRate } from "./utils";
 import { getErrorMessage } from "./utils/errors";
-import { checkWebsite, createPrefixFilter } from "./website";
+import { getSampleRate } from "./utils/parallel";
 
 export type CommonOptions = {
   sampleRate: number;

@@ -3,7 +3,7 @@
  * - Colors use `styleText`, it follows NO_COLOR / FORCE_COLOR and prints plain text when the stream is not a TTY:
  *   https://nodejs.org/api/util.html#utilstyletextformat-text-options
  * - On a TTY the progress is one line that is redrawn, otherwise a line is printed at most every 10%, after the first 5s of a step.
- * - Results and the verdict are formatted in `src/cli_report.ts`.
+ * - Results and the verdict are formatted in `src/report/cli.ts`.
  */
 import { styleText } from "node:util";
 

@@ -1,0 +1,170 @@
+import { fetchWithHostLimit } from "../check/http";
+import { checkLinks } from "../check/link";
+import { getTerminal, timePhase } from "../run";
+import { extractMarkdownLinks } from "../sources/markdown";
+import { filterOutIrrelevantLinks } from "../sources/page";
+import { plural } from "../terminal";
+import type { Link, LinkWithResult } from "../types";
+import { getErrorMessage } from "../utils/errors";
+import { parallelProcess, sampleItems } from "../utils/parallel";
+import { getRepoCached } from "./api";
+import { getMyOctokit } from "./client";
+
+/** Deprecated integrations: READMEs are unmaintained and would only add noise to org-wide checks. */
+const GITHUB_ORG_EXCLUDED_REPOS = new Set(["fingerprint-pro-segment-source-function"]);
+
+export interface MdFile {
+  sourcePath: string;
+  downloadUrl: string;
+}
+
+async function getOrgRepos(orgName: string) {
+  const octokit = getMyOctokit();
+  const repos = await octokit.paginate(octokit.repos.listForOrg, {
+    org: orgName,
+    type: "public",
+    per_page: 100,
+  });
+
+  return repos
+    .filter((repo) => repo.archived === false && !GITHUB_ORG_EXCLUDED_REPOS.has(repo.name))
+    .map((repo) => ({
+      full_name: repo.full_name,
+      owner: { login: repo.owner.login },
+      name: repo.name,
+    }));
+}
+
+async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFile[]> {
+  const octokit = getMyOctokit();
+  // Get the default branch (cached, links to the repository reuse the response)
+  const { data: repoData } = await getRepoCached(owner, repo);
+  const defaultBranch = repoData.default_branch;
+
+  // Get the complete tree with all files
+  const { data: treeData } = await octokit.git.getTree({
+    owner,
+    repo,
+    tree_sha: defaultBranch,
+    recursive: "1",
+  });
+
+  // Filter only markdown files
+  const mdFiles = treeData.tree
+    .filter((item) => item.type === "blob" && item.path.toLowerCase().endsWith("readme.md"))
+    .map((item) => ({
+      sourcePath: `https://github.com/${owner}/${repo}/blob/${defaultBranch}/${item.path}`,
+      downloadUrl: `https://raw.githubusercontent.com/${owner}/${repo}/${defaultBranch}/${item.path}`,
+    }));
+
+  return mdFiles;
+}
+
+/** The repositories of an organization cannot be listed (bad token, rate limit, unknown organization...) */
+export class OrgListingError extends Error {
+  override name = "OrgListingError";
+}
+
+/**
+ * Lists README files in all public, non-archived repositories of the organization
+ * (sampled according to `sampleRate`, default `LINK_CHECK_SAMPLE_RATE`).
+ * @throws {OrgListingError} if the repositories cannot be listed
+ */
+export async function getReadmesFromOrg(orgName: string, sampleRate?: number): Promise<MdFile[]> {
+  let repos: Awaited<ReturnType<typeof getOrgRepos>>;
+  try {
+    repos = await getOrgRepos(orgName);
+  } catch (error) {
+    throw new OrgListingError(
+      `Failed to list repositories of GitHub organization ${orgName}: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  getTerminal().verbose(`Found ${repos.length} public repositories in ${orgName} organization.`);
+
+  const { results, errors } = await parallelProcess({
+    items: repos,
+    label: "Listing README files",
+    processFn: async (repo) => {
+      return findReadmeFilesInRepo(repo.owner.login, repo.name);
+    },
+  });
+  if (errors.length > 0) {
+    // Already logged by parallelProcess, make it clear that the README list is incomplete
+    console.warn(
+      `Could not list README files in ${errors.length} repositories, their links will not be checked.`,
+    );
+  }
+  const readmes = results.flat();
+  getTerminal().verbose(
+    `Found ${readmes.length} public README files in ${repos.length} repositories of ${orgName} organization.`,
+  );
+  return sampleItems({
+    items: readmes,
+    key: (readme) => readme.sourcePath,
+    rate: sampleRate,
+    label: "README files",
+  });
+}
+
+/** The `https://github.com/owner/repo/blob/<ref>` prefix of a README's blob URL, to resolve repo-relative links */
+const extractGitHubRepoUrl = (url: string): string | undefined =>
+  url.match(/(https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+)/)?.[1];
+
+/**
+ * Resolves an href found in a README against the blob URL it was downloaded from:
+ * - A root-relative path (`/docs/a.md`) resolves against the repository, like GitHub renders it.
+ * - A `#hash` resolves against the page.
+ * - Anything else resolves against the page URL, absolute URLs are returned unchanged.
+ */
+export const resolveReadmeHref = (href: string, page: string): string => {
+  if (URL.canParse(href)) return href;
+  if (href.startsWith("#")) return `${page}${href}`;
+  const repoUrl = extractGitHubRepoUrl(page);
+  if (href.startsWith("/") && repoUrl) return `${repoUrl}${href}`;
+  return new URL(href, page).toString();
+};
+
+/** Downloads README files (limited per host) and extracts their links */
+export async function getReadmeLinks(files: MdFile[]): Promise<Link[]> {
+  const { results } = await parallelProcess({
+    items: files,
+    label: "Reading README files",
+    processFn: async (file) => {
+      const response = await fetchWithHostLimit(file.downloadUrl, {}, async (res) =>
+        res.ok ? res.text() : "",
+      );
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`Could not download ${file.downloadUrl}, status: ${response.status}`);
+      }
+      return extractMarkdownLinks(response.data).map(({ href, text }) => ({
+        page: file.sourcePath,
+        href: resolveReadmeHref(href, file.sourcePath),
+        text,
+      }));
+    },
+  });
+
+  const links = results.flat();
+  getTerminal().done(`Found ${plural(links.length, "link")} in ${plural(files.length, "file")}`);
+  return links;
+}
+
+/** Report name of an organization (`fingerprintjs` -> `fingerprintjs-github-readmes.html`) */
+export const getGithubOrgSiteName = (org: string) => `${org} GitHub readmes`;
+
+/**
+ * Checks links in README files of all public repositories of a GitHub organization.
+ * Must run inside `runCommand` (`src/cli.ts`): GitHub API responses are cached per run.
+ */
+export const checkReadmesInGithubOrg = async (
+  org: string,
+  { sampleRate }: { sampleRate?: number } = {},
+): Promise<LinkWithResult[]> => {
+  const fingerprintPublicReadmes = await timePhase("List README files", () =>
+    getReadmesFromOrg(org, sampleRate),
+  );
+
+  const links = await timePhase("Extract links", () => getReadmeLinks(fingerprintPublicReadmes));
+  return checkLinks({ links: filterOutIrrelevantLinks(links), fetchConcurrencyLimit: 20 });
+};

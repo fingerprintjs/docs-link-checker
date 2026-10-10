@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 env:
-  FIXTURE_FILES: "test/action-fixture/**/*.md"
-  FIXTURE_BASELINE: test/action-fixture/linkcheck.baseline.json
+  FIXTURE_FILES: "src/__fixtures__/action/**/*.md"
+  FIXTURE_BASELINE: src/__fixtures__/action/linkcheck.baseline.json
   # The fixture has one broken relative link and one broken anchor
   EXPECTED_LINKS_TO_FIX: "2"
 
