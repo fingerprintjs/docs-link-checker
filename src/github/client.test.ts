@@ -3,18 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 /** Fresh modules: the client is cached per module instance, `../run` must be the instance the client imports */
 const loadModules = async () => {
   vi.resetModules();
-  const [{ getMyOctokit }, { getRunContext, withRun }] = await Promise.all([
+  const [{ createOctokit, getGithubApi }, { getRunContext, withRun }] = await Promise.all([
     import("./client"),
     import("../run"),
   ]);
-  return { getMyOctokit, getRunContext, withRun };
+  return { createOctokit, getGithubApi, getRunContext, withRun };
 };
 
-describe("getMyOctokit()", () => {
+describe("getGithubApi()", () => {
   it("can be imported without GH_TOKEN, throws a clear error on first use", async () => {
-    const { getMyOctokit } = await loadModules();
+    const { getGithubApi } = await loadModules();
     vi.stubEnv("GH_TOKEN", "");
-    expect(() => getMyOctokit()).toThrow("GH_TOKEN is not set");
+    expect(() => getGithubApi()).toThrow("GH_TOKEN is not set");
   });
 
   it("importing GitHub link checks does not require GH_TOKEN", async () => {
@@ -33,7 +33,7 @@ const jsonResponse = (body: unknown) =>
 
 describe("GitHub API request metrics", () => {
   it("counts every request sent by the shared client, whatever the operation", async () => {
-    const { getMyOctokit, getRunContext, withRun } = await loadModules();
+    const { createOctokit, getRunContext, withRun } = await loadModules();
     vi.stubEnv("GH_TOKEN", "test-token");
     vi.spyOn(console, "log").mockImplementation(() => {});
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -43,7 +43,7 @@ describe("GitHub API request metrics", () => {
     });
 
     const counters = await withRun({ deps: { fetch: fetchMock } }, async () => {
-      const octokit = getMyOctokit();
+      const octokit = createOctokit();
       await octokit.rest.repos.get({ owner: "o", repo: "r" });
       await octokit.rest.issues.get({ owner: "o", repo: "r", issue_number: 1 });
       await octokit.rest.pulls.get({ owner: "o", repo: "r", pull_number: 1 });
