@@ -53,6 +53,8 @@ export type CommonOptions = {
   /** With `updateBaseline`: also remove exact entries that no longer fail (only for full-scope runs) */
   pruneBaseline: boolean;
   outputDir: string;
+  /** Page listing all reports, linked from the HTML report */
+  indexUrl?: string;
   json: boolean;
   /** Also show run metrics, timings and request details */
   verbose: boolean;
@@ -86,6 +88,7 @@ Environment variables:
   LINK_CHECK_HOST_CONCURRENCY     Default for --host-concurrency
   LINK_CHECK_BASELINE             Default for --baseline
   LINK_CHECK_COMPARE              Default for --compare
+  LINK_CHECK_INDEX_URL            Default for --index-url
 
 Exit codes: 0 no links to fix (or not failing), 1 links to fix or the check crashed, 2 invalid arguments or baseline.`;
 
@@ -185,6 +188,13 @@ const buildProgram = (
         "Where to save the JSON and HTML reports",
         nonEmpty,
         DEFAULT_OUTPUT_DIR,
+      )
+      .option(
+        "--index-url <url>",
+        "Page listing all reports, linked from the HTML report",
+        parseUrl,
+        // An empty LINK_CHECK_INDEX_URL means no link
+        env.LINK_CHECK_INDEX_URL || undefined,
       )
       .option("--json", "Print the JSON report to stdout (logs go to stderr)", false)
       .option("--verbose", "Also show run metrics, timings and request details", false)
@@ -387,6 +397,7 @@ const runCommand = (
     });
     saveReport(report, outputDir, {
       sourceBaseUrl: command.command === "files" ? getGithubBlobBaseUrl(env, cwd) : undefined,
+      indexUrl: command.options.indexUrl,
     });
     return report;
   });

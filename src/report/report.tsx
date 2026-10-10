@@ -122,6 +122,8 @@ export type RenderOptions = {
    * not the checked files.
    */
   sourceBaseUrl?: string;
+  /** Page listing all reports (e.g. the GitHub Pages index), linked from the header */
+  indexUrl?: string;
 };
 
 /** Keeps a URL only if it is inside the base URL (a `../` link must not leave the repository) */
@@ -489,9 +491,15 @@ const JSONReportRenderer = ({
   // Links to fix first, then those that could not be checked
   const groups = [...groupByTarget(toFix), ...groupByTarget(report.couldNotCheck)];
   const failed = summary.totalLinksToFix > 0;
+  const indexUrl = options.indexUrl ? safeHref(options.indexUrl) : undefined;
   return (
     <>
       <header>
+        {indexUrl ? (
+          <nav class="muted">
+            <a href={indexUrl}>← All reports</a>
+          </nav>
+        ) : null}
         <h1>
           {report.siteName}{" "}
           <span class={failed ? "bad" : "ok"}>

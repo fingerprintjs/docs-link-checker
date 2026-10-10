@@ -27,6 +27,8 @@ env:
   GITHUB_REPORT: fingerprintjs-github-readmes
   WEB_REPORT: fingerprint-com
   PAGES_URL: https://fingerprintjs.github.io/docs-link-checker
+  # The reports link back to the Pages index of all reports
+  LINK_CHECK_INDEX_URL: https://fingerprintjs.github.io/docs-link-checker/
 
 jobs:
   docs:

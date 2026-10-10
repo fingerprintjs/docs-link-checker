@@ -147,6 +147,24 @@ describe("runCli()", () => {
       expect(report.summary).toMatchObject({ totalLinksToFix: 0, ignored: 1 });
     });
 
+    it("LINK_CHECK_INDEX_URL and --index-url link the HTML report to the index of all reports", async () => {
+      const indexLink = async (args: string[], env: Record<string, string> = {}) => {
+        const outputDir = tempDir();
+        await runCli(["files", "docs/*.md", "--output-dir", outputDir, ...args], io(env));
+        const html = readFileSync(join(outputDir, "local-files.html"), "utf8");
+        return html.match(/<nav[^>]*><a href="([^"]+)"/)?.[1];
+      };
+      expect(await indexLink([])).toBeUndefined();
+      expect(await indexLink([], { LINK_CHECK_INDEX_URL: "https://a.example/" })).toBe(
+        "https://a.example/",
+      );
+      expect(
+        await indexLink(["--index-url", "https://b.example/"], {
+          LINK_CHECK_INDEX_URL: "https://a.example/",
+        }),
+      ).toBe("https://b.example/");
+    });
+
     it("--update-baseline writes the default baseline file and reads a relative --baseline in io.cwd, not process.cwd()", async () => {
       const cwd = tempDir();
       mkdirSync(join(cwd, "docs"));
