@@ -6,6 +6,7 @@ import { stripVTControlCharacters } from "node:util";
 import * as cheerio from "cheerio";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "./cli";
+import { createFakeGithubApi } from "./github/fake_github_api";
 
 // GitHub organizations need GH_TOKEN and the network: fake client and README downloads
 const repo = (name: string) => ({
@@ -14,15 +15,11 @@ const repo = (name: string) => ({
   name,
   archived: false,
 });
-const octokit = {
-  paginate: vi.fn(),
-  repos: { listForOrg: {}, get: vi.fn() },
-  git: { getTree: vi.fn() },
-};
+let octokit = createFakeGithubApi();
 const readmeFetch = vi.fn(
   async (_url: string | URL | Request) => new Response("[x](https://example.com/)"),
 );
-const githubDeps = { octokit: () => octokit as never, fetch: readmeFetch };
+const githubDeps = { octokit: () => octokit, fetch: readmeFetch };
 
 // Local site for the `site` command: a sitemap with one page linking to a working and two missing URLs
 let server: Server;
@@ -88,9 +85,8 @@ describe("runCli()", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
-    octokit.paginate.mockReset().mockResolvedValue([]);
-    octokit.repos.get.mockReset().mockResolvedValue({ data: { default_branch: "main" } });
-    octokit.git.getTree.mockReset().mockResolvedValue({
+    octokit = createFakeGithubApi();
+    octokit.git.getTree.mockResolvedValue({
       data: {
         tree: [
           { type: "blob", path: "README.md" },
@@ -559,7 +555,7 @@ describe("runCli()", () => {
   });
 
   it("github-org: passes the organization and sample rate, names the report", async () => {
-    octokit.paginate.mockResolvedValue(["a", "b"].map(repo));
+    octokit.repos.listForOrg.mockResolvedValue({ data: ["a", "b"].map(repo) });
     const outputDir = tempDir();
     expect(
       await runCli(["github-org", "org", "--sample-rate", "0.5", "--output-dir", outputDir], {
@@ -567,23 +563,20 @@ describe("runCli()", () => {
         deps: githubDeps,
       }),
     ).toBe(0);
-    expect(octokit.paginate).toHaveBeenCalledWith(
-      octokit.repos.listForOrg,
-      expect.objectContaining({ org: "org" }),
-    );
+    expect(octokit.repos.listForOrg).toHaveBeenCalledWith(expect.objectContaining({ org: "org" }));
     // 4 README files, half of them are checked
     expect(readmeFetch.mock.calls.filter(([url]) => String(url).includes("raw."))).toHaveLength(2);
     expect(existsSync(join(outputDir, "org-github-readmes.json"))).toBe(true);
   });
 
   it("returns 1 when the check crashes", async () => {
-    octokit.paginate.mockRejectedValue(new Error("GitHub exploded"));
+    octokit.repos.listForOrg.mockRejectedValue(new Error("GitHub exploded"));
     expect(await runCli(["github-org", "org"], { ...io(), deps: githubDeps })).toBe(1);
     expect(stderr).toContain("GitHub exploded");
   });
 
   it("prints only the message when the organization can't be listed", async () => {
-    octokit.paginate.mockRejectedValue(new Error("GitHub exploded"));
+    octokit.repos.listForOrg.mockRejectedValue(new Error("GitHub exploded"));
     expect(await runCli(["github-org", "org"], { ...io(), deps: githubDeps })).toBe(1);
     expect(stderr).toBe(
       "Error: Failed to list repositories of GitHub organization org: GitHub exploded\n",
