@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import pLimit, { type LimitFunction } from "p-limit";
 import type { Browser, BrowserType } from "playwright";
 import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./check/limiter";
-import type { MyOctokitInstance } from "./github/client";
+import type { GithubApi } from "./github/client";
 import { createSilentTerminal, formatDuration, type Terminal } from "./terminal";
 
 // How many Playwright pages (browser contexts) are open at the same time
@@ -14,8 +14,8 @@ export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;
  */
 export type RunDeps = {
   fetch?: typeof fetch;
-  /** Replaces the shared Octokit client (see `getMyOctokit`) */
-  octokit?: () => MyOctokitInstance;
+  /** Replaces the shared Octokit client (see `getGithubApi`) */
+  octokit?: () => GithubApi;
   chromium?: Pick<BrowserType, "launch">;
   /** Installs the missing Playwright Chromium */
   installChromium?: () => void;
@@ -36,7 +36,7 @@ type BrowserSlot = { promise?: Promise<Browser>; browser?: Browser };
  */
 export type RunContext = {
   deps: RunDeps;
-  cache: Map<string, Promise<unknown>>;
+  cache: Map<string, CacheEntry>;
   metrics: RunMetrics;
   terminal: Terminal;
   hostLimiter: HostLimiter;
@@ -189,39 +189,90 @@ const formatRunMetrics = (metrics: RunMetrics, totalMs?: number): string => {
   return lines.join("\n");
 };
 
+/** Shared work of `runCached`, aborted when every caller waiting for it gave up */
+type CacheEntry = {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  waiters: number;
+  settled: boolean;
+};
+
 type RunCachedOptions = {
   /** Should a rejection be cached too? By default, rejections are evicted so the next call retries. */
   cacheError?: (error: unknown) => boolean;
+  /** Stops waiting for this caller (see `runCached`) */
+  signal?: AbortSignal;
   onHit?: () => void;
-  onMiss?: () => void;
 };
 
 /**
- * Memoizes `fn` by `key` for the current run. Concurrent callers share the same promise.
- * Outside of a run, `fn` is called every time.
+ * Memoizes `fn` by `key` for the current run. Concurrent callers share the same work.
+ * - An already aborted `signal` fails before any work (no new request after a timeout).
+ * - A later abort stops only this caller. The signal passed to `fn` aborts once all callers aborted: work nobody waits
+ *   for is stopped and evicted, the next call starts it again.
+ * Outside of a run, `fn` is called every time with the caller's signal.
  */
-export const runCached = <T>(
+export const runCached = async <T>(
   key: string,
-  fn: () => Promise<T>,
-  options: RunCachedOptions = {},
+  fn: (signal: AbortSignal) => Promise<T>,
+  { cacheError, signal, onHit }: RunCachedOptions = {},
 ): Promise<T> => {
+  signal?.throwIfAborted();
   const context = getRunContext();
   if (!context) {
-    return fn();
+    return fn(signal ?? new AbortController().signal);
   }
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the cache holds promises of any type, keys are namespaced by the callers so a key always has the same type
-  const cached = context.cache.get(key) as Promise<T> | undefined;
-  if (cached) {
-    options.onHit?.();
-    return cached;
+  let entry = context.cache.get(key);
+  if (entry) {
+    onHit?.();
+  } else {
+    const controller = new AbortController();
+    const created: CacheEntry = {
+      promise: Promise.resolve(),
+      controller,
+      waiters: 0,
+      settled: false,
+    };
+    // Settled before any caller sees the result, so a caller leaving after it never aborts finished work
+    created.promise = fn(controller.signal).finally(() => {
+      created.settled = true;
+    });
+    created.promise.catch((error: unknown) => {
+      if (!cacheError?.(error) && context.cache.get(key) === created) {
+        context.cache.delete(key);
+      }
+    });
+    context.cache.set(key, created);
+    entry = created;
   }
-  options.onMiss?.();
-  const promise = fn();
-  context.cache.set(key, promise);
-  promise.catch((error) => {
-    if (!options.cacheError?.(error) && context.cache.get(key) === promise) {
-      context.cache.delete(key);
+  entry.waiters++;
+  try {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the cache holds work of any type, keys are namespaced by the callers so a key always has the same type
+    return (await abortable(entry.promise, signal)) as T;
+  } finally {
+    entry.waiters--;
+    if (entry.waiters === 0 && !entry.settled) {
+      entry.controller.abort(signal?.reason);
+      if (context.cache.get(key) === entry) {
+        context.cache.delete(key);
+      }
     }
+  }
+};
+
+/** Waits for `promise` until `signal` aborts. The promise itself keeps running. */
+const abortable = async <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) {
+    return promise;
+  }
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
-  return promise;
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 };

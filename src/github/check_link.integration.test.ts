@@ -98,3 +98,57 @@ describe("checkLinkWithGithubApi", () => {
     expect(await checkLinkWithGithubApi(`${REPO}/tree/${SHA}/nonexistent`)).toMatchObject(BROKEN);
   });
 });
+
+// Responses of the real API that unit tests can only fake
+describe("checkLinkWithGithubApi with missing resources", () => {
+  const MISSING_REPO = "https://github.com/fingerprintjs/nonexistent-repo";
+
+  it("reports a user or organization that does not exist as broken link", async () => {
+    expect(
+      await checkLinkWithGithubApi("https://github.com/fingerprintjs-nonexistent-owner-xyz"),
+    ).toMatchObject({
+      ...BROKEN,
+      errorDetail: "User or organization fingerprintjs-nonexistent-owner-xyz not found",
+    });
+  });
+
+  it("reports a commit SHA that does not exist as broken link", async () => {
+    // GitHub answers 422 "No commit found for SHA" instead of 404
+    expect(await checkLinkWithGithubApi(`${REPO}/commit/${"0".repeat(40)}`)).toMatchObject({
+      ok: false,
+      error: "broken link",
+      status: 422,
+      errorDetail: "Commit not found",
+    });
+  });
+
+  it("reports a commit of a repository that does not exist as broken link", async () => {
+    expect(await checkLinkWithGithubApi(`${MISSING_REPO}/commit/${SHA}`)).toMatchObject({
+      ...BROKEN,
+      errorDetail: "Commit not found",
+    });
+  });
+
+  it("reports a discussion of a repository that does not exist as broken link", async () => {
+    expect(await checkLinkWithGithubApi(`${MISSING_REPO}/discussions/1`)).toMatchObject(BROKEN);
+  });
+
+  it("checks the latest release", async () => {
+    expect(await checkLinkWithGithubApi(`${REPO}/releases/latest`)).toMatchObject(OK);
+    expect(await checkLinkWithGithubApi(`${MISSING_REPO}/releases/latest`)).toMatchObject(BROKEN);
+  });
+});
+
+describe("checkLinkWithGithubApi with commits of a huge repository", () => {
+  const CHROMIUM = "https://github.com/chromium/chromium";
+  const CHROMIUM_SHA = "3e914531a360b766bfd8468f59259b3ab29118d7";
+
+  it("accepts a commit SHA and a path at it", async () => {
+    expect(await checkLinkWithGithubApi(`${CHROMIUM}/tree/${CHROMIUM_SHA}`)).toMatchObject(OK);
+    expect(
+      await checkLinkWithGithubApi(
+        `${CHROMIUM}/tree/${CHROMIUM_SHA}/third_party/blink/renderer/platform/audio/cpu`,
+      ),
+    ).toMatchObject(OK);
+  });
+});
