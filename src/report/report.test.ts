@@ -42,10 +42,26 @@ describe("renderReportToHTML()", () => {
     expect(html).not.toContain("tailwind");
   });
 
-  it("stores the link to copy in a data attribute, with the exact URL", () => {
-    const buttons = $("#by-link button[data-copy-href]");
-    expect(buttons.length).toBe(2);
-    expect(buttons.first().attr("data-copy-href")).toBe(EVIL_HREF);
+  it("stores each value to copy in a data attribute, with the exact text", () => {
+    const row = $("#by-link tbody tr").first();
+    expect(row.find(".lk button[title='Copy link']").attr("data-copy")).toBe(EVIL_HREF);
+    expect(row.find(".pg button[title='Copy page']").attr("data-copy")).toBe(
+      "https://example.com/page",
+    );
+  });
+
+  it("copies the whole row as JSON and as Markdown", () => {
+    const row = $("#by-link tbody tr").first();
+    expect(
+      JSON.parse(row.find("button[title='Copy row as JSON']").attr("data-copy") ?? ""),
+    ).toEqual({
+      problem: "HTTP 404",
+      link: EVIL_HREF,
+      pages: [{ page: "https://example.com/page", text: links[0]?.text }],
+    });
+    expect(row.find("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      `- ${EVIL_HREF}: HTTP 404\n  - https://example.com/page "${links[0]?.text}"`,
+    );
   });
 
   it("shows the status as a decorative glyph plus a text label", () => {
@@ -329,7 +345,8 @@ describe("renderReportToHTML() with ignored links", () => {
     expect(twitter.find("td.rs").text()).toBe("bot wall");
     expect(twitter.find("pre")).toHaveLength(1);
     expect(twitter.find("pre").text()).toBe("<html>challenge</html>");
-    expect(twitter.find("button[data-copy-href]")).toHaveLength(1);
+    // The link, each page (also the folded one) and the row as JSON and Markdown
+    expect(twitter.find("button[data-copy]")).toHaveLength(1 + 4 + 2);
 
     const twitterBroken = rows.eq(1);
     expect(twitterBroken.text()).toContain("docs/local.md:4");
@@ -342,7 +359,7 @@ describe("renderReportToHTML() with ignored links", () => {
     expect(other.find("details")).toHaveLength(1); // the response body, no folded pages
     expect(other.text()).toContain('"Other"');
     expect(other.find("td.rs").text()).toBe("known");
-    expect(other.find("button[data-copy-href]").attr("data-copy-href")).toBe(
+    expect(other.find("button[title='Copy link']").attr("data-copy")).toBe(
       "https://other.example/",
     );
   });

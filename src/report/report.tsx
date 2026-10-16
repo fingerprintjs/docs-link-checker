@@ -194,20 +194,83 @@ type ViewProps = { options: RenderOptions; siteOrigin?: string };
 const LinkCell = ({ link, options, siteOrigin }: ViewProps & { link: LinkWithResult }) => {
   const url = getLinkCellUrl(link, options);
   const label = <LinkLabel href={link.href} siteOrigin={siteOrigin} />;
-  return url ? (
-    <a href={url} target="_blank" rel="noopener">
-      {label}
-    </a>
-  ) : (
-    <span data-local-link="">{label}</span>
+  return (
+    <>
+      {url ? (
+        <a href={url} target="_blank" rel="noopener">
+          {label}
+        </a>
+      ) : (
+        <span data-local-link="">{label}</span>
+      )}{" "}
+      <CopyButton text={link.href} what="link" />
+    </>
   );
 };
 
-/** Copied by the script in `renderReportToHTML`, no inline JS so any URL is safe */
-const CopyButton = ({ href }: { href: string }) => (
-  <button type="button" class="cp" data-copy-href={href} title="Copy link to clipboard">
-    copy
+/** Copied by the script in `report_assets.ts`, no inline JS so any value is safe */
+const CopyButton = ({ text, what }: { text: string; what: string }) => (
+  <button
+    type="button"
+    class="cp"
+    data-copy={text}
+    title={`Copy ${what}`}
+    aria-label={`Copy ${what}`}
+  >
+    <svg
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      aria-hidden="true"
+    >
+      <rect x="5.5" y="5.5" width="8.5" height="8.5" rx="1.5" />
+      <path d="M10.5 5.5v-2A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2" />
+    </svg>
   </button>
+);
+
+const toRowJSON = ({ link, pages }: TargetGroup<IgnoredLink>): string => {
+  const reason = shortReason(link);
+  return JSON.stringify(
+    {
+      problem: problemLabel(link),
+      link: link.href,
+      ...(reason ? { reason } : {}),
+      ...(link.result.redirectedTo ? { redirectedTo: link.result.redirectedTo } : {}),
+      ...(link.ignoreReason ? { ignoredBecause: link.ignoreReason } : {}),
+      pages: pages.map(({ page, line, text }) => ({ page, ...(line ? { line } : {}), text })),
+    },
+    null,
+    2,
+  );
+};
+
+/** Bare http(s) URLs are links in Markdown, anything else (relative links, `file:line`) is code */
+const markdownValue = (value: string): string => (isHttpUrl(value) ? value : `\`${value}\``);
+
+const toRowMarkdown = ({ link, pages }: TargetGroup<IgnoredLink>): string => {
+  const reason = shortReason(link);
+  return [
+    `- ${markdownValue(link.href)}: ${problemLabel(link)}${reason ? ` (${reason})` : ""}`,
+    ...pages.map(
+      (page) => `  - ${markdownValue(formatLocation(page))}${page.text ? ` "${page.text}"` : ""}`,
+    ),
+  ].join("\n");
+};
+
+/** The whole row (link, problem and pages) as JSON or Markdown, e.g. to paste into an issue */
+const CopyRow = ({ group }: { group: TargetGroup<IgnoredLink> }) => (
+  <>
+    <button type="button" class="cp" data-copy={toRowJSON(group)} title="Copy row as JSON">
+      json
+    </button>{" "}
+    <button type="button" class="cp" data-copy={toRowMarkdown(group)} title="Copy row as Markdown">
+      md
+    </button>
+  </>
 );
 
 /** Short reason, redirect target and the raw error detail (only when it says more than the reason) */
@@ -271,7 +334,8 @@ const PageRef = ({ link, options, siteOrigin }: ViewProps & { link: Link }) => {
           rel="noopener"
         >
           {label}
-        </a>
+        </a>{" "}
+        <CopyButton text={formatLocation(link)} what="page" />
         {text}
       </div>
     );
@@ -287,7 +351,8 @@ const PageRef = ({ link, options, siteOrigin }: ViewProps & { link: Link }) => {
         </a>
       ) : (
         code
-      )}
+      )}{" "}
+      <CopyButton text={formatLocation(link)} what="page" />
       {text}
     </div>
   );
@@ -330,8 +395,8 @@ const GroupRow = ({
     </td>
     {/* Baseline reasons are optional, the cell is always there to keep the columns aligned */}
     {ignored ? <td class="rs">{group.link.ignoreReason ?? ""}</td> : null}
-    <td>
-      <CopyButton href={group.link.href} />
+    <td class="cr">
+      <CopyRow group={group} />
     </td>
   </tr>
 );
@@ -348,7 +413,7 @@ const ByLinkTable = ({
         <th>Link</th>
         <th>Pages</th>
         {ignored ? <th>Ignored because</th> : null}
-        <th />
+        <th>Copy row</th>
       </tr>
     </thead>
     <tbody>
@@ -384,6 +449,7 @@ const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }
           <th>Problem</th>
           <th>Link</th>
           <th>Reason</th>
+          <th>Copy row</th>
         </tr>
       </thead>
       {[...groupByPage(links)].map(([page, pageLinks]) => {
@@ -394,7 +460,7 @@ const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }
         return (
           <tbody data-page={page}>
             <tr class="ph">
-              <td colSpan={hasLines ? 4 : 3}>
+              <td colSpan={hasLines ? 5 : 4}>
                 {url ? (
                   <a href={url} target="_blank" rel="noopener">
                     {name}
@@ -402,7 +468,7 @@ const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }
                 ) : (
                   name
                 )}{" "}
-                <span class="muted">{pageLinks.length}</span>
+                <CopyButton text={page} what="page" /> <span class="muted">{pageLinks.length}</span>
               </td>
             </tr>
             {pageLinks.map((link) => (
@@ -413,11 +479,13 @@ const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }
                 </td>
                 <td class="lk">
                   <LinkCell link={link} {...view} />
-                  {link.text ? <span class="txt">"{link.text}"</span> : null}{" "}
-                  <CopyButton href={link.href} />
+                  {link.text ? <span class="txt">"{link.text}"</span> : null}
                 </td>
                 <td>
                   <Reason link={link} {...view} />
+                </td>
+                <td class="cr">
+                  <CopyRow group={{ link, pages: [link] }} />
                 </td>
               </tr>
             ))}
