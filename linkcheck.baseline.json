@@ -13,6 +13,10 @@
       "reason": "npm blocks automated clients with a Cloudflare challenge (403)"
     },
     {
+      "pattern": "http*://npmjs.org/**",
+      "reason": "Redirects to www.npmjs.com, which blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
       "pattern": "https://community.cloudflare.com/**",
       "reason": "Blocks automated clients with a Cloudflare challenge (403)"
     },
