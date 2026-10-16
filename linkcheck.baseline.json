@@ -17,6 +17,10 @@
       "reason": "Redirects to www.npmjs.com, which blocks automated clients with a Cloudflare challenge (403)"
     },
     {
+      "pattern": "https://developers.facebook.com/**",
+      "reason": "Returns 400 to automated clients, works in a browser"
+    },
+    {
       "pattern": "https://community.cloudflare.com/**",
       "reason": "Blocks automated clients with a Cloudflare challenge (403)"
     },
