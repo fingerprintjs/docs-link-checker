@@ -25,6 +25,8 @@ docs-link-checker site https://fingerprint.com --include https://fingerprint.com
 docs-link-checker github-org fingerprintjs
 # Local markdown files
 docs-link-checker files "docs/**/*.md" README.md
+# Absolute links in source code
+docs-link-checker files "src/**/*.tsx"
 docs-link-checker files "**/*.md" --dry-run   # only list the links
 ```
 
@@ -33,6 +35,7 @@ docs-link-checker files "**/*.md" --dry-run   # only list the links
 - `site <url> [--include <prefix>...]`: links on all pages of the website's sitemap. `--include` (repeatable) keeps only links starting with one of the prefixes.
 - `github-org <org>`: links in README files of the organization's public repositories (deprecated repos in `GITHUB_ORG_EXCLUDED_REPOS`, see [CONTRIBUTING](../CONTRIBUTING.md), are skipped).
 - `files <glob...> [--dry-run] [--no-annotations]`: links in local markdown files (`.md`, `.markdown`, `node_modules` and `.git` are skipped). Quote the globs so the CLI expands them (`**` works in every shell).
+  - Source code files (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.vue`, `.svelte`, `.astro`, `.html`): only absolute `http(s)://` URLs are extracted, for example `href='https://docs.example.com/a#anchor'` in JSX. The search is plain text, so URLs in strings and comments count too. URL templates (`${id}`, `{id}`) are skipped. Relative links are skipped, in source code they are app routes and not files. Other files matched by the globs are ignored.
   - Relative links (`docs/a.md`, `../b/`, `a.md?plain=1`) are resolved against the file, root-relative links (`/docs/a.md`) against the current directory. The target file or directory must exist (file names are case-sensitive on Linux, like on GitHub), inside the current directory: links leaving it, also through symlinks, are broken and the file is never read.
   - `#anchors` (`#install`, `docs/a.md#install`, `docs/#install` for the directory's `README.md` or `README.markdown`, in any case, `.md` first) must match a heading slug (GitHub semantics, like for GitHub links) or an HTML anchor (`<a name="...">`). `#L10-L20` on code files must be within the file (lines start at 1, ranges go forward). Other anchors on non-markdown files are not checked.
   - Absolute links (`https://...`) are checked like in the other commands (fetch, GitHub API, Playwright). `mailto:` and other schemes are skipped.
@@ -45,7 +48,7 @@ Environment variables are the defaults.
 
 | Option                                    | Environment variable                         | Description                                                                                                                                                                                                                                                                    |
 | ----------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--sample-rate <0-1>`                     | `LINK_CHECK_SAMPLE_RATE`                     | Check only a deterministic share of the pages / README files / markdown files. Default `1`.                                                                                                                                                                                    |
+| `--sample-rate <0-1>`                     | `LINK_CHECK_SAMPLE_RATE`                     | Check only a deterministic share of the pages / README files / local files. Default `1`.                                                                                                                                                                                       |
 | `--fail-on-broken`, `--no-fail-on-broken` | `FAIL_ON_BROKEN_LINKS` (`false` to not fail) | Exit with code 1 when there are links to fix. Default: fail.                                                                                                                                                                                                                   |
 | `--baseline <file>`                       | `LINK_CHECK_BASELINE`                        | [Baseline file](#baseline-file) with known false positives and accepted broken links.                                                                                                                                                                                          |
 | `--update-baseline`                       |                                              | Add the current failures to the baseline file (default `linkcheck.baseline.json`) and exit with code 0. Existing entries are kept.                                                                                                                                             |

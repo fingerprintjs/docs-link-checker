@@ -47,6 +47,9 @@ docs-link-checker github-org fingerprintjs
 
 # Local markdown
 docs-link-checker files "docs/**/*.md" README.md
+
+# Absolute links in source code (JSX hrefs, strings, comments)
+docs-link-checker files "src/**/*.tsx"
 ```
 
 Options, baseline files, and reports: [docs/cli.md](docs/cli.md).
