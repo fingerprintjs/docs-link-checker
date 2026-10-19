@@ -30,6 +30,8 @@ describe("extractSourceCodeLinks()", () => {
       '<a href="https://example.com/docs#hello!">x</a>',
       "const q = 'https://example.com/search?q=*';",
       '<a href="https://example.com/docs?x=1&amp;y=2">x</a>',
+      "/** See {@link https://example.com/jsdoc#setup} */",
+      "/*https://example.com/comment#setup*/",
     ].join("\n");
     expect(extractSourceCodeLinks(code).map((link) => link.href)).toEqual([
       "https://en.wikipedia.org/wiki/Function_(mathematics)#Definition",
@@ -38,6 +40,8 @@ describe("extractSourceCodeLinks()", () => {
       "https://example.com/docs#hello!",
       "https://example.com/search?q=*",
       "https://example.com/docs?x=1&y=2",
+      "https://example.com/jsdoc#setup",
+      "https://example.com/comment#setup",
     ]);
   });
 
@@ -46,6 +50,7 @@ describe("extractSourceCodeLinks()", () => {
       "const a = `https://example.com/${id}/x`;",
       "const b = `https://${host}/x`;",
       "const c = 'https://api.example.com/visitors/{visitorId}';",
+      "// GET https://api.example.com/visitors/{visitorId}",
       "const d = `https://example.com/method(${id})`;",
       "if (url.startsWith('https://')) {}",
       "<Link href='/playground'>Playground</Link>",
