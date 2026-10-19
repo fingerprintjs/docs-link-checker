@@ -23,11 +23,30 @@ describe("extractSourceCodeLinks()", () => {
     ]);
   });
 
+  it("keeps brackets inside URLs and punctuation of quoted URLs, decodes &amp;", () => {
+    const code = [
+      "// https://en.wikipedia.org/wiki/Function_(mathematics)#Definition",
+      "// (see https://example.com/a), [https://example.com/b]",
+      '<a href="https://example.com/docs#hello!">x</a>',
+      "const q = 'https://example.com/search?q=*';",
+      '<a href="https://example.com/docs?x=1&amp;y=2">x</a>',
+    ].join("\n");
+    expect(extractSourceCodeLinks(code).map((link) => link.href)).toEqual([
+      "https://en.wikipedia.org/wiki/Function_(mathematics)#Definition",
+      "https://example.com/a",
+      "https://example.com/b",
+      "https://example.com/docs#hello!",
+      "https://example.com/search?q=*",
+      "https://example.com/docs?x=1&y=2",
+    ]);
+  });
+
   it("skips URL templates, bare schemes and relative links", () => {
     const code = [
       "const a = `https://example.com/${id}/x`;",
       "const b = `https://${host}/x`;",
       "const c = 'https://api.example.com/visitors/{visitorId}';",
+      "const d = `https://example.com/method(${id})`;",
       "if (url.startsWith('https://')) {}",
       "<Link href='/playground'>Playground</Link>",
     ].join("\n");
