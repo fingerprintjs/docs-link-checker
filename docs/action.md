@@ -1,6 +1,6 @@
 # GitHub Action
 
-Check the markdown files of any repository (relative links and anchors on disk, absolute links over the network).
+Check the markdown files of any repository (relative links and anchors on disk, absolute links over the network). Source code files (`src/**/*.tsx`...) are also supported, only their absolute links are checked, see [CLI](cli.md#commands).
 
 ```yaml
 # .github/workflows/links.yaml
@@ -29,17 +29,17 @@ jobs:
 
 The job summary lists the links to fix, grouped by target, and links to the uploaded reports (HTML and JSON).
 
-| Input            | Default                          | Description                                                                                          |
-| ---------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `files`          | `**/*.md`                        | Globs or paths of markdown files, relative to the repository root, separated by spaces or new lines. |
-| `github-token`   | `${{ github.token }}`            | Token used to check GitHub links with the GitHub API.                                                |
-| `fail-on-broken` | `true`                           | Fail the step when links need fixing.                                                                |
-| `baseline`       |                                  | Baseline file, relative to the repository root. See [CLI](cli.md#baseline-file).                     |
-| `sample-rate`    | `1`                              | Check only a deterministic share of the files.                                                       |
-| `annotations`    | `true`                           | Report links to fix as annotations on the files.                                                     |
-| `output-dir`     | `$RUNNER_TEMP/docs-link-checker` | Where to save the JSON and HTML reports.                                                             |
-| `compare`        |                                  | Previous JSON report. The summary adds "+N new, M fixed since previous report".                      |
-| `artifact-name`  | `link-check-report`              | Upload the reports as an artifact with this name and link it in the summary. Empty: no upload.       |
+| Input            | Default                          | Description                                                                                                         |
+| ---------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `files`          | `**/*.md`                        | Globs or paths of markdown or source code files, relative to the repository root, separated by spaces or new lines. |
+| `github-token`   | `${{ github.token }}`            | Token used to check GitHub links with the GitHub API.                                                               |
+| `fail-on-broken` | `true`                           | Fail the step when links need fixing.                                                                               |
+| `baseline`       |                                  | Baseline file, relative to the repository root. See [CLI](cli.md#baseline-file).                                    |
+| `sample-rate`    | `1`                              | Check only a deterministic share of the files.                                                                      |
+| `annotations`    | `true`                           | Report links to fix as annotations on the files.                                                                    |
+| `output-dir`     | `$RUNNER_TEMP/docs-link-checker` | Where to save the JSON and HTML reports.                                                                            |
+| `compare`        |                                  | Previous JSON report. The summary adds "+N new, M fixed since previous report".                                     |
+| `artifact-name`  | `link-check-report`              | Upload the reports as an artifact with this name and link it in the summary. Empty: no upload.                      |
 
 | Output             | Description                                         |
 | ------------------ | --------------------------------------------------- |

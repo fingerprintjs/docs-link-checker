@@ -1,5 +1,5 @@
 name: "Docs link checker"
-description: "Checks links in markdown files, including #anchors: relative links on disk, absolute links over the network"
+description: "Checks links in markdown and source code files, including #anchors: relative links on disk, absolute links over the network"
 author: "Fingerprint"
 branding:
   icon: "link"
@@ -8,7 +8,7 @@ branding:
 
 inputs:
   files:
-    description: "Glob patterns (or paths) of markdown files to check, relative to the repository root, separated by spaces or new lines. node_modules and .git are skipped."
+    description: "Glob patterns (or paths) of markdown or source code files (only absolute links) to check, relative to the repository root, separated by spaces or new lines. node_modules and .git are skipped."
     required: false
     default: "**/*.md"
   github-token:

@@ -34,7 +34,7 @@ import {
   checkLocalFiles,
   collectLinksFromFiles,
   LOCAL_FILES_SITE_NAME,
-  NoMarkdownFilesError,
+  NoFilesToCheckError,
 } from "./sources/local_files";
 import { checkWebsite, createPrefixFilter } from "./sources/website";
 import { createTerminal, type Terminal } from "./terminal";
@@ -152,7 +152,7 @@ const buildProgram = (
     command
       .option(
         "--sample-rate <0-1>",
-        "Check only a deterministic share of the pages / README files / markdown files",
+        "Check only a deterministic share of the pages / README files / local files",
         validated(getSampleRate, ["LINK_CHECK_SAMPLE_RATE", "--sample-rate"]),
       )
       .option(
@@ -284,8 +284,11 @@ const buildProgram = (
   addCommonOptions(
     program
       .command("files")
-      .description("Links in local markdown files (.md, .markdown)")
-      .argument("<glob...>", "Markdown files or globs (quote globs so the CLI expands them)")
+      .description("Links in local markdown files (.md, .markdown) and source code (.tsx, .js...)")
+      .argument(
+        "<glob...>",
+        "Markdown or source code files or globs (quote globs so the CLI expands them)",
+      )
       .option("--dry-run", "Only list the links found, don't check anything", false)
       .option(
         "--no-annotations",
@@ -296,13 +299,14 @@ const buildProgram = (
       "after",
       `
 .md and .markdown files are checked, node_modules and .git are skipped.
+Source code (.js, .jsx, .ts, .tsx, .vue, .svelte, .astro, .html...): only absolute links (https://...).
 - Relative links (docs/a.md, ../b/, /root-relative.md, #anchor) are checked on the filesystem:
   the file or directory must exist, #anchors must match a heading in the markdown file.
 - Absolute links (https://...) are checked over the network, like in the other commands.
 In GitHub Actions, links to fix are reported as annotations on the files.
 
 Examples:
-  ${BIN} files "docs/**/*.md" README.md\n  ${BIN} files "**/*.md" --baseline ${DEFAULT_BASELINE_FILE}`,
+  ${BIN} files "docs/**/*.md" README.md\n  ${BIN} files "src/**/*.tsx"\n  ${BIN} files "**/*.md" --baseline ${DEFAULT_BASELINE_FILE}`,
     )
     .action(
       (
@@ -607,7 +611,7 @@ export const runCli = async (argv: string[], io: CliIO = {}): Promise<number> =>
       } catch (error) {
         // Expected failures are explained by the message, a stack trace would only add noise
         let text = String(error);
-        if (error instanceof NoMarkdownFilesError || error instanceof OrgListingError) {
+        if (error instanceof NoFilesToCheckError || error instanceof OrgListingError) {
           text = error.message;
         } else if (error instanceof Error) {
           text = error.stack ?? error.message;

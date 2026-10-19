@@ -12,28 +12,46 @@ import { sampleItems } from "../utils/parallel";
 import { compareStrings } from "../utils/strings";
 import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "./markdown";
 import { filterOutIrrelevantLinks } from "./page";
+import { extractSourceCodeLinks } from "./source_code";
 
 /** Report name of the `files` command */
 export const LOCAL_FILES_SITE_NAME = "local files";
 
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
+// Only absolute links are extracted from these, see `extractSourceCodeLinks`
+const SOURCE_CODE_EXTENSIONS = new Set([
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".vue",
+  ".svelte",
+  ".astro",
+  ".html",
+]);
 const IGNORED_DIRECTORIES = new Set(["node_modules", ".git"]);
 
 const isMarkdownFile = (path: string) => MARKDOWN_EXTENSIONS.has(extname(path).toLowerCase());
+const isFileToCheck = (path: string) =>
+  isMarkdownFile(path) || SOURCE_CODE_EXTENSIONS.has(extname(path).toLowerCase());
 
 /** Relative path with `/` separators (used as the page of local links, in reports and annotations) */
 const toPosixPath = (path: string) => path.split(sep).join("/");
 
-/** No markdown file matches the patterns (probably a typo, checking nothing would pass silently) */
-export class NoMarkdownFilesError extends Error {
-  override name = "NoMarkdownFilesError";
+/** No markdown or source code file matches the patterns (probably a typo, checking nothing would pass silently) */
+export class NoFilesToCheckError extends Error {
+  override name = "NoFilesToCheckError";
 }
 
 /**
- * Expands glob patterns (and plain file paths) to markdown files, relative to `cwd`, sorted and deduplicated.
- * `node_modules` and `.git` are skipped, non-markdown files are ignored.
+ * Expands glob patterns (and plain file paths) to markdown and source code files, relative to `cwd`, sorted and deduplicated.
+ * `node_modules` and `.git` are skipped, other files (images, `.txt`...) are ignored.
  */
-const findMarkdownFiles = async (patterns: string[], cwd: string): Promise<string[]> => {
+const findFilesToCheck = async (patterns: string[], cwd: string): Promise<string[]> => {
   const files = new Set<string>();
   for (const pattern of patterns) {
     for await (const match of glob(pattern, {
@@ -41,7 +59,7 @@ const findMarkdownFiles = async (patterns: string[], cwd: string): Promise<strin
       exclude: (path) => IGNORED_DIRECTORIES.has(basename(path)),
     })) {
       const absolutePath = resolve(cwd, match);
-      if (isMarkdownFile(absolutePath) && statSync(absolutePath).isFile()) {
+      if (isFileToCheck(absolutePath) && statSync(absolutePath).isFile()) {
         files.add(toPosixPath(relative(cwd, absolutePath)));
       }
     }
@@ -231,8 +249,8 @@ export type CollectedLinks = {
 };
 
 /**
- * Finds markdown files matching `patterns` (relative to `cwd`) and extracts their links, grouped by kind.
- * @throws {NoMarkdownFilesError} if no markdown file matches the patterns
+ * Finds markdown and source code files matching `patterns` (relative to `cwd`) and extracts their links, grouped by kind.
+ * @throws {NoFilesToCheckError} if no markdown or source code file matches the patterns
  */
 export const collectLinksFromFiles = async ({
   patterns,
@@ -243,10 +261,10 @@ export const collectLinksFromFiles = async ({
   cwd: string;
   sampleRate?: number;
 }): Promise<CollectedLinks> => {
-  const allFiles = await findMarkdownFiles(patterns, cwd);
+  const allFiles = await findFilesToCheck(patterns, cwd);
   if (allFiles.length === 0) {
-    throw new NoMarkdownFilesError(
-      `No markdown files match ${patterns.map((p) => `"${p}"`).join(", ")}.`,
+    throw new NoFilesToCheckError(
+      `No markdown or source code files match ${patterns.map((p) => `"${p}"`).join(", ")}.`,
     );
   }
   const files = sampleItems({
@@ -257,8 +275,11 @@ export const collectLinksFromFiles = async ({
   });
   const collected: CollectedLinks = { files, local: [], external: [], skipped: [] };
   for (const file of files) {
-    const markdown = readFileSync(resolve(cwd, file), "utf8");
-    for (const { href, text, line } of extractMarkdownLinks(markdown)) {
+    const content = readFileSync(resolve(cwd, file), "utf8");
+    const links = isMarkdownFile(file)
+      ? extractMarkdownLinks(content)
+      : extractSourceCodeLinks(content);
+    for (const { href, text, line } of links) {
       const kind = getLinkKind(href);
       const link: Link = {
         page: file,
@@ -285,7 +306,7 @@ type CheckLocalFilesArgs = {
 };
 
 /**
- * Checks links in local markdown files: relative links and anchors on the filesystem,
+ * Checks links in local markdown and source code files: relative links and anchors on the filesystem,
  * absolute links with the usual `checkLinks` pipeline (fetch, GitHub API, Playwright).
  * Must run inside `runCommand` (`src/cli.ts`), which builds the report.
  */
