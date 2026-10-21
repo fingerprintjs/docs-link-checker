@@ -42,6 +42,7 @@ tr:hover td{background:var(--hover)}
 .cp:hover{color:var(--fg);background:var(--line)}
 .cp svg{display:block}
 .cr{white-space:nowrap}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 details{display:block}
 summary{cursor:pointer;color:var(--muted);display:inline-block;font:12px var(--sans)}
 details[open]>summary{margin-bottom:2px}
@@ -103,15 +104,17 @@ export const REPORT_SCRIPT = `
     var copy = target.closest("[data-copy]");
     if (copy) {
       if (copy.original === undefined) copy.original = copy.innerHTML;
-      var show = function (text) {
-        copy.textContent = text;
+      var status = document.getElementById("copy-status");
+      var show = function (glyph, message) {
+        copy.textContent = glyph;
+        if (status) status.textContent = message;
         setTimeout(function () { copy.innerHTML = copy.original; }, 1200);
       };
       // No Clipboard API or a denied write (e.g. a report opened from a file): say so instead of "Copied"
-      if (!navigator.clipboard) { show("✗"); return; }
+      if (!navigator.clipboard) { show("✗", "Copy failed"); return; }
       navigator.clipboard.writeText(copy.getAttribute("data-copy") || "").then(
-        function () { show("✓"); },
-        function () { show("✗"); }
+        function () { show("✓", "Copied"); },
+        function () { show("✗", "Copy failed"); }
       );
       return;
     }

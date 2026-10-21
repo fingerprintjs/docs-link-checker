@@ -251,12 +251,20 @@ const toRowJSON = ({ link, pages }: TargetGroup<IgnoredLink>): string => {
 /** Bare http(s) URLs are links in Markdown, anything else (relative links, `file:line`) is code */
 const markdownValue = (value: string): string => (isHttpUrl(value) ? value : `\`${value}\``);
 
+/** One line of plain text: link text from a page can hold line breaks, Markdown and HTML */
+const markdownText = (text: string): string =>
+  text
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\\`*_[\]<>&!#|~]/g, "\\$&");
+
 const toRowMarkdown = ({ link, pages }: TargetGroup<IgnoredLink>): string => {
   const reason = shortReason(link);
   return [
     `- ${markdownValue(link.href)}: ${problemLabel(link)}${reason ? ` (${reason})` : ""}`,
     ...pages.map(
-      (page) => `  - ${markdownValue(formatLocation(page))}${page.text ? ` "${page.text}"` : ""}`,
+      (page) =>
+        `  - ${markdownValue(formatLocation(page))}${page.text ? ` "${markdownText(page.text)}"` : ""}`,
     ),
   ].join("\n");
 };
@@ -659,6 +667,7 @@ ${title}
 </head>
 <body>
 ${body}
+<div id="copy-status" class="sr" role="status"></div>
 <script>${REPORT_SCRIPT}</script>
 </body>
 </html>

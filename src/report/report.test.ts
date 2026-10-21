@@ -60,8 +60,35 @@ describe("renderReportToHTML()", () => {
       pages: [{ page: "https://example.com/page", text: links[0]?.text }],
     });
     expect(row.find("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
-      `- ${EVIL_HREF}: HTTP 404\n  - https://example.com/page "${links[0]?.text}"`,
+      `- ${EVIL_HREF}: HTTP 404\n  - https://example.com/page "\\</a\\>\\<script\\>alert("text")\\</script\\>"`,
     );
+  });
+
+  it("copies link text as one line of plain Markdown text", () => {
+    const multiline = cheerio.load(
+      renderReportToHTML(
+        getJSONReport({
+          ...RUN,
+          siteName: "s",
+          links: [
+            {
+              href: "https://example.com/gone",
+              page: "https://example.com/p",
+              text: "**bold**\n\n- ![img](https://example.com/x.png)",
+              result: { ok: false, error: "broken link", status: 404 },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(multiline("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      "- https://example.com/gone: HTTP 404\n" +
+        '  - https://example.com/p "\\*\\*bold\\*\\* - \\!\\[img\\](https://example.com/x.png)"',
+    );
+  });
+
+  it("has a live region to announce the copy result", () => {
+    expect($("#copy-status[role=status]")).toHaveLength(1);
   });
 
   it("shows the status as a decorative glyph plus a text label", () => {
