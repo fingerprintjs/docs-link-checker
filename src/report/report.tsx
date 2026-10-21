@@ -248,8 +248,17 @@ const toRowJSON = ({ link, pages }: TargetGroup<IgnoredLink>): string => {
   );
 };
 
+/** Code span with a fence longer than any backtick run in the value, padded when it starts or ends with one */
+const markdownCode = (value: string): string => {
+  const longestRun = Math.max(0, ...(value.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longestRun + 1);
+  const pad = /^[`\s]|[`\s]$/.test(value) ? " " : "";
+  return `${fence}${pad}${value}${pad}${fence}`;
+};
+
 /** Bare http(s) URLs are links in Markdown, anything else (relative links, `file:line`) is code */
-const markdownValue = (value: string): string => (isHttpUrl(value) ? value : `\`${value}\``);
+const markdownValue = (value: string): string =>
+  isHttpUrl(value) ? value.replace(/[<>\s`]/g, encodeURIComponent) : markdownCode(value);
 
 /** One line of plain text: link text from a page can hold line breaks, Markdown and HTML */
 const markdownText = (text: string): string =>
@@ -261,7 +270,7 @@ const markdownText = (text: string): string =>
 const toRowMarkdown = ({ link, pages }: TargetGroup<IgnoredLink>): string => {
   const reason = shortReason(link);
   return [
-    `- ${markdownValue(link.href)}: ${problemLabel(link)}${reason ? ` (${reason})` : ""}`,
+    `- ${markdownValue(link.href)}: ${problemLabel(link)}${reason ? ` (${markdownText(reason)})` : ""}`,
     ...pages.map(
       (page) =>
         `  - ${markdownValue(formatLocation(page))}${page.text ? ` "${markdownText(page.text)}"` : ""}`,

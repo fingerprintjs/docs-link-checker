@@ -67,11 +67,17 @@ export const REPORT_SCRIPT = `
   var rows = Array.prototype.slice.call(document.querySelectorAll("[data-row]"));
   var pages = Array.prototype.slice.call(document.querySelectorAll("tbody[data-page]"));
   var count = document.getElementById("count");
+  // The copy buttons' labels (json, md) are not report text
+  var texts = rows.map(function (row) {
+    var clone = row.cloneNode(true);
+    clone.querySelectorAll(".cp").forEach(function (button) { button.remove(); });
+    return ((clone.textContent || "") + " " + (row.getAttribute("data-page") || "")).toLowerCase();
+  });
   function apply() {
     var shown = 0;
-    rows.forEach(function (row) {
+    rows.forEach(function (row, i) {
       var match = (!kind || row.getAttribute("data-kind") === kind) &&
-        (!q || ((row.textContent || "") + " " + (row.getAttribute("data-page") || "")).toLowerCase().indexOf(q) >= 0);
+        (!q || texts[i].indexOf(q) >= 0);
       row.hidden = !match;
       if (match && !row.closest("[data-section=ignored]") && !row.closest("tbody[data-page]")) shown++;
     });

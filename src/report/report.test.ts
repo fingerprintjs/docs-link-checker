@@ -60,7 +60,7 @@ describe("renderReportToHTML()", () => {
       pages: [{ page: "https://example.com/page", text: links[0]?.text }],
     });
     expect(row.find("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
-      `- ${EVIL_HREF}: HTTP 404\n  - https://example.com/page "\\</a\\>\\<script\\>alert("text")\\</script\\>"`,
+      `- ${EVIL_HREF.replace("<script>", "%3Cscript%3E").replace("</script>", "%3C/script%3E")}: HTTP 404\n  - https://example.com/page "\\</a\\>\\<script\\>alert("text")\\</script\\>"`,
     );
   });
 
@@ -84,6 +84,34 @@ describe("renderReportToHTML()", () => {
     expect(multiline("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
       "- https://example.com/gone: HTTP 404\n" +
         '  - https://example.com/p "\\*\\*bold\\*\\* - \\!\\[img\\](https://example.com/x.png)"',
+    );
+  });
+
+  it("keeps URLs, paths and reasons literal in the Markdown row", () => {
+    const markup = cheerio.load(
+      renderReportToHTML(
+        getJSONReport({
+          ...RUN,
+          siteName: "s",
+          links: [
+            {
+              href: "https://example.com/<img src=x>",
+              page: "docs/a`b.md",
+              text: "",
+              result: {
+                ok: false,
+                error: "broken link",
+                status: 404,
+                errorDetail: "see ![x](https://example.com/x.png) in **draft**",
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(markup("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      "- https://example.com/%3Cimg%20src=x%3E: HTTP 404 (see \\!\\[x\\](https://example.com/x.png) in \\*\\*draft\\*\\*)\n" +
+        "  - ``docs/a`b.md``",
     );
   });
 
