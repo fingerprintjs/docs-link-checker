@@ -1,17 +1,17 @@
+/**
+ * Link re-checks in a real browser (Playwright), for client-side rendered pages and sites that block plain `fetch`:
+ * one navigation per page, then every hash of that page is waited for in the same DOM. What the navigation response
+ * means is decided by `judgePage` (see `verdict.ts`).
+ */
 import type { Page, Response as PlaywrightResponse } from "playwright";
 import { isGithubCodeLineLink } from "../github/url";
 import { getHostLimiter, incrementMetric } from "../run";
 import type { LinkCheckResult } from "../types";
 import { withPage } from "./browser";
-import { getHashSelectors, getSpecialFragmentNote } from "./hash";
-import {
-  classifyStatus,
-  getRedirectTarget,
-  getUserAgent,
-  planServerErrorRetry,
-  serverErrorResult,
-} from "./http";
+import { getHashSelectors } from "./hash";
+import { getRedirectTarget, getUserAgent, pauseHostForRetry } from "./http";
 import { withTimeout } from "./limiter";
+import { judgeLink, judgePage, type PageVerdict, planRetry, type RetryPlan } from "./verdict";
 
 // Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own
 export const PAGE_OPERATION_TIMEOUT = 30000;
@@ -95,28 +95,6 @@ async function isHashPresentPlaywright(page: Page, hash: string, url: string, de
   return remaining > 0 && waitForSelectorAttached(page, selector, remaining);
 }
 
-const getPlaywrightHashResult = async (
-  page: Page,
-  url: string,
-  { status, deadline }: { status: number; deadline: number },
-): Promise<LinkCheckResult> => {
-  const hash = new URL(url).hash.replace("#", "");
-  if (!hash) {
-    return { ok: true, status };
-  }
-
-  const note = getSpecialFragmentNote(hash, url);
-  if (note) {
-    return { ok: true, status, note };
-  }
-
-  if (!(await isHashPresentPlaywright(page, hash, url, deadline))) {
-    return { ok: false, status, error: "hash not found" };
-  }
-
-  return { ok: true, status };
-};
-
 const isHashNotFound = (result: LinkCheckResult | undefined): boolean =>
   result?.ok === false && result.error === "hash not found";
 
@@ -180,9 +158,10 @@ export async function checkUrlsOnPageWithPlaywright(
   }
 
   const hostLimiter = getHostLimiter();
-  // Host to wait for before the next navigation: the navigated URL's, then (after a server error) the final URL's
+  // Host to wait for before the next navigation: the navigated URL's, then (after a retry) the final URL's
   let waitForUrl = firstUrl;
-  for (let retries = 0; ; retries++) {
+  const retries = { "rate-limited": 0, "server-error": 0 };
+  for (;;) {
     // Back off while the host is paused (after a server error or a 429 of this or another check), before taking a
     // page slot, so the other checks keep the browser busy in the meantime
     await hostLimiter.waitUntilResumed(waitForUrl);
@@ -190,32 +169,44 @@ export async function checkUrlsOnPageWithPlaywright(
     if (outcome instanceof Map) {
       return outcome;
     }
+    retries[outcome.reason]++;
     waitForUrl = outcome.pausedUrl;
   }
 }
 
-/** A navigation to retry after a 502, 503 or 504 (the host of `pausedUrl`, the final URL after redirects, is paused) */
-type NavigationRetry = { pausedUrl: string };
+/**
+ * A navigation to retry after a 429, 502, 503 or 504 (the host of `pausedUrl`, the final URL after redirects, is
+ * paused)
+ */
+type NavigationRetry = { pausedUrl: string; reason: RetryPlan["reason"] };
 
 /**
- * One navigation of `checkUrlsOnPageWithPlaywright`. Returns a retry after a 502, 503 or 504 that should be retried
- * (the host of the response is paused for the backoff, see `planServerErrorRetry`).
+ * One navigation of `checkUrlsOnPageWithPlaywright`. Returns a retry if `planRetry` asks for one (the host of the
+ * response is paused for the backoff).
  */
 async function navigateAndCheck(
   urls: string[],
-  /** Server error retries done so far */
-  retries: number,
+  /** Retries done so far, by reason */
+  retries: Parameters<typeof planRetry>[1],
 ): Promise<Map<string, LinkCheckResult> | NavigationRetry> {
   const [firstUrl = ""] = urls;
   // Final URL of the navigation, set once the page answered
   let redirectedTo: string | undefined;
-  const withRedirect = (result: LinkCheckResult): LinkCheckResult =>
-    redirectedTo ? { ...result, redirectedTo } : result;
-  const sameForAll = (result: LinkCheckResult) =>
-    new Map(urls.map((url) => [url, withRedirect(result)]));
+  const sameForAll = async (verdict: PageVerdict) =>
+    new Map(
+      await Promise.all(
+        urls.map(
+          async (url) =>
+            [
+              url,
+              await judgeLink(url, verdict, { redirectedTo, isHashPresent: () => false }),
+            ] as const,
+        ),
+      ),
+    );
 
   // Browser launch or context errors are not the link's fault, they are thrown (reported as unexpected errors).
-  // Errors while navigating and checking the page are reported as broken links.
+  // Errors while navigating and checking the page are judged like any other failed page load.
   return withPage(
     async (page): Promise<Map<string, LinkCheckResult> | NavigationRetry> => {
       try {
@@ -226,39 +217,29 @@ async function navigateAndCheck(
           timeout: PAGE_OPERATION_TIMEOUT,
         });
         if (!response) {
-          return sameForAll({ ok: false, error: "broken link", status: 0 });
+          return await sameForAll(await judgePage("playwright", { type: "no-response" }));
         }
         const status = response.status();
         redirectedTo = getRedirectTarget(firstUrl, response.url());
-        const statusClass = classifyStatus(status);
-        if (statusClass === "server-error") {
-          // After a redirect, the server error comes from the final URL: back off for its host
+        const retryAfter = response.headers()["retry-after"] ?? null;
+        const plan = planRetry({ status, retryAfter }, retries);
+        if (plan) {
+          // After a redirect, the error comes from the final URL: back off for its host.
+          // The page is closed right away, the retry waits for the pause outside of the page slot.
           const failedUrl = response.url() || firstUrl;
-          const delayMs = planServerErrorRetry(
-            failedUrl,
-            status,
-            retries,
-            response.headers()["retry-after"] ?? null,
-          );
-          if (delayMs === undefined) {
-            return sameForAll(serverErrorResult(status, response.statusText()));
-          }
-          // The page is closed right away, the retry waits for the pause outside of the page slot
-          getHostLimiter().pause(failedUrl, delayMs);
-          return { pausedUrl: failedUrl };
+          pauseHostForRetry(failedUrl, status, retryAfter, plan);
+          return { pausedUrl: failedUrl, reason: plan.reason };
         }
 
-        if (statusClass === "forbidden") {
-          return sameForAll({
-            ok: false,
-            error: "could not check",
-            status,
-            errorDetail: `${response.statusText()} ${await readResponseText(response)}`,
-          });
-        }
-
-        if (statusClass !== "okay") {
-          return sameForAll({ ok: false, error: "broken link", status });
+        const verdict = await judgePage("playwright", {
+          type: "response",
+          status,
+          statusText: response.statusText(),
+          retryAfter,
+          readBody: () => readResponseText(response),
+        });
+        if (!verdict.ok) {
+          return await sameForAll(verdict);
         }
 
         // The overall budget of the long wait starts with the first check, it includes the regular wait
@@ -269,7 +250,11 @@ async function navigateAndCheck(
               async (url) =>
                 [
                   url,
-                  withRedirect(await getPlaywrightHashResult(page, url, { status, deadline })),
+                  await judgeLink(url, verdict, {
+                    redirectedTo,
+                    isHashPresent: (fragment) =>
+                      isHashPresentPlaywright(page, fragment, url, deadline),
+                  }),
                 ] as const,
             ),
           ),
@@ -284,7 +269,10 @@ async function navigateAndCheck(
               break;
             }
             if (found) {
-              results.set(url, withRedirect({ ok: true, status }));
+              results.set(
+                url,
+                await judgeLink(url, verdict, { redirectedTo, isHashPresent: () => true }),
+              );
             }
           }
         }
@@ -294,11 +282,7 @@ async function navigateAndCheck(
         if (page.isClosed()) {
           throw error;
         }
-        return sameForAll({
-          ok: false,
-          error: "broken link",
-          errorDetail: String(error),
-        });
+        return sameForAll(await judgePage("playwright", { type: "error", error }));
       }
     },
     {

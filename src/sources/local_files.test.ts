@@ -260,27 +260,48 @@ describe("collectLinksFromFiles()", () => {
     ]);
   });
 
-  it("expands globs and file paths, sorted, deduplicated, markdown only, skipping node_modules", async () => {
+  it("expands globs and file paths, sorted, deduplicated, markdown and source code only, skipping node_modules", async () => {
     const cwd = makeTempDir({
       "docs/b.md": "# x",
       "docs/a.markdown": "# x",
       "docs/c.txt": "# x",
+      "docs/d.png": "x",
       "node_modules/x/readme.md": "# x",
       "README.md": "# x",
+      "src/App.tsx": "",
     });
     const { files } = await collectLinksFromFiles({
       patterns: ["**/*", "README.md", "docs/*.md"],
       cwd,
     });
-    expect(files).toEqual(["README.md", "docs/a.markdown", "docs/b.md"]);
+    expect(files).toEqual(["README.md", "docs/a.markdown", "docs/b.md", "src/App.tsx"]);
   });
 
-  it("fails when no markdown file matches", async () => {
+  it("extracts only absolute links from source code, markdown syntax there is not a link", async () => {
+    const cwd = makeTempDir({
+      "src/App.tsx": [
+        "// [docs](docs/a.md)",
+        "<DocsLink href='https://docs.example.com/a#anchor'>A</DocsLink>",
+        "<Link href='/playground'>P</Link>",
+      ].join("\n"),
+    });
+    const collected = await collectLinksFromFiles({ patterns: ["src/**/*.tsx"], cwd });
+    expect(collected).toEqual({
+      files: ["src/App.tsx"],
+      local: [],
+      external: [
+        { page: "src/App.tsx", href: "https://docs.example.com/a#anchor", text: "", line: 2 },
+      ],
+      skipped: [],
+    });
+  });
+
+  it("fails when no markdown or source code file matches", async () => {
     await expect(
       collectLinksFromFiles({ patterns: ["nope/*.md"], cwd: FIXTURE }),
     ).rejects.toMatchObject({
-      name: "NoMarkdownFilesError",
-      message: 'No markdown files match "nope/*.md".',
+      name: "NoFilesToCheckError",
+      message: 'No markdown or source code files match "nope/*.md".',
     });
   });
 });

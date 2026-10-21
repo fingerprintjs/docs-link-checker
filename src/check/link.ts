@@ -1,3 +1,7 @@
+/**
+ * `checkLinks`: checks every unique link once, first with `fetch` or the GitHub API, then re-checks failures that
+ * might be caused by the check method in a browser (see `shouldRecheckWithPlaywright`).
+ */
 import { checkLinkWithGithubApi } from "../github/check_link";
 import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "../github/url";
 import {
@@ -13,9 +17,12 @@ import { getErrorMessage } from "../utils/errors";
 import { CONCURRENCY_LIMIT, parallelProcess } from "../utils/parallel";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { hasHash, stripHash } from "./hash";
-import { TASK_TIMEOUT } from "./http";
 import { withTimeout } from "./limiter";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
+import { shouldRecheckWithPlaywright } from "./verdict";
+
+// GitHub makes you wait 60s after hitting its rate limit, a check waiting that out still finishes in time
+const GITHUB_API_CHECK_TIMEOUT = 80000;
 
 type CheckLinksArgs = {
   links: Link[];
@@ -53,67 +60,43 @@ const getInitialCheckMethod = (href: string): CheckMethod => {
   return "github-api";
 };
 
-// Status codes returned by fetch that might be caused by bot protection, rate limiting or the request itself
-const PLAYWRIGHT_RETRY_STATUS_CODES = new Set([401, 403, 405, 406, 408, 429]);
-
-/**
- * Decides if a failed first-pass result should be re-checked with Playwright.
- * Only failures that could be caused by the fetch method itself (client-side rendering, bot blocking,
- * rate limiting, network errors) are re-checked. Definitive answers (like 404 from the GitHub API) are not.
- */
-const shouldRecheckWithPlaywright = (result: LinkCheckResult, method: CheckMethod): boolean => {
-  if (result.ok) {
-    return false;
-  }
-  switch (method) {
-    case "invalid":
-      // A URL that cannot be parsed is definitively broken
-      return false;
-    case "github-api":
-      // "broken link" and "hash not found" from the API are definitive.
-      // Unexpected errors (unknown link type, API errors, rate limits, no `GH_TOKEN`) might still work in a browser.
-      return result.error === "unexpected error";
-    case "fetch":
-      if (result.error === "broken link") {
-        // No status means a network error or a timeout
-        return (
-          result.status === undefined ||
-          PLAYWRIGHT_RETRY_STATUS_CODES.has(result.status) ||
-          result.status >= 500
-        );
-      }
-      // "hash not found" (the page might be client-side rendered), "could not check", "unexpected error"
-      return true;
-  }
-};
-
+/** The first-pass result, and if it is re-checked with Playwright (see `shouldRecheckWithPlaywright`) */
 const checkLinkFirstPass = async (
   href: string,
   pageCache: PageFetchCache,
-): Promise<{ result: LinkCheckResult; method: CheckMethod }> => {
+): Promise<{ result: LinkCheckResult; recheck: boolean }> => {
   const method = getInitialCheckMethod(href);
   switch (method) {
     case "invalid":
+      // Definitively broken, nothing to re-check
       return {
         result: {
           ok: false,
           error: "broken link",
           errorDetail: `Unsupported or invalid URL: ${href}`,
         },
-        method,
+        recheck: false,
       };
-    case "fetch":
+    case "fetch": {
       // Every request has its own timeout (FETCH_TIMEOUT)
-      return { result: await checkLinkWithFetch(href, pageCache), method };
-    case "github-api":
-      return {
-        result: await withTimeout(
-          (signal) => checkLinkWithGithubApi(href, signal),
-          TASK_TIMEOUT,
-          `GitHub API check timed out after ${TASK_TIMEOUT}ms`,
-        ),
-        method,
-      };
+      const result = await checkLinkWithFetch(href, pageCache);
+      return { result, recheck: shouldRecheckWithPlaywright("fetch", result) };
+    }
+    case "github-api": {
+      const timeoutMessage = `GitHub API check timed out after ${GITHUB_API_CHECK_TIMEOUT}ms`;
+      const result = await withTimeout(
+        (signal) => checkLinkWithGithubApi(href, signal),
+        GITHUB_API_CHECK_TIMEOUT,
+        timeoutMessage,
+      ).catch((error: unknown): LinkCheckResult => {
+        // The API did not answer (e.g. waiting out a rate limit): the browser might still check the link
+        if (error instanceof Error && error.message === timeoutMessage) {
+          return { ok: false, error: "unexpected error", errorDetail: timeoutMessage };
+        }
+        throw error;
+      });
+      return { result, recheck: shouldRecheckWithPlaywright("github-api", result) };
+    }
   }
 };
 
@@ -214,9 +197,9 @@ const checkLinksInRun = async ({
       failing: () => failing,
       // Tasks can wait for a per-host slot, every check has its own timeout instead (see `checkLinkFirstPass`)
       processFn: async ({ href }) => {
-        const { result, method } = await checkLinkFirstPass(href, pageCache);
-        // Failure possibly caused by the fetch method, add to the Playwright queue instead of the final results
-        if (shouldRecheckWithPlaywright(result, method)) {
+        const { result, recheck } = await checkLinkFirstPass(href, pageCache);
+        // Failure possibly caused by the check method, add to the Playwright queue instead of the final results
+        if (recheck) {
           toRecheck.push(href);
         } else {
           results.set(href, result);
