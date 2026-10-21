@@ -113,8 +113,14 @@ describe("renderReportToHTML() header", () => {
       links,
       siteName: "site",
       previous: {
+        generatedAt: new Date("2026-01-01T03:00:00Z"),
         linksToFix: [
-          { page: "https://example.com/old", href: "https://old/", error: "broken link" },
+          {
+            page: "https://example.com/old",
+            href: "https://old/",
+            error: "broken link",
+            brokenSince: new Date("2026-01-01T03:00:00Z"),
+          },
         ],
       },
     });
@@ -465,6 +471,25 @@ describe("getJSONReport() metadata", () => {
       durationMs: 1234,
     });
     expect(report).not.toHaveProperty("diff");
+  });
+
+  it("dates each link to fix by when it first broke, carried over from the previous report", () => {
+    const brokenSince = new Date("2025-12-20T03:00:00Z");
+    const report = getJSONReport({
+      ...RUN,
+      links,
+      siteName: "site",
+      previous: {
+        generatedAt: new Date("2026-01-01T03:00:00Z"),
+        linksToFix: [{ page: links[0]!.page, href: EVIL_HREF, error: "broken link", brokenSince }],
+      },
+    });
+
+    expect(report.brokenLinks.map((link) => link.brokenSince)).toEqual([
+      "2025-12-20T03:00:00.000Z",
+      // New link, broken since this report
+      "2026-01-02T03:04:05.000Z",
+    ]);
   });
 
   it("shows a duration just under 2 minutes as 2m 0s", () => {

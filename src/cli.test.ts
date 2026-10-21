@@ -260,7 +260,7 @@ describe("runCli()", () => {
       "docs/guide.md:8  File not found  ../nope.md  no file nope.md\n",
     );
     expect(readFileSync(githubOutput, "utf8")).toBe(
-      `links-to-fix=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
+      `links-to-fix=1\nlinks-to-notify=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
     );
     expect(readFileSync(summary, "utf8")).toContain(
       "| `../nope.md`<br><sub>no file nope.md</sub> | `docs/guide.md:8` |",
@@ -276,9 +276,17 @@ describe("runCli()", () => {
       text: "",
       result: { ok: false, error },
     });
-    const previousReport = (brokenLinks: unknown[]) => {
+    const previousReport = (brokenLinks: unknown[], generatedAt = new Date()) => {
       const file = join(tempDir(), "previous.json");
-      writeFileSync(file, JSON.stringify({ brokenLinks, hashNotFound: [], networkErrors: [] }));
+      writeFileSync(
+        file,
+        JSON.stringify({
+          generatedAt: generatedAt.toISOString(),
+          brokenLinks,
+          hashNotFound: [],
+          networkErrors: [],
+        }),
+      );
       return file;
     };
     const runFiles = async (extra: string[], env: Record<string, string> = {}) => {
@@ -297,22 +305,58 @@ describe("runCli()", () => {
         link("docs/guide.md", "gone.md"),
       ]);
 
-      expect((await runFiles(["--compare", previous])).diff).toEqual({ new: 0, fixed: 1 });
+      expect((await runFiles(["--compare", previous])).diff).toEqual({
+        new: 0,
+        fixed: 1,
+        reminders: 0,
+      });
       expect((await runFiles([], { LINK_CHECK_COMPARE: previous })).diff).toEqual({
         new: 0,
         fixed: 1,
+        reminders: 0,
       });
+    });
+
+    it("notifies only about new links and reminders", async () => {
+      const githubOutput = join(tempDir(), "github-output");
+      const stillBroken = previousReport([link("docs/guide.md", "../nope.md")]);
+
+      const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const brokenForAWeek = previousReport(
+        [{ ...link("docs/guide.md", "../nope.md"), brokenSince: daysAgo(8).toISOString() }],
+        daysAgo(2),
+      );
+
+      await runFiles(["--compare", stillBroken], { GITHUB_OUTPUT: githubOutput });
+      await runFiles(["--compare", brokenForAWeek], { GITHUB_OUTPUT: githubOutput });
+
+      expect(readFileSync(githubOutput, "utf8").match(/links-to-notify=\d+/g)).toEqual([
+        "links-to-notify=0",
+        "links-to-notify=1",
+      ]);
     });
 
     it("counts a link that fails in a new way as new and fixed", async () => {
       const previous = previousReport([link("docs/guide.md", "../nope.md", "hash not found")]);
 
-      expect((await runFiles(["--compare", previous])).diff).toEqual({ new: 1, fixed: 1 });
+      expect((await runFiles(["--compare", previous])).diff).toEqual({
+        new: 1,
+        fixed: 1,
+        reminders: 0,
+      });
     });
 
     it("names the invalid field when the previous report has the wrong shape", async () => {
       const file = join(tempDir(), "bad.json");
-      writeFileSync(file, JSON.stringify({ brokenLinks: 1, hashNotFound: [], networkErrors: [] }));
+      writeFileSync(
+        file,
+        JSON.stringify({
+          generatedAt: new Date().toISOString(),
+          brokenLinks: 1,
+          hashNotFound: [],
+          networkErrors: [],
+        }),
+      );
 
       const report = await runFiles(["--compare", file]);
 
