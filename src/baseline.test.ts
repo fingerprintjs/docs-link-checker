@@ -141,6 +141,7 @@ describe("getJSONReport() with a baseline", () => {
     expect(report.summary).toEqual({
       linksChecked: 5,
       totalLinksToFix: 1,
+      linksToNotify: 1,
       brokenLinks: 1,
       hashNotFound: 0,
       networkErrors: 0,

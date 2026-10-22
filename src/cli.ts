@@ -535,8 +535,7 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
   writeGithubOutputs(
     {
       "links-to-fix": linksToFix,
-      // Without a previous report, every link to fix is new
-      "links-to-notify": report.diff ? report.diff.new + report.diff.reminders : linksToFix,
+      "links-to-notify": report.summary.linksToNotify,
       "report-path": reportPaths.json,
       "report-html-path": reportPaths.html,
     },

@@ -51,6 +51,43 @@ describe("reminders for links still broken", () => {
     });
     expect(report.diff).toEqual({ new: 1, fixed: 0, reminders: 0 });
   });
+
+  it("marks the links to notify about and counts them", () => {
+    const report = getJSONReport({
+      links: [
+        brokenLink("https://new/"),
+        brokenLink("https://week/"),
+        brokenLink("https://quiet/"),
+      ],
+      siteName: "site",
+      generatedAt: day(7),
+      durationMs: 0,
+      previous: {
+        generatedAt: day(6),
+        linksToFix: [
+          { page: PAGE, href: "https://week/", error: "broken link", brokenSince: SINCE },
+          { page: PAGE, href: "https://quiet/", error: "broken link", brokenSince: day(3) },
+        ],
+      },
+    });
+    expect(report.brokenLinks.map(({ href, notify }) => [href, notify])).toEqual([
+      ["https://new/", "new"],
+      ["https://week/", "reminder"],
+      ["https://quiet/", undefined],
+    ]);
+    expect(report.summary.linksToNotify).toBe(2);
+  });
+
+  it("notifies about every link to fix without a previous report", () => {
+    const report = getJSONReport({
+      links: [brokenLink("https://a/")],
+      siteName: "site",
+      generatedAt: day(7),
+      durationMs: 0,
+    });
+    expect(report.brokenLinks[0]?.notify).toBe("new");
+    expect(report.summary.linksToNotify).toBe(1);
+  });
 });
 
 describe("loadPreviousReport()", () => {
