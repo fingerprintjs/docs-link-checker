@@ -281,6 +281,7 @@ describe("runCli()", () => {
       writeFileSync(
         file,
         JSON.stringify({
+          siteName: "site",
           generatedAt: generatedAt.toISOString(),
           brokenLinks,
           hashNotFound: [],
@@ -329,6 +330,7 @@ describe("runCli()", () => {
       writeFileSync(
         file,
         JSON.stringify({
+          siteName: "site",
           generatedAt: new Date().toISOString(),
           brokenLinks: 1,
           hashNotFound: [],

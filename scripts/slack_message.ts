@@ -3,7 +3,8 @@
 // reports are published) set.
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
-import { parseSlackReport, renderSlackMessage } from "../src/report/slack";
+import { parseSavedReport } from "../src/report/compare";
+import { renderSlackMessage } from "../src/report/slack";
 
 const { PAGES_URL } = process.env;
 if (!PAGES_URL) {
@@ -12,7 +13,7 @@ if (!PAGES_URL) {
 
 const message = renderSlackMessage(
   process.argv.slice(2).map((path) => ({
-    report: parseSlackReport(JSON.parse(readFileSync(path, "utf8"))),
+    report: parseSavedReport(JSON.parse(readFileSync(path, "utf8"))),
     url: `${PAGES_URL}/${basename(path, ".json")}.html`,
   })),
   { indexUrl: `${PAGES_URL}/` },

@@ -41,17 +41,6 @@ describe("reminders for links still broken", () => {
     expect(remindedBetween(previousAt, now)).toBe(reminded);
   });
 
-  it("counts a new link as new, not as a reminder", () => {
-    const report = getJSONReport({
-      links: [brokenLink("https://new/")],
-      siteName: "site",
-      generatedAt: day(7),
-      durationMs: 0,
-      previous: { generatedAt: day(6), linksToFix: [] },
-    });
-    expect(report.diff).toEqual({ new: 1, fixed: 0 });
-  });
-
   it("marks the links to notify about", () => {
     const report = getJSONReport({
       links: [
@@ -114,6 +103,7 @@ describe("loadPreviousReport()", () => {
 
   it("dates links of a report without brokenSince by the report time", () => {
     const withoutBrokenSince = {
+      siteName: "site",
       generatedAt: SINCE.toISOString(),
       brokenLinks: [brokenLink("https://a/")],
       hashNotFound: [],

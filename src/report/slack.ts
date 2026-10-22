@@ -3,9 +3,7 @@
  * reports of a run. The scheduled workflow posts it, see `scripts/slack_message.ts`.
  * Slack formatting: https://docs.slack.dev/messaging/formatting-message-text
  */
-import { z } from "zod";
-import type { FailedLink } from "../types";
-import type { NotifyReason } from "./compare";
+import type { NotifyReason, SavedReport } from "./compare";
 import { displayUrl, findSiteOrigin, groupByTarget, isHttpUrl, problemLabel } from "./format";
 
 /** Lines of links per report, the rest is counted (`+3 more in the report`) */
@@ -13,41 +11,7 @@ const MAX_LINES_PER_REPORT = 10;
 
 const ICONS: Record<NotifyReason, string> = { new: "🆕", reminder: "⏰" };
 
-const resultSchema = z.object({
-  ok: z.literal(false),
-  error: z.enum(["broken link", "hash not found", "unexpected error", "could not check"]),
-  status: z.number().optional(),
-  errorDetail: z.string().optional(),
-  redirectedTo: z.string().optional(),
-}) satisfies z.ZodType<FailedLink["result"]>;
-
-const linkSchema = z.object({
-  page: z.string(),
-  href: z.string(),
-  text: z.string(),
-  line: z.number().optional(),
-  result: resultSchema,
-  brokenSince: z.iso.datetime(),
-  notify: z.enum(["new", "reminder"]).optional(),
-});
-
-const reportSchema = z
-  .object({
-    siteName: z.string(),
-    brokenLinks: z.array(linkSchema),
-    hashNotFound: z.array(linkSchema),
-    networkErrors: z.array(linkSchema),
-  })
-  .transform(({ siteName, brokenLinks, hashNotFound, networkErrors }) => ({
-    siteName,
-    linksToFix: [...brokenLinks, ...hashNotFound, ...networkErrors],
-  }));
-
-export type SlackReport = z.infer<typeof reportSchema>;
-type LinkToFix = SlackReport["linksToFix"][number];
-
-/** Reads what the message needs from a saved JSON report */
-export const parseSlackReport = (data: unknown): SlackReport => reportSchema.parse(data);
+type LinkToFix = SavedReport["linksToFix"][number];
 
 // `&`, `<` and `>` are control characters in Slack text, `<!channel>` would mention everyone
 const escape = (text: string) =>
@@ -59,8 +23,8 @@ const slackLink = (url: string, label?: string) =>
 
 const code = (text: string) => `\`${escape(text.replace(/`/g, "'"))}\``;
 
-const formatDate = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const formatDate = (date: Date) =>
+  date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
@@ -89,7 +53,7 @@ const linkLines = ({ reason, link, pages }: NotifyGroup, siteOrigin?: string): s
   return `• ${ICONS[reason]} ${code(problemLabel(link))} ${target}${since}\n    on ${page}${more}`;
 };
 
-type ReportWithUrl = { report: SlackReport; url: string };
+type ReportWithUrl = { report: SavedReport; url: string };
 
 /**
  * The message, or `undefined` when no report has a link to notify about.

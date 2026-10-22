@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { LinkWithResult } from "../types";
+import { parseSavedReport } from "./compare";
 import { getJSONReport } from "./report";
-import { parseSlackReport, renderSlackMessage } from "./slack";
+import { renderSlackMessage } from "./slack";
 
 const OPTIONS = { indexUrl: "https://pages.example/" };
 
@@ -13,6 +14,7 @@ type SavedLink = { href: string; page?: string; notify?: string; brokenSince?: s
 /** A saved JSON report, as the check jobs write it */
 const savedReport = (siteName: string, links: SavedLink[]) => ({
   siteName,
+  generatedAt: "2026-10-22T03:17:00.000Z",
   brokenLinks: links.map(({ href, page = "https://site.example/docs/a", notify, brokenSince }) => ({
     page,
     href,
@@ -28,7 +30,7 @@ const savedReport = (siteName: string, links: SavedLink[]) => ({
 const render = (...reports: Array<{ name: string; json: unknown }>) =>
   renderSlackMessage(
     reports.map(({ name, json }) => ({
-      report: parseSlackReport(json),
+      report: parseSavedReport(json),
       url: `https://pages.example/${name}.html`,
     })),
     OPTIONS,
@@ -109,7 +111,7 @@ describe("renderSlackMessage()", () => {
   });
 });
 
-describe("parseSlackReport()", () => {
+describe("renderSlackMessage() with a saved report", () => {
   it("reads a saved report", () => {
     const link: LinkWithResult = {
       page: "https://site.example/docs/a",
@@ -123,7 +125,7 @@ describe("parseSlackReport()", () => {
       generatedAt: new Date("2026-10-21T03:17:00Z"),
       durationMs: 0,
     });
-    const saved = parseSlackReport(JSON.parse(JSON.stringify(report)));
+    const saved = parseSavedReport(JSON.parse(JSON.stringify(report)));
 
     expect(
       renderSlackMessage([{ report: saved, url: "https://pages.example/docs.html" }], OPTIONS),

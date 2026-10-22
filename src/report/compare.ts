@@ -24,20 +24,48 @@ export type PreviousReport = { generatedAt: Date; linksToFix: PreviousLink[] };
 
 const isoDate = z.iso.datetime().transform((value) => new Date(value));
 
-const linkSchema = z.object({
+const resultSchema = z.object({
+  ok: z.literal(false),
+  error: z.enum(["broken link", "hash not found", "unexpected error", "could not check"]),
+  status: z.number().optional(),
+  errorDetail: z.string().optional(),
+  redirectedTo: z.string().optional(),
+}) satisfies z.ZodType<FailedLink["result"]>;
+
+const savedLinkSchema = z.object({
   page: z.string(),
   href: z.string(),
-  result: z.object({ error: z.string() }),
+  text: z.string(),
+  line: z.number().optional(),
+  result: resultSchema,
   // Missing in reports from versions without reminders
   brokenSince: isoDate.optional(),
+  notify: z.enum(["new", "reminder"]).optional(),
 });
 
-const previousReportSchema = z.object({
-  generatedAt: isoDate,
-  brokenLinks: z.array(linkSchema),
-  hashNotFound: z.array(linkSchema),
-  networkErrors: z.array(linkSchema),
-});
+const savedReportSchema = z
+  .object({
+    siteName: z.string(),
+    generatedAt: isoDate,
+    brokenLinks: z.array(savedLinkSchema),
+    hashNotFound: z.array(savedLinkSchema),
+    networkErrors: z.array(savedLinkSchema),
+  })
+  .transform(({ siteName, generatedAt, brokenLinks, hashNotFound, networkErrors }) => ({
+    siteName,
+    generatedAt,
+    // oxlint-disable-next-line oxc/no-map-spread -- the links are fresh parsed copies
+    linksToFix: [...brokenLinks, ...hashNotFound, ...networkErrors].map((link) => ({
+      ...link,
+      brokenSince: link.brokenSince ?? generatedAt,
+    })),
+  }));
+
+/** A JSON report this tool saved, with its links to fix */
+export type SavedReport = z.infer<typeof savedReportSchema>;
+
+/** Reads a JSON report this tool saved */
+export const parseSavedReport = (data: unknown): SavedReport => savedReportSchema.parse(data);
 
 /** One line: the first invalid field for a bad report (a zod message is multi-line JSON), else the first line */
 const describeError = (error: unknown): string => {
@@ -53,17 +81,15 @@ const describeError = (error: unknown): string => {
  */
 export const loadPreviousReport = (path: string): PreviousReport | undefined => {
   try {
-    const report = previousReportSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+    const report = parseSavedReport(JSON.parse(readFileSync(path, "utf8")));
     return {
       generatedAt: report.generatedAt,
-      linksToFix: [...report.brokenLinks, ...report.hashNotFound, ...report.networkErrors].map(
-        ({ page, href, result, brokenSince }) => ({
-          page,
-          href,
-          error: result.error,
-          brokenSince: brokenSince ?? report.generatedAt,
-        }),
-      ),
+      linksToFix: report.linksToFix.map(({ page, href, result, brokenSince }) => ({
+        page,
+        href,
+        error: result.error,
+        brokenSince,
+      })),
     };
   } catch (error) {
     const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
