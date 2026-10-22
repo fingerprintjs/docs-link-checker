@@ -134,7 +134,8 @@ describe("checkLinkWithGithubApi with missing resources", () => {
   });
 
   it("checks the latest release", async () => {
-    expect(await checkLinkWithGithubApi(`${REPO}/releases/latest`)).toMatchObject(OK);
+    // `toEqual` prints the whole result on failure: this check fails intermittently in CI
+    expect(await checkLinkWithGithubApi(`${REPO}/releases/latest`)).toEqual(OK);
     expect(await checkLinkWithGithubApi(`${MISSING_REPO}/releases/latest`)).toMatchObject(BROKEN);
   });
 });
