@@ -191,6 +191,9 @@ jobs:
     name: Deploy reports to GitHub Pages
     needs: [docs, githubReadmes, web]
     runs-on: ubuntu-latest
+    outputs:
+      # Empty when the deployment was skipped (a report is missing)
+      page_url: ${{ steps.deployment.outputs.page_url }}
     # Never deploy from pull requests, only from main (push) or manual runs.
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     permissions:
@@ -284,9 +287,9 @@ jobs:
   notify:
     name: Notify Slack
     needs: [deploy]
-    # After the deploy: the message links to the new reports, and they are the base of the next comparison.
-    # Never for pull requests (no deploy).
-    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
+    # Only after an actual deployment: the message links to the new reports, and they are the base of the next
+    # comparison. A skipped deployment would announce the same links again in the next run.
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.deploy.outputs.page_url != '' }}
     runs-on: ubuntu-latest
 
     steps:

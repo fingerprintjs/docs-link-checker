@@ -15,8 +15,7 @@ import { getErrorMessage } from "../utils/errors";
  */
 const REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** `reminders`: links to fix, not new, that are due for a reminder (see `REMINDER_INTERVAL_MS`) */
-export type ReportDiff = { new: number; fixed: number; reminders: number };
+export type ReportDiff = { new: number; fixed: number };
 
 type PreviousLink = { page: string; href: string; error: string; brokenSince: Date };
 
@@ -107,21 +106,12 @@ export const getLinkHistory = (previous: PreviousReport | undefined, now: Date) 
   };
 };
 
-/**
- * Links to fix that are not in the previous report (`new`), previous ones that are gone (`fixed`), and links still
- * broken that are due for a reminder (`reminders`), see `getLinkHistory`
- */
-export const diffLinksToFix = (
-  previous: PreviousReport,
-  current: Array<FailedLink & { notify?: NotifyReason }>,
-): ReportDiff => {
+/** Links to fix that are not in the previous report (`new`) and previous ones that are gone (`fixed`) */
+export const diffLinksToFix = (previous: PreviousReport, current: FailedLink[]): ReportDiff => {
   const before = new Set(previous.linksToFix.map(keyOf));
-  const after = new Map(current.map((link) => [currentKey(link), link.notify]));
-  const count = (reason: NotifyReason) =>
-    [...after.values()].filter((notify) => notify === reason).length;
+  const after = new Set(current.map(currentKey));
   return {
-    new: count("new"),
+    new: [...after].filter((key) => !before.has(key)).length,
     fixed: [...before].filter((key) => !after.has(key)).length,
-    reminders: count("reminder"),
   };
 };

@@ -1,8 +1,7 @@
 // Writes the Slack message of a scheduled run (see `src/report/slack.ts`) to `slack-payload.json`, only when there is
 // something to notify about. Usage: `tsx scripts/slack_message.ts <report.json>...`, with `PAGES_URL` (where the
 // reports are published) set.
-// A missing report (its check crashed) is skipped: its links are new again in the next complete run.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { parseSlackReport, renderSlackMessage } from "../src/report/slack";
 
@@ -12,13 +11,10 @@ if (!PAGES_URL) {
 }
 
 const message = renderSlackMessage(
-  process.argv
-    .slice(2)
-    .filter((path) => existsSync(path))
-    .map((path) => ({
-      report: parseSlackReport(JSON.parse(readFileSync(path, "utf8"))),
-      url: `${PAGES_URL}/${basename(path, ".json")}.html`,
-    })),
+  process.argv.slice(2).map((path) => ({
+    report: parseSlackReport(JSON.parse(readFileSync(path, "utf8"))),
+    url: `${PAGES_URL}/${basename(path, ".json")}.html`,
+  })),
   { indexUrl: `${PAGES_URL}/` },
 );
 

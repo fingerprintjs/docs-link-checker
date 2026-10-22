@@ -17,8 +17,8 @@ const brokenLink = (href: string): LinkWithResult => ({
 const SINCE = new Date("2026-01-01T03:00:00Z");
 const day = (days: number) => new Date(SINCE.getTime() + days * 24 * 60 * 60 * 1000);
 
-/** Reminders of a link broken since `SINCE`, checked at `previousAt` and again at `now` */
-const remindersBetween = (previousAt: Date, now: Date) =>
+/** Whether a link broken since `SINCE`, checked at `previousAt` and again at `now`, is due for a reminder */
+const remindedBetween = (previousAt: Date, now: Date) =>
   getJSONReport({
     links: [brokenLink("https://a/")],
     siteName: "site",
@@ -28,17 +28,17 @@ const remindersBetween = (previousAt: Date, now: Date) =>
       generatedAt: previousAt,
       linksToFix: [{ page: PAGE, href: "https://a/", error: "broken link", brokenSince: SINCE }],
     },
-  }).diff?.reminders;
+  }).brokenLinks[0]?.notify === "reminder";
 
 describe("reminders for links still broken", () => {
   it.each([
-    { previousAt: day(6), now: day(7), reminders: 1, case: "first week passed" },
-    { previousAt: day(13), now: day(14), reminders: 1, case: "second week passed" },
-    { previousAt: day(7), now: day(8), reminders: 0, case: "reminded by the previous run" },
-    { previousAt: day(1), now: day(2), reminders: 0, case: "less than a week" },
-    { previousAt: day(6), now: day(15), reminders: 1, case: "two weeks passed between runs" },
-  ])("$case: $reminders", ({ previousAt, now, reminders }) => {
-    expect(remindersBetween(previousAt, now)).toBe(reminders);
+    { previousAt: day(6), now: day(7), reminded: true, case: "first week passed" },
+    { previousAt: day(13), now: day(14), reminded: true, case: "second week passed" },
+    { previousAt: day(7), now: day(8), reminded: false, case: "reminded by the previous run" },
+    { previousAt: day(1), now: day(2), reminded: false, case: "less than a week" },
+    { previousAt: day(6), now: day(15), reminded: true, case: "two weeks passed between runs" },
+  ])("$case: $reminded", ({ previousAt, now, reminded }) => {
+    expect(remindedBetween(previousAt, now)).toBe(reminded);
   });
 
   it("counts a new link as new, not as a reminder", () => {
@@ -49,10 +49,10 @@ describe("reminders for links still broken", () => {
       durationMs: 0,
       previous: { generatedAt: day(6), linksToFix: [] },
     });
-    expect(report.diff).toEqual({ new: 1, fixed: 0, reminders: 0 });
+    expect(report.diff).toEqual({ new: 1, fixed: 0 });
   });
 
-  it("marks the links to notify about and counts them", () => {
+  it("marks the links to notify about", () => {
     const report = getJSONReport({
       links: [
         brokenLink("https://new/"),
@@ -75,7 +75,6 @@ describe("reminders for links still broken", () => {
       ["https://week/", "reminder"],
       ["https://quiet/", undefined],
     ]);
-    expect(report.summary.linksToNotify).toBe(2);
   });
 
   it("notifies about every link to fix without a previous report", () => {
@@ -86,7 +85,6 @@ describe("reminders for links still broken", () => {
       durationMs: 0,
     });
     expect(report.brokenLinks[0]?.notify).toBe("new");
-    expect(report.summary.linksToNotify).toBe(1);
   });
 });
 

@@ -90,8 +90,6 @@ export const getJSONReport = ({
     summary: {
       linksChecked: links.length,
       totalLinksToFix: toFix.length,
-      // New links to fix and reminders (see `getLinkHistory`)
-      linksToNotify: toFix.filter((link) => link.notify).length,
       brokenLinks: brokenLinks.length,
       hashNotFound: hashNotFound.length,
       networkErrors: unexpectedErrors.length,
