@@ -5,15 +5,16 @@ description: "Sets up Node.js environment with pnpm and Playwright"
 inputs:
   app_id:
     description: "GitHub App ID"
-    required: true
+    required: false
+  # Empty on pull requests from forks, they get no secrets
   app_private_key:
-    description: "GitHub App private key"
-    required: true
+    description: "GitHub App private key. Without it, `gh_token` is the workflow token (lower rate limit)."
+    required: false
 
 outputs:
   gh_token:
     description: "GitHub token for authentication"
-    value: ${{ steps.app-token.outputs.token }}
+    value: ${{ steps.app-token.outputs.token || github.token }}
 
 runs:
   using: "composite"
@@ -33,6 +34,7 @@ runs:
       run: pnpm install --frozen-lockfile
 
     - name: "Get token for the GitHub App"
+      if: inputs.app_private_key != ''
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       id: app-token
       with:
@@ -40,11 +42,16 @@ runs:
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
 
+    - name: "Use the workflow token without the GitHub App key"
+      if: inputs.app_private_key == ''
+      shell: bash
+      run: echo "::notice::No GitHub App private key (pull request from a fork?), using the workflow token."
+
     - name: Check GitHub rate limit
       shell: bash
       run: pnpm run gh-limit
       env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
 
     - name: Get installed Playwright version (used in cache key)
       shell: bash
