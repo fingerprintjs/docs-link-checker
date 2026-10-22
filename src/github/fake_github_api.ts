@@ -74,6 +74,7 @@ export const createFakeGithubApi = () =>
           data: { assets: [] },
         }),
       ),
+      getLatestRelease: vi.fn<GithubApi["repos"]["getLatestRelease"]>(() => respond({ data: {} })),
       listReleases: vi.fn<GithubApi["repos"]["listReleases"]>(() => respond({ data: [{}] })),
       listForOrg: vi.fn<GithubApi["repos"]["listForOrg"]>(() => respond({ data: [] })),
     },
