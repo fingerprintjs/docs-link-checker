@@ -47,11 +47,14 @@ runs:
       shell: bash
       run: echo "::notice::No GitHub App private key (pull request from a fork?), using the workflow token."
 
+    # Only for the App token. The workflow token has a lower quota, a low one should end in "could not check"
+    # results, not block the offline checks.
     - name: Check GitHub rate limit
+      if: inputs.app_private_key != ''
       shell: bash
       run: pnpm run gh-limit
       env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
     - name: Get installed Playwright version (used in cache key)
       shell: bash
