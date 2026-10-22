@@ -260,7 +260,7 @@ describe("runCli()", () => {
       "docs/guide.md:8  File not found  ../nope.md  no file nope.md\n",
     );
     expect(readFileSync(githubOutput, "utf8")).toBe(
-      `links-to-fix=1\nlinks-to-notify=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
+      `links-to-fix=1\nreport-path=${join(out, "local-files.json")}\nreport-html-path=${join(out, "local-files.html")}\n`,
     );
     expect(readFileSync(summary, "utf8")).toContain(
       "| `../nope.md`<br><sub>no file nope.md</sub> | `docs/guide.md:8` |",
@@ -281,6 +281,7 @@ describe("runCli()", () => {
       writeFileSync(
         file,
         JSON.stringify({
+          siteName: "site",
           generatedAt: generatedAt.toISOString(),
           brokenLinks,
           hashNotFound: [],
@@ -308,32 +309,11 @@ describe("runCli()", () => {
       expect((await runFiles(["--compare", previous])).diff).toEqual({
         new: 0,
         fixed: 1,
-        reminders: 0,
       });
       expect((await runFiles([], { LINK_CHECK_COMPARE: previous })).diff).toEqual({
         new: 0,
         fixed: 1,
-        reminders: 0,
       });
-    });
-
-    it("notifies only about new links and reminders", async () => {
-      const githubOutput = join(tempDir(), "github-output");
-      const stillBroken = previousReport([link("docs/guide.md", "../nope.md")]);
-
-      const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const brokenForAWeek = previousReport(
-        [{ ...link("docs/guide.md", "../nope.md"), brokenSince: daysAgo(8).toISOString() }],
-        daysAgo(2),
-      );
-
-      await runFiles(["--compare", stillBroken], { GITHUB_OUTPUT: githubOutput });
-      await runFiles(["--compare", brokenForAWeek], { GITHUB_OUTPUT: githubOutput });
-
-      expect(readFileSync(githubOutput, "utf8").match(/links-to-notify=\d+/g)).toEqual([
-        "links-to-notify=0",
-        "links-to-notify=1",
-      ]);
     });
 
     it("counts a link that fails in a new way as new and fixed", async () => {
@@ -342,7 +322,6 @@ describe("runCli()", () => {
       expect((await runFiles(["--compare", previous])).diff).toEqual({
         new: 1,
         fixed: 1,
-        reminders: 0,
       });
     });
 
@@ -351,6 +330,7 @@ describe("runCli()", () => {
       writeFileSync(
         file,
         JSON.stringify({
+          siteName: "site",
           generatedAt: new Date().toISOString(),
           brokenLinks: 1,
           hashNotFound: [],
