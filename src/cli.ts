@@ -48,7 +48,7 @@ export type CommonOptions = {
   /** Path of the baseline file, if any */
   baseline?: string;
   updateBaseline: boolean;
-  /** Path of a previous JSON report, the new report gets `diff` (new and fixed links to fix) against it */
+  /** Path of a previous JSON report, the new report gets `diff` (new, fixed, and reminded links to fix) against it */
   compare?: string;
   /** With `updateBaseline`: also remove exact entries that no longer fail (only for full-scope runs) */
   pruneBaseline: boolean;
@@ -180,7 +180,7 @@ const buildProgram = (
       )
       .option(
         "--compare <report.json>",
-        "Previous JSON report: the report gets the number of new and fixed links to fix since then (skipped if the file is missing)",
+        "Previous JSON report: the report gets the number of new, fixed, and reminded links to fix since then (skipped if the file is missing)",
         nonEmpty,
         // An empty LINK_CHECK_COMPARE means no comparison
         env.LINK_CHECK_COMPARE || undefined,
@@ -535,6 +535,8 @@ const runCheckCommand = async (command: CheckCommand, context: RunContext): Prom
   writeGithubOutputs(
     {
       "links-to-fix": linksToFix,
+      // Without a previous report, every link to fix is new
+      "links-to-notify": report.diff ? report.diff.new + report.diff.reminders : linksToFix,
       "report-path": reportPaths.json,
       "report-html-path": reportPaths.html,
     },

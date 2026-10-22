@@ -35,3 +35,6 @@ export type LinkCheckResult =
       /** Final URL when the checked URL redirected to a different page (not for trailing slash or hash changes) */
       redirectedTo?: string;
     };
+
+/** A link whose check failed, e.g. a link to fix */
+export type FailedLink = Link & { result: Extract<LinkCheckResult, { ok: false }> };

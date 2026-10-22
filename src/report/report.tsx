@@ -8,8 +8,8 @@ import { basename, join } from "node:path";
 import { Fragment, h } from "preact";
 import { renderToStaticMarkup } from "preact-render-to-string";
 import { type Baseline, EMPTY_BASELINE } from "../baseline";
-import type { Link, LinkWithResult } from "../types";
-import { diffLinksToFix, type PreviousReport } from "./compare";
+import type { FailedLink, Link, LinkWithResult } from "../types";
+import { diffLinksToFix, getBrokenSince, type PreviousReport } from "./compare";
 import {
   countByKind,
   displayUrl,
@@ -37,7 +37,10 @@ type GetReportArgs = {
   generatedAt: Date;
   /** How long the check took */
   durationMs: number;
-  /** Adds `diff` (new and fixed links to fix) when given, see `loadPreviousReport` */
+  /**
+   * Adds `diff` (new, fixed, and reminded links to fix) when given, and keeps when each link to fix broke
+   * (`brokenSince`), see `loadPreviousReport`
+   */
   previous?: PreviousReport;
 };
 
@@ -63,12 +66,16 @@ export const getJSONReport = ({
     }
   }
   const withError = (error: string) =>
-    notIgnored.filter((link) => !link.result.ok && link.result.error === error);
+    notIgnored.filter((link): link is FailedLink => !link.result.ok && link.result.error === error);
+  const brokenSince = getBrokenSince(previous, generatedAt);
+  const toFixWithError = (error: string) =>
+    // oxlint-disable-next-line oxc/no-map-spread -- a copy, the caller's links must not change
+    withError(error).map((link) => ({ ...link, brokenSince: brokenSince(link).toISOString() }));
 
-  const brokenLinks = withError("broken link");
-  const hashNotFound = withError("hash not found");
+  const brokenLinks = toFixWithError("broken link");
+  const hashNotFound = toFixWithError("hash not found");
   const couldNotCheck = withError("could not check");
-  const unexpectedErrors = withError("unexpected error");
+  const unexpectedErrors = toFixWithError("unexpected error");
 
   const toFix = [...brokenLinks, ...hashNotFound, ...unexpectedErrors];
 
@@ -91,7 +98,7 @@ export const getJSONReport = ({
     networkErrors: unexpectedErrors,
     couldNotCheck,
     ignored,
-    ...(previous ? { diff: diffLinksToFix(previous, toFix) } : {}),
+    ...(previous ? { diff: diffLinksToFix(previous, toFix, generatedAt) } : {}),
   };
 };
 
