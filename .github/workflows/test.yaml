@@ -46,8 +46,9 @@ jobs:
         run: pnpm run test:coverage
 
       # Hit real websites and the GitHub API. Runs even if unit tests fail, so both results are visible.
+      # Not on pull requests from forks: the workflow token's quota is shared by the repository and can run out.
       - name: Run integration tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         run: pnpm run test:integration
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
