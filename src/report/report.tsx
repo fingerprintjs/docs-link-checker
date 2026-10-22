@@ -263,9 +263,12 @@ const markdownCode = (value: string): string => {
   return `${fence}${pad}${value}${pad}${fence}`;
 };
 
-/** Bare http(s) URLs are links in Markdown, anything else (relative links, `file:line`) is code */
+/**
+ * http(s) URLs are `<autolinks>`: bare ones lose trailing punctuation such as `)`.
+ * Anything else (relative links, `file:line`) is code.
+ */
 const markdownValue = (value: string): string =>
-  isHttpUrl(value) ? value.replace(/[<>\s`]/g, encodeURIComponent) : markdownCode(value);
+  isHttpUrl(value) ? `<${value.replace(/[<>\s`]/g, encodeURIComponent)}>` : markdownCode(value);
 
 /** One line of plain text: link text from a page can hold line breaks, Markdown and HTML */
 const markdownText = (text: string): string =>
@@ -276,8 +279,15 @@ const markdownText = (text: string): string =>
 
 const toRowMarkdown = ({ link, pages }: TargetGroup<IgnoredLink>): string => {
   const reason = shortReason(link);
+  const { redirectedTo } = link.result;
+  const head = [
+    `- ${markdownValue(link.href)}: ${problemLabel(link)}`,
+    reason && ` (${markdownText(reason)})`,
+    redirectedTo && ` → redirects to ${markdownValue(redirectedTo)}`,
+    link.ignoreReason && ` (ignored: ${markdownText(link.ignoreReason)})`,
+  ].join("");
   return [
-    `- ${markdownValue(link.href)}: ${problemLabel(link)}${reason ? ` (${markdownText(reason)})` : ""}`,
+    head,
     ...pages.map(
       (page) =>
         `  - ${markdownValue(formatLocation(page))}${page.text ? ` "${markdownText(page.text)}"` : ""}`,

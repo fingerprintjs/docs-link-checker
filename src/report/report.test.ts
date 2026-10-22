@@ -60,7 +60,7 @@ describe("renderReportToHTML()", () => {
       pages: [{ page: "https://example.com/page", text: links[0]?.text }],
     });
     expect(row.find("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
-      `- ${EVIL_HREF.replace("<script>", "%3Cscript%3E").replace("</script>", "%3C/script%3E")}: HTTP 404\n  - https://example.com/page "\\</a\\>\\<script\\>alert("text")\\</script\\>"`,
+      `- <${EVIL_HREF.replace("<script>", "%3Cscript%3E").replace("</script>", "%3C/script%3E")}>: HTTP 404\n  - <https://example.com/page> "\\</a\\>\\<script\\>alert("text")\\</script\\>"`,
     );
   });
 
@@ -82,8 +82,8 @@ describe("renderReportToHTML()", () => {
       ),
     );
     expect(multiline("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
-      "- https://example.com/gone: HTTP 404\n" +
-        '  - https://example.com/p "\\*\\*bold\\*\\* - \\!\\[img\\](https://example.com/x.png)"',
+      "- <https://example.com/gone>: HTTP 404\n" +
+        '  - <https://example.com/p> "\\*\\*bold\\*\\* - \\!\\[img\\](https://example.com/x.png)"',
     );
   });
 
@@ -110,8 +110,34 @@ describe("renderReportToHTML()", () => {
       ),
     );
     expect(markup("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
-      "- https://example.com/%3Cimg%20src=x%3E: HTTP 404 (see \\!\\[x\\](https://example.com/x.png) in \\*\\*draft\\*\\*)\n" +
+      "- <https://example.com/%3Cimg%20src=x%3E>: HTTP 404 (see \\!\\[x\\](https://example.com/x.png) in \\*\\*draft\\*\\*)\n" +
         "  - ``docs/a`b.md``",
+    );
+  });
+
+  it("keeps trailing punctuation in URLs and adds the redirect and the ignore reason to the Markdown row", () => {
+    const report = getJSONReport({
+      ...RUN,
+      siteName: "s",
+      links: [
+        {
+          href: "https://example.com/missing)",
+          page: "https://example.com/p",
+          text: "",
+          result: {
+            ok: false,
+            error: "broken link",
+            status: 404,
+            redirectedTo: "https://example.com/new",
+          },
+        },
+      ],
+      baseline: createBaseline([{ pattern: "**", reason: "known *issue*" }]),
+    });
+    const ignored = cheerio.load(renderReportToHTML(report));
+    expect(ignored("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      "- <https://example.com/missing)>: HTTP 404 → redirects to <https://example.com/new> (ignored: known \\*issue\\*)\n" +
+        "  - <https://example.com/p>",
     );
   });
 
