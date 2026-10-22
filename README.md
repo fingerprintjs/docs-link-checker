@@ -83,3 +83,7 @@ jobs:
 ```
 
 Inputs and outputs: [docs/action.md](docs/action.md).
+
+## Limitations
+
+- **Website checks only cover pages in the sitemap.** Pages left out of it are not checked. For example, Mintlify drops `noindex` pages from `sitemap.xml`, so the docs.fingerprint.com check skips the v3 docs.

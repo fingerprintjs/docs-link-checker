@@ -51,6 +51,34 @@
     {
       "pattern": "https://*.x.com/**",
       "reason": "Blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://npmjs.com/**",
+      "reason": "npm blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://npmjs.org/**",
+      "reason": "npm blocks automated clients with a Cloudflare challenge (403)"
+    },
+    {
+      "pattern": "https://support.mozilla.org/**",
+      "reason": "Blocks automated clients (406), works in a browser"
+    },
+    {
+      "pattern": "http://support.mozilla.org/**",
+      "reason": "Blocks automated clients (406), works in a browser"
+    },
+    {
+      "pattern": "https://help.pinterest.com/**",
+      "reason": "Blocks automated clients (406), works in a browser"
+    },
+    {
+      "pattern": "https://developers.facebook.com/**",
+      "reason": "Blocks automated clients (400), works in a browser"
+    },
+    {
+      "pattern": "https://cursor.directory/**",
+      "reason": "Blocks automated clients with a Vercel Security Checkpoint (429)"
     }
   ]
 }
