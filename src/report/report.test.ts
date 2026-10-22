@@ -42,10 +42,107 @@ describe("renderReportToHTML()", () => {
     expect(html).not.toContain("tailwind");
   });
 
-  it("stores the link to copy in a data attribute, with the exact URL", () => {
-    const buttons = $("#by-link button[data-copy-href]");
-    expect(buttons.length).toBe(2);
-    expect(buttons.first().attr("data-copy-href")).toBe(EVIL_HREF);
+  it("stores each value to copy in a data attribute, with the exact text", () => {
+    const row = $("#by-link tbody tr").first();
+    expect(row.find(".lk button[title='Copy link']").attr("data-copy")).toBe(EVIL_HREF);
+    expect(row.find(".pg button[title='Copy page']").attr("data-copy")).toBe(
+      "https://example.com/page",
+    );
+  });
+
+  it("copies the whole row as JSON and as Markdown", () => {
+    const row = $("#by-link tbody tr").first();
+    expect(
+      JSON.parse(row.find("button[title='Copy row as JSON']").attr("data-copy") ?? ""),
+    ).toEqual({
+      problem: "HTTP 404",
+      link: EVIL_HREF,
+      pages: [{ page: "https://example.com/page", text: links[0]?.text }],
+    });
+    expect(row.find("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      `- <${EVIL_HREF.replace("<script>", "%3Cscript%3E").replace("</script>", "%3C/script%3E")}>: HTTP 404\n  - <https://example.com/page> "\\</a\\>\\<script\\>alert("text")\\</script\\>"`,
+    );
+  });
+
+  it("copies link text as one line of plain Markdown text", () => {
+    const multiline = cheerio.load(
+      renderReportToHTML(
+        getJSONReport({
+          ...RUN,
+          siteName: "s",
+          links: [
+            {
+              href: "https://example.com/gone",
+              page: "https://example.com/p",
+              text: "**bold**\n\n- ![img](https://example.com/x.png)",
+              result: { ok: false, error: "broken link", status: 404 },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(multiline("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      "- <https://example.com/gone>: HTTP 404\n" +
+        '  - <https://example.com/p> "\\*\\*bold\\*\\* - \\!\\[img\\](https://example.com/x.png)"',
+    );
+  });
+
+  it("keeps URLs, paths and reasons literal in the Markdown row", () => {
+    const markup = cheerio.load(
+      renderReportToHTML(
+        getJSONReport({
+          ...RUN,
+          siteName: "s",
+          links: [
+            {
+              href: "https://example.com/<img src=x>",
+              page: "docs/a`b.md",
+              text: "",
+              result: {
+                ok: false,
+                error: "broken link",
+                status: 404,
+                errorDetail: "see ![x](https://example.com/x.png) in **draft**",
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(markup("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      "- <https://example.com/%3Cimg%20src=x%3E>: HTTP 404 (see \\!\\[x\\](https://example.com/x.png) in \\*\\*draft\\*\\*)\n" +
+        "  - ``docs/a`b.md``",
+    );
+  });
+
+  it("keeps trailing punctuation in URLs and adds the redirect and the ignore reason to the Markdown row", () => {
+    const report = getJSONReport({
+      ...RUN,
+      siteName: "s",
+      links: [
+        {
+          href: "https://example.com/missing)",
+          page: "https://example.com/p",
+          text: "",
+          result: {
+            ok: false,
+            error: "broken link",
+            status: 404,
+            redirectedTo: "https://example.com/new",
+          },
+        },
+      ],
+      baseline: createBaseline([{ pattern: "**", reason: "known *issue*" }]),
+    });
+    const ignored = cheerio.load(renderReportToHTML(report));
+    expect(ignored("button[title='Copy row as Markdown']").attr("data-copy")).toBe(
+      "- <https://example.com/missing)>: HTTP 404 → redirects to <https://example.com/new> (ignored: known \\*issue\\*)\n" +
+        "  - <https://example.com/p>",
+    );
+  });
+
+  it("has a live region to announce the copy result", () => {
+    expect($("#copy-status[role=status]")).toHaveLength(1);
   });
 
   it("shows the status as a decorative glyph plus a text label", () => {
@@ -335,7 +432,8 @@ describe("renderReportToHTML() with ignored links", () => {
     expect(twitter.find("td.rs").text()).toBe("bot wall");
     expect(twitter.find("pre")).toHaveLength(1);
     expect(twitter.find("pre").text()).toBe("<html>challenge</html>");
-    expect(twitter.find("button[data-copy-href]")).toHaveLength(1);
+    // The link, each page (also the folded one) and the row as JSON and Markdown
+    expect(twitter.find("button[data-copy]")).toHaveLength(1 + 4 + 2);
 
     const twitterBroken = rows.eq(1);
     expect(twitterBroken.text()).toContain("docs/local.md:4");
@@ -348,7 +446,7 @@ describe("renderReportToHTML() with ignored links", () => {
     expect(other.find("details")).toHaveLength(1); // the response body, no folded pages
     expect(other.text()).toContain('"Other"');
     expect(other.find("td.rs").text()).toBe("known");
-    expect(other.find("button[data-copy-href]").attr("data-copy-href")).toBe(
+    expect(other.find("button[title='Copy link']").attr("data-copy")).toBe(
       "https://other.example/",
     );
   });

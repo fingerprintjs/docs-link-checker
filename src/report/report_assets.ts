@@ -38,10 +38,11 @@ tr:hover td{background:var(--hover)}
 .pg{overflow-wrap:anywhere}
 .txt{display:inline-block;margin-left:4px;max-width:32ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .ph td{font-weight:600;border-top:1px solid var(--line);padding-top:6px}
-.cp{color:var(--muted);font-size:12px;white-space:nowrap;opacity:0}
-tr:hover .cp,tr:focus-within .cp{opacity:1}
-@media(hover:none){.cp{opacity:1}}
-.cp:hover{color:var(--fg)}
+.cp{color:var(--muted);font:12px var(--sans);white-space:nowrap;vertical-align:middle;line-height:1;padding:1px 3px;border-radius:3px}
+.cp:hover{color:var(--fg);background:var(--line)}
+.cp svg{display:block}
+.cr{white-space:nowrap}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 details{display:block}
 summary{cursor:pointer;color:var(--muted);display:inline-block;font:12px var(--sans)}
 details[open]>summary{margin-bottom:2px}
@@ -52,7 +53,7 @@ body{margin:4px auto;padding:0 6px}
 thead{display:none}
 tr,td{display:block}
 tr{position:relative;border-top:1px solid var(--line);padding:3px 0}
-td:last-child:has(.cp){position:absolute;top:3px;right:0}
+td.cr{position:absolute;top:3px;right:0}
 td,tbody:first-of-type tr:first-child td{border:0;padding:0}
 .ph{border-top:1px solid var(--line)}
 }
@@ -66,11 +67,17 @@ export const REPORT_SCRIPT = `
   var rows = Array.prototype.slice.call(document.querySelectorAll("[data-row]"));
   var pages = Array.prototype.slice.call(document.querySelectorAll("tbody[data-page]"));
   var count = document.getElementById("count");
+  // The copy buttons' labels (json, md) are not report text
+  var texts = rows.map(function (row) {
+    var clone = row.cloneNode(true);
+    clone.querySelectorAll(".cp").forEach(function (button) { button.remove(); });
+    return ((clone.textContent || "") + " " + (row.getAttribute("data-page") || "")).toLowerCase();
+  });
   function apply() {
     var shown = 0;
-    rows.forEach(function (row) {
+    rows.forEach(function (row, i) {
       var match = (!kind || row.getAttribute("data-kind") === kind) &&
-        (!q || ((row.textContent || "") + " " + (row.getAttribute("data-page") || "")).toLowerCase().indexOf(q) >= 0);
+        (!q || texts[i].indexOf(q) >= 0);
       row.hidden = !match;
       if (match && !row.closest("[data-section=ignored]") && !row.closest("tbody[data-page]")) shown++;
     });
@@ -100,19 +107,20 @@ export const REPORT_SCRIPT = `
   document.addEventListener("click", function (event) {
     var target = event.target instanceof Element ? event.target : null;
     if (!target) return;
-    var copy = target.closest("[data-copy-href]");
+    var copy = target.closest("[data-copy]");
     if (copy) {
-      var label = copy.getAttribute("data-label") || copy.textContent;
-      copy.setAttribute("data-label", label);
-      var show = function (text) {
-        copy.textContent = text;
-        setTimeout(function () { copy.textContent = label; }, 1200);
+      if (copy.original === undefined) copy.original = copy.innerHTML;
+      var status = document.getElementById("copy-status");
+      var show = function (glyph, message) {
+        copy.textContent = glyph;
+        if (status) status.textContent = message;
+        setTimeout(function () { copy.innerHTML = copy.original; }, 1200);
       };
       // No Clipboard API or a denied write (e.g. a report opened from a file): say so instead of "Copied"
-      if (!navigator.clipboard) { show("Copy failed"); return; }
-      navigator.clipboard.writeText(copy.getAttribute("data-copy-href") || "").then(
-        function () { show("Copied"); },
-        function () { show("Copy failed"); }
+      if (!navigator.clipboard) { show("✗", "Copy failed"); return; }
+      navigator.clipboard.writeText(copy.getAttribute("data-copy") || "").then(
+        function () { show("✓", "Copied"); },
+        function () { show("✗", "Copy failed"); }
       );
       return;
     }
