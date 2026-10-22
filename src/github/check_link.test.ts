@@ -81,7 +81,11 @@ describe("checkLinkWithGithubApi() link types", () => {
       () => api.repos.getReleaseByTag,
       { tag: "@fingerprint/vue@2.0.0" },
     ],
-    ["https://github.com/o/r/releases/latest", () => api.repos.listReleases, { per_page: 1 }],
+    [
+      "https://github.com/o/r/releases/latest",
+      () => api.repos.getLatestRelease,
+      { owner: "o", repo: "r" },
+    ],
     [
       "https://github.com/o/r/blob/main/docs/my%20file%40v1.md",
       () => api.repos.getContent,
@@ -102,6 +106,20 @@ describe("checkLinkWithGithubApi() link types", () => {
     expect(await checkInRun(url)).toEqual(OK);
     expect(method()).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ ...params, ...withSignal }),
+    );
+  });
+
+  it("accepts the latest release without listing releases, the list can come back empty", async () => {
+    api.repos.listReleases.mockResolvedValue({ data: [] });
+    expect(await checkInRun("https://github.com/o/r/releases/latest")).toEqual(OK);
+    expect(api.repos.listReleases).not.toHaveBeenCalled();
+  });
+
+  it("accepts the latest release of a repository with only prereleases", async () => {
+    api.repos.getLatestRelease.mockRejectedValue(notFound());
+    expect(await checkInRun("https://github.com/o/r/releases/latest")).toEqual(OK);
+    expect(api.repos.listReleases).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ owner: "o", repo: "r", per_page: 1 }),
     );
   });
 
@@ -224,12 +242,18 @@ describe("checkLinkWithGithubApi() missing resources", () => {
     ],
     [
       "https://github.com/o/r/releases/latest",
-      () => api.repos.listReleases.mockResolvedValue({ data: [] }),
+      () => {
+        api.repos.getLatestRelease.mockRejectedValue(notFound());
+        api.repos.listReleases.mockResolvedValue({ data: [] });
+      },
       { status: 404, errorDetail: "No releases found in repository" },
     ],
     [
       "https://github.com/o/r/releases/latest",
-      () => api.repos.listReleases.mockRejectedValue(notFound()),
+      () => {
+        api.repos.getLatestRelease.mockRejectedValue(notFound());
+        api.repos.listReleases.mockRejectedValue(notFound());
+      },
       { status: 404, errorDetail: "Repository o/r not found" },
     ],
     [
@@ -354,6 +378,7 @@ const failEveryRequest = (error: Error) => {
     api.repos.getCommit,
     api.repos.getRelease,
     api.repos.getReleaseByTag,
+    api.repos.getLatestRelease,
     api.repos.listReleases,
     api.issues.get,
     api.pulls.get,
@@ -688,7 +713,7 @@ const firstRequestOf = (url: string) => {
   if (!path) return url === "https://github.com/o/r" ? api.repos.get : api.users.getByUsername;
   if (path.startsWith("blob") || path.startsWith("tree")) return api.repos.getContent;
   if (path === "releases/123") return api.repos.getRelease;
-  if (path === "releases/latest") return api.repos.listReleases;
+  if (path === "releases/latest") return api.repos.getLatestRelease;
   if (path.startsWith("releases")) return api.repos.getReleaseByTag;
   if (path.startsWith("commit")) return api.repos.getCommit;
   if (path.startsWith("issues")) return api.issues.get;

@@ -46,6 +46,7 @@ export type GithubApi = {
     getReleaseByTag: (
       params: RepoParams & { tag: string },
     ) => Response<{ assets: { name: string }[] }>;
+    getLatestRelease: (params: RepoParams) => Response<unknown>;
     listReleases: (params: RepoParams & { per_page: number }) => Response<unknown[]>;
     listForOrg: (
       params: { org: string; type: "public"; per_page: number } & WithSignal,
