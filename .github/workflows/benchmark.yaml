@@ -41,7 +41,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 
+      # Fork pull requests get a read-only token, they only get the job summary
       - name: Post or update the PR comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
