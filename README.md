@@ -1,7 +1,7 @@
 # Docs link checker (Beta)
 
 > [!WARNING]
-> This project is in BETA and heavily AI-assisted. If you have any suggestion at all feel free to open an [issue](https://github.com/fingerprintjs/docs-link-checker/issues) or a PR.
+> This project is in BETA and heavily AI-assisted. It's an internal tool for Fingerprint's docs and repositories, with no support outside Fingerprint. You're welcome to use it and to open an [issue](https://github.com/fingerprintjs/docs-link-checker/issues) or a PR, answers are best effort.
 
 Regular link checkers only look at HTTP status. Docs also use `#anchors` and GitHub `#L3-L5` line links. Those still return 200 after the heading or line is gone.
 
