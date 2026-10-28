@@ -1,7 +1,7 @@
 # Docs link checker (Beta)
 
 > [!WARNING]
-> This project is in BETA and heavily AI-assisted. If you have any suggestion at all feel free to open an issue, a PR or shoot a message to @jurouhlar on Slack.
+> This project is in BETA and heavily AI-assisted. If you have any suggestion at all feel free to open an [issue](https://github.com/fingerprintjs/docs-link-checker/issues) or a PR.
 
 Regular link checkers only look at HTTP status. Docs also use `#anchors` and GitHub `#L3-L5` line links. Those still return 200 after the heading or line is gone.
 
@@ -29,9 +29,6 @@ daily 03:17 UTC, push to main, manual
 
 ## CLI
 
-> [!WARNING]
-> This repository is currently private. The CLI only works if the machine can access this repository.
-
 Not on npm. Needs Node.js 24+. Run it from the directory you want to check.
 
 ```sh
@@ -55,9 +52,6 @@ docs-link-checker files "src/**/*.tsx"
 Options, baseline files, and reports: [docs/cli.md](docs/cli.md).
 
 ## GitHub Action
-
-> [!WARNING]
-> This repository is currently private. The action only works in workflows that can access it (private repos in fingerprintjs org, but not public ones).
 
 ```yaml
 # .github/workflows/links.yaml

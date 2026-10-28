@@ -131,9 +131,6 @@ The checker requests every link it finds, including links to private and local a
 
 ## Limitations
 
-This is an internal prototype.
-
 - Fingerprint.com is only checked for links to our resources and GitHub, external links trigger too many false positives for now.
 - Link [text fragments](https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments) are not checked.
 - GitHub `#L{number}` links are only checked against the number of lines of the file (not, e.g., whether the line still shows what the link meant).
-- Code quality, test coverage and CI does not meet production standards.
