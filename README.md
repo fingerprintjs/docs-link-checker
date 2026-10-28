@@ -76,6 +76,8 @@ jobs:
             docs/**/*.md
 ```
 
+`@main` gets every change. To control updates, pin a commit SHA instead: `fingerprintjs/docs-link-checker@<sha>`.
+
 Inputs and outputs: [docs/action.md](docs/action.md).
 
 ## Limitations
