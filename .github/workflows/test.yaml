@@ -37,10 +37,6 @@ jobs:
       - name: Run knip
         run: pnpm run knip
 
-      # Known vulnerabilities in all dependencies, dev tools included. A new advisory fails PRs that don't touch dependencies.
-      - name: Run dependency audit
-        run: pnpm audit
-
       # Offline, no network or GH_TOKEN needed. Fails when coverage drops below the thresholds in vitest.config.js.
       - name: Run unit tests
         run: pnpm run test:coverage
@@ -52,3 +48,9 @@ jobs:
         run: pnpm run test:integration
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
+
+      # Known vulnerabilities in all dependencies, dev tools included. A new advisory fails PRs that don't touch dependencies.
+      # Last and after any failure, so an advisory never hides test results.
+      - name: Run dependency audit
+        if: ${{ !cancelled() }}
+        run: pnpm audit
