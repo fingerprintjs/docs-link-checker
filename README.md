@@ -3,9 +3,13 @@
 > [!WARNING]
 > This project is in BETA and heavily AI-assisted. If you have any suggestion at all feel free to open an issue, a PR or shoot a message to @jurouhlar on Slack.
 
-Regular link checkers only look at HTTP status. Docs also use `#anchors` and GitHub `#L3-L5` line links. Those still return 200 after the heading or line is gone.
+Most link checkers only do fetch requests and look at the HTTP status.
 
-This checker loads the page and checks that the hash exists. Client-rendered docs are checked in a headless browser.
+We need more: 
+* Checking if `link#anchor` actually exists on the page by parsing the HTML
+  * Falling back to a headless browser for client-rendered pages
+* Checking Github line links like `Readme#L3-L5`
+* Using GitHub API to check if the actual resource (issue, PR, etc.) exists instead of accepting a login wall or rate limit page.
 
 ## What this repo checks
 
