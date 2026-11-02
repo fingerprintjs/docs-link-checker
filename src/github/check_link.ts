@@ -539,9 +539,27 @@ const checkRepoTarget = async (
           );
     }
     case "latest-release": {
-      const { data: releases, error } = await tryCatch(
+      // The latest release endpoint is the release the link opens, see
+      // https://docs.github.com/en/rest/releases/releases#get-the-latest-release
+      // - It skips prereleases and drafts, so a 404 falls back to the release list.
+      // - The list alone is not enough, it intermittently comes back empty for repositories with releases.
+      const { error: latestError } = await tryCatch(
         githubRequest(
           "latest-release",
+          { owner, repo },
+          (api, params) => api.repos.getLatestRelease(params),
+          { signal },
+        ),
+      );
+      if (!latestError) {
+        return OK;
+      }
+      if (!isNotFoundApiError(latestError)) {
+        return errorResult(latestError, `Repository ${owner}/${repo} not found`);
+      }
+      const { data: releases, error } = await tryCatch(
+        githubRequest(
+          "releases",
           { owner, repo, per_page: 1 },
           (api, params) => api.repos.listReleases(params),
           { signal },

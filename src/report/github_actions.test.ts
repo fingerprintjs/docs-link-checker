@@ -82,7 +82,7 @@ describe("renderJobSummary()", () => {
   it("adds the trend when the report has a diff", () => {
     const current = report([broken("a.md")]);
     expect(renderJobSummary(current)).not.toContain("since previous report");
-    expect(renderJobSummary({ ...current, diff: { new: 2, fixed: 3, reminders: 0 } })).toContain(
+    expect(renderJobSummary({ ...current, diff: { new: 2, fixed: 3 } })).toContain(
       " · +2 new, 3 fixed since previous report\n",
     );
   });

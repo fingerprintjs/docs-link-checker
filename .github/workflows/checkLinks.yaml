@@ -191,6 +191,9 @@ jobs:
     name: Deploy reports to GitHub Pages
     needs: [docs, githubReadmes, web]
     runs-on: ubuntu-latest
+    outputs:
+      # Empty when the deployment was skipped (a report is missing)
+      page_url: ${{ steps.deployment.outputs.page_url }}
     # Never deploy from pull requests, only from main (push) or manual runs.
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     permissions:
@@ -280,32 +283,42 @@ jobs:
         if: steps.index.outputs.has_reports == 'true'
         id: deployment
         uses: actions/deploy-pages@v5
-  # report-status:
-  #   name: Report status to Slack
-  #   needs: [docs, githubReadmes, web]
-  #   if: failure()
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Prepare message
-  #       id: message
-  #       run: |
-  #         MESSAGE="*Link Checker Results*
-  #         • dev.fingerprint.com check: ${{ needs.docs.result }}
-  #         • GitHub READMEs check: ${{ needs.githubReadmes.result }}
-  #         • fingerprint.com check: ${{ needs.web.result }}
 
-  #         View reports: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+  notify:
+    name: Notify Slack
+    needs: [deploy]
+    # Only after an actual deployment: the message links to the new reports, and they are the base of the next
+    # comparison. A skipped deployment would announce the same links again in the next run.
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.deploy.outputs.page_url != '' }}
+    runs-on: ubuntu-latest
 
-  #         # Escape newlines for JSON
-  #         MESSAGE="${MESSAGE//$'\n'/\\n}"
-  #         echo "text=$MESSAGE" >> $GITHUB_OUTPUT
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
 
-  #     - uses: slackapi/slack-github-action@v1.25.0
-  #       with:
-  #         payload: |
-  #           {
-  #             "text": "${{ steps.message.outputs.text }}"
-  #           }
-  #       env:
-  #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-  #       if: always()
+      - name: Download reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: "report-*"
+          path: reports
+          merge-multiple: true
+
+      - name: Write the Slack message
+        run: pnpm exec tsx scripts/slack_message.ts "reports/$DOCS_REPORT.json" "reports/$GITHUB_REPORT.json" "reports/$WEB_REPORT.json"
+
+      - name: Send the Slack message
+        if: hashFiles('slack-payload.json') != ''
+        env:
+          # Incoming webhook of the channel or DM to notify
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::The SLACK_WEBHOOK_URL secret is not set, skipping the Slack message."
+            exit 0
+          fi
+          curl -fsS -X POST -H "Content-Type: application/json" --data @slack-payload.json "$SLACK_WEBHOOK_URL"
