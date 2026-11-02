@@ -3,14 +3,14 @@
 > [!WARNING]
 > Note: Despite being public, this repository isn’t part of the Fingerprint product. It's an internal tool, shared "as-is" without any support guarantees from Fingerprint. Issue reports and pull requests are welcome, but responses are best-effort.
 
-
 Most link checkers only do fetch requests and look at the HTTP status.
 
-We need more: 
-* Checking if `link#anchor` actually exists on the page by parsing the HTML
-  * Falling back to a headless browser for client-rendered pages
-* Checking Github line links like `Readme#L3-L5`
-* Using GitHub API to check if the actual resource (issue, PR, etc.) exists instead of accepting a login wall or rate limit page.
+We need more:
+
+- Checking if `link#anchor` actually exists on the page by parsing the HTML
+  - Falling back to a headless browser for client-rendered pages
+- Checking Github line links like `Readme#L3-L5`
+- Using GitHub API to check if the actual resource (issue, PR, etc.) exists instead of accepting a login wall or rate limit page.
 
 ## What this repo checks
 
