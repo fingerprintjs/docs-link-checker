@@ -15,6 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history, so the PR diff check can compare against origin/main
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-environment
         id: setup
@@ -34,8 +37,14 @@ jobs:
         run: pnpm run tsc
 
       # Unused files, exports and dependencies
-      - name: Run knip
-        run: pnpm run knip
+      - name: Find unused code
+        run: pnpm run dead-code
+
+      # Risky changes in this PR: fails on skipped tests and test-only branches in source code,
+      # warns on new suppressions and dependencies. Rules in .fallowrc.jsonc.
+      - name: Check PR diff
+        if: ${{ github.event_name == 'pull_request' }}
+        run: pnpm run check:diff --format github-annotations
 
       # Offline, no network or GH_TOKEN needed. Fails when coverage drops below the thresholds in vitest.config.js.
       - name: Run unit tests

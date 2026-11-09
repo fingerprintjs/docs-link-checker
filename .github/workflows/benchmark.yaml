@@ -33,11 +33,14 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base-checkout
 
-      # The base needs its own node_modules, its src/ runs against them
-      - run: pnpm install --frozen-lockfile
-        working-directory: base-checkout
+      # The base needs its own node_modules, its src/ runs against them. Moved out of this checkout first:
+      # inside it, pnpm finds this checkout's pnpm-workspace.yaml and installs here instead.
+      - run: |
+          mv base-checkout "$RUNNER_TEMP/base-checkout"
+          cd "$RUNNER_TEMP/base-checkout"
+          pnpm install --frozen-lockfile
 
-      - run: pnpm bench --base base-checkout
+      - run: pnpm bench --base "$RUNNER_TEMP/base-checkout"
         env:
           GH_TOKEN: ${{ steps.setup.outputs.gh_token }}
 

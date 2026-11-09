@@ -10,7 +10,7 @@
 
 - `pnpm test`. Offline unit tests (`*.test.ts`), mocked network
 - `pnpm run test:integration`. Live sites and GitHub API. Needs network, Chromium, `GH_TOKEN` (or `.env`)
-- `pnpm run check`. Format, lint, `tsc`, knip (CI minus tests)
+- `pnpm run check`. Format, lint, `tsc`, unused code and dependencies (CI minus tests)
 - `pnpm run check:fix`. Apply format and safe lint fixes
 - `pnpm cli`. Same args as the [CLI](docs/cli.md)
 - `pnpm bench`. `bench/bench.ts`

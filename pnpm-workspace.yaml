@@ -1,0 +1,7 @@
+onlyBuiltDependencies:
+  - esbuild
+
+overrides:
+  # eslint-plugin-sonarjs 4.2.2 (latest) pins minimatch ^10.2.6, and GHSA-g3hv-75wg-m249 has no 10.x fix.
+  # Drop once sonarjs moves to minimatch 11.
+  minimatch: ^11.0.1

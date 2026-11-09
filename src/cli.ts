@@ -42,7 +42,7 @@ import type { LinkWithResult } from "./types";
 import { getErrorMessage } from "./utils/errors";
 import { getSampleRate } from "./utils/parallel";
 
-export type CommonOptions = {
+type CommonOptions = {
   sampleRate: number;
   failOnBroken: boolean;
   /** Path of the baseline file, if any */
