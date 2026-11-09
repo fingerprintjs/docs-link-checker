@@ -16,13 +16,6 @@ describe("getGithubApi()", () => {
     vi.stubEnv("GH_TOKEN", "");
     expect(() => getGithubApi()).toThrow("GH_TOKEN is not set");
   });
-
-  it("importing GitHub link checks does not require GH_TOKEN", async () => {
-    vi.stubEnv("GH_TOKEN", "");
-    vi.resetModules();
-    await expect(import("../check/github_api_check")).resolves.toBeDefined();
-    await expect(import("./get_links")).resolves.toBeDefined();
-  });
 });
 
 const jsonResponse = (body: unknown) =>

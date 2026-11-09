@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type RunDeps, withRun } from "../run";
-import { getReadmeLinks, getReadmesFromOrg, resolveReadmeHref } from "./get_links";
+import { getReadmeLinks, getReadmesFromOrg, resolveReadmeHref } from "./github_org";
 
 const octokit = {
   paginate: vi.fn(),
@@ -143,4 +143,12 @@ describe("getReadmeLinks()", () => {
 
     expect(links.map((link) => link.page)).toEqual([file("ok").sourcePath]);
   });
+});
+
+// The GitHub client is created on first use, not on import (see `getGithubApi`)
+it("importing GitHub link checks does not require GH_TOKEN", async () => {
+  vi.stubEnv("GH_TOKEN", "");
+  vi.resetModules();
+  await expect(import("../check/github_api_check")).resolves.toBeDefined();
+  await expect(import("./github_org")).resolves.toBeDefined();
 });

@@ -10,7 +10,6 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
-import { checkReadmesInGithubOrg, getGithubOrgSiteName, OrgListingError } from "./github/get_links";
 import { getSampleRate } from "./parallel";
 import { formatFileProblems, formatTargetGroups, formatVerdict } from "./report/cli";
 import { loadPreviousReport } from "./report/compare";
@@ -30,6 +29,11 @@ import {
   saveReport,
 } from "./report/report";
 import { type RunDeps, withRun } from "./run";
+import {
+  checkReadmesInGithubOrg,
+  getGithubOrgSiteName,
+  OrgListingError,
+} from "./sources/github_org";
 import {
   checkLocalFiles,
   collectLinksFromFiles,

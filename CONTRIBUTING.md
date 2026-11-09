@@ -19,8 +19,7 @@
 ## Code
 
 - `src/cli.ts`. Commands, run, reports
-- `src/sources/`. Where links come from: `website.ts` (`site`), `local_files.ts` (`files`)
-- `src/github/get_links.ts`. `github-org`
+- `src/sources/`. Where links come from: `website.ts` (`site`), `local_files.ts` (`files`), `github_org.ts` (`github-org`)
 - `src/check/`. Checking links: `link.ts` shared pipeline, `fetch_check.ts`, `playwright_check.ts`, `github_api_check.ts` one link, `verdict.ts` what a response means (result, retry, browser re-check)
 - `src/github/`. GitHub API client and URL helpers
 - `src/baseline.ts`. Ignore file
@@ -40,4 +39,4 @@
   - Add a `reason`
   - Do not baseline real broken links
   - Format: [CLI](docs/cli.md#baseline-file)
-- `github-org` skips deprecated repos listed in `GITHUB_ORG_EXCLUDED_REPOS` (`src/github/get_links.ts`)
+- `github-org` skips deprecated repos listed in `GITHUB_ORG_EXCLUDED_REPOS` (`src/sources/github_org.ts`)
