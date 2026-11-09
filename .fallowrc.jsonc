@@ -30,27 +30,46 @@
     "added-suppression": "warn",
     "added-dependency": "warn",
   },
-  // Rendering reports needs only results and shared helpers, never the code that finds or checks links
+  // Folder imports go one way: shared <- run <- github <- check <- sources <- cli. report needs only shared.
+  // Imports into a file outside every zone are not checked, so each folder under src/ has a zone.
   "boundaries": {
     "zones": [
       { "name": "report", "patterns": ["src/report/**"] },
       {
         "name": "shared",
-        "patterns": ["src/types.ts", "src/terminal.ts", "src/baseline.ts", "src/utils/**"],
-      },
-      {
-        "name": "pipeline",
         "patterns": [
-          "src/check/**",
-          "src/github/**",
-          "src/sources/**",
-          "src/cli.ts",
-          "src/run.ts",
+          "src/types.ts",
+          "src/terminal.ts",
+          "src/baseline.ts",
           "src/glob.ts",
+          "src/utils/**",
         ],
       },
+      {
+        "name": "run",
+        "patterns": ["src/run.ts", "src/run.test.ts", "src/parallel.ts", "src/parallel.test.ts"],
+      },
+      { "name": "github", "patterns": ["src/github/**"] },
+      { "name": "check", "patterns": ["src/check/**"] },
+      { "name": "sources", "patterns": ["src/sources/**"] },
+      // Entry point, may import every zone, so it has no rule
+      { "name": "cli", "patterns": ["src/cli.ts"] },
     ],
-    "rules": [{ "from": "report", "allow": ["shared"] }],
+    "rules": [
+      // Rendering reports needs only results and shared helpers, never the code that finds or checks links
+      { "from": "report", "allow": ["shared"] },
+      // Plain helpers and data types, usable from anywhere, so they depend on nothing else in src/
+      { "from": "shared", "allow": [] },
+      // Every check and source reads the run context (terminal, caches, limiters), so it can't depend on them.
+      // `RunDeps` names the GitHub client type for test fakes, a type import only.
+      { "from": "run", "allow": ["shared"], "allowTypeOnly": ["github"] },
+      // GitHub API client and URL helpers, used by both the GitHub link check and the github-org source
+      { "from": "github", "allow": ["run", "shared"] },
+      // Checking a link doesn't depend on where the link was found
+      { "from": "check", "allow": ["github", "run", "shared"] },
+      // Sources collect links, then check them
+      { "from": "sources", "allow": ["check", "github", "run", "shared"] },
+    ],
   },
   "audit": {
     // Judge the whole changed files, without analyzing the base branch: `dead-code` already requires zero findings,
