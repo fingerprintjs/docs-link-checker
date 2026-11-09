@@ -52,8 +52,11 @@
     ],
     "rules": [{ "from": "report", "allow": ["shared"] }],
   },
-  // oxlint (sonarjs) already limits complexity
   "audit": {
+    // Judge the whole changed files, without analyzing the base branch: `dead-code` already requires zero findings,
+    // and the base branch may lack files this config needs (a new rule pack)
+    "gate": "all",
+    // oxlint (sonarjs) already limits complexity
     "health": false,
     "dupes": false,
   },
