@@ -3,10 +3,25 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "ignorePatterns": ["src/__fixtures__/**"],
+  "rulePacks": ["fallow-rules.jsonc"],
+  // Report exports of entry files too (bin, scripts, bench), not only of imported modules
+  "includeEntryExports": true,
+  "failOnParseError": true,
   "rules": {
-    // Default is warn, which doesn't fail CI
+    // Default is warn or off, which doesn't fail CI
     "unused-dev-dependencies": "error",
+    "unused-namespace-members": "error",
+    "unused-component-props": "error",
     "unlisted-binaries": "error",
+    "type-only-dependencies": "error",
+    "test-only-dependencies": "error",
+    "dev-dependencies-in-production": "error",
+    "duplicate-export-aliases": "error",
+    "re-export-cycle": "error",
+    "deprecated-exports-in-use": "error",
+    "stale-suppressions": "error",
+    "require-suppression-reason": "error",
+    "policy-violation": "error",
 
     // PR diff only (`fallow audit`). Agents tend to skip a failing test or special-case tests in source code.
     "weakened-tests": "error",
@@ -14,6 +29,28 @@
     // Often legitimate (a library over own code, a suppression with a reason), so shown, not failed
     "added-suppression": "warn",
     "added-dependency": "warn",
+  },
+  // Rendering reports needs only results and shared helpers, never the code that finds or checks links
+  "boundaries": {
+    "zones": [
+      { "name": "report", "patterns": ["src/report/**"] },
+      {
+        "name": "shared",
+        "patterns": ["src/types.ts", "src/terminal.ts", "src/baseline.ts", "src/utils/**"],
+      },
+      {
+        "name": "pipeline",
+        "patterns": [
+          "src/check/**",
+          "src/github/**",
+          "src/sources/**",
+          "src/cli.ts",
+          "src/run.ts",
+          "src/glob.ts",
+        ],
+      },
+    ],
+    "rules": [{ "from": "report", "allow": ["shared"] }],
   },
   // oxlint (sonarjs) already limits complexity
   "audit": {

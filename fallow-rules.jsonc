@@ -1,0 +1,48 @@
+// One owner per external dependency, so tests can inject fakes through `withRun({ deps })` in src/run.ts
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/rule-pack-schema.json",
+  "version": 1,
+  "name": "docs-link-checker",
+  "rules": [
+    {
+      "id": "fetch-through-host-limit",
+      "kind": "banned-call",
+      "callees": ["fetch"],
+      "exclude": [
+        "src/check/http.ts",
+        "src/github/client.ts",
+        "**/*.test.ts",
+        "bench/**",
+        "scripts/**",
+      ],
+      "message": "Use fetchWithHostLimit() from src/check/http.ts: it applies per-host limits, retries and metrics, and tests inject fetch through withRun({ deps })",
+    },
+    {
+      "id": "playwright-through-browser",
+      "kind": "banned-import",
+      "specifiers": ["playwright"],
+      "ignoreTypeOnly": true,
+      "exclude": ["src/check/browser.ts"],
+      "message": "Use withPage() from src/check/browser.ts: it shares one browser per run, and tests inject Chromium through withRun({ deps })",
+    },
+    {
+      "id": "octokit-through-client",
+      "kind": "banned-import",
+      "specifiers": [
+        "@octokit/rest",
+        "@octokit/core",
+        "@octokit/plugin-retry",
+        "@octokit/plugin-throttling",
+      ],
+      "ignoreTypeOnly": true,
+      "exclude": ["src/github/client.ts"],
+      "message": "Use getGithubApi() or githubRequest() from src/github/client.ts: they add retries, rate limits and caching, and tests inject Octokit through withRun({ deps })",
+    },
+    {
+      "id": "no-module-mocks",
+      "kind": "banned-call",
+      "callees": ["vi.mock", "vi.doMock"],
+      "message": "Pass fakes through withRun({ deps }) in src/run.ts instead of mocking modules",
+    },
+  ],
+}
