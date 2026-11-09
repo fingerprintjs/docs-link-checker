@@ -1,0 +1,23 @@
+// Fallow: unused code and dependencies (`pnpm run dead-code`), risky changes in a PR diff (`pnpm run check:diff`).
+// Rules: https://fallow.tools/docs
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "ignorePatterns": ["src/__fixtures__/**"],
+  "rules": {
+    // Default is warn, which doesn't fail CI
+    "unused-dev-dependencies": "error",
+    "unlisted-binaries": "error",
+
+    // PR diff only (`fallow audit`). Agents tend to skip a failing test or special-case tests in source code.
+    "weakened-tests": "error",
+    "test-only-branch": "error",
+    // Often legitimate (a library over own code, a suppression with a reason), so shown, not failed
+    "added-suppression": "warn",
+    "added-dependency": "warn",
+  },
+  // oxlint (sonarjs) already limits complexity
+  "audit": {
+    "health": false,
+    "dupes": false,
+  },
+}
