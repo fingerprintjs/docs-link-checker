@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   getGithubPathSegments,
-  isGithubCodeLineLink,
   isGithubReservedRoute,
   isGithubUrl,
   isGithubWikiLink,
@@ -20,44 +19,6 @@ describe("isGithubUrl()", () => {
     "https://gist.github.com/t3dotgg/a486c4ae66d32bf17c09c73609dacc5b",
   ])("rejects %s", (url) => {
     expect(isGithubUrl(url)).toBe(false);
-  });
-});
-
-describe("isGithubCodeLineLink()", () => {
-  const file = "https://github.com/owner/repo/blob/main/file.js";
-
-  it.each([
-    "#L5",
-    "#L5-L10",
-    // Same grammar as `parseLineAnchor`: columns
-    "#L2C5",
-    "#L2C5-L3C1",
-    "#L2-L3C1",
-    "#L2C5-L3",
-    // Percent-encoded
-    "#%4C12",
-    "#L12%2DL20",
-    "#L2C5%2DL3C1",
-  ])("accepts %s", (hash) => {
-    expect(isGithubCodeLineLink(`${file}${hash}`)).toBe(true);
-  });
-
-  it.each([
-    "#L",
-    "#L5-",
-    "#L-L10",
-    "#L5-L10-L15",
-    "#L5C",
-    // Case-sensitive
-    "#l5",
-    // Malformed percent-encoding does not throw
-    "#L12%",
-  ])("rejects %s", (hash) => {
-    expect(isGithubCodeLineLink(`${file}${hash}`)).toBe(false);
-  });
-
-  it("rejects line hashes of links that are not blobs", () => {
-    expect(isGithubCodeLineLink("https://github.com/owner/repo/tree/main/dir#L5")).toBe(false);
   });
 });
 

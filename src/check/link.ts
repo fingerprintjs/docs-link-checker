@@ -1,9 +1,5 @@
-/**
- * `checkLinks`: checks every unique link once, first with `fetch` or the GitHub API, then re-checks failures that
- * might be caused by the check method in a browser (see `shouldRecheckWithPlaywright`).
- */
-import { checkLinkWithGithubApi } from "../github/check_link";
 import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "../github/url";
+import { CONCURRENCY_LIMIT, parallelProcess } from "../parallel";
 import {
   getTerminal,
   incrementMetric,
@@ -14,10 +10,14 @@ import {
 import { plural } from "../terminal";
 import type { Link, LinkCheckResult, LinkWithResult } from "../types";
 import { getErrorMessage } from "../utils/errors";
-import { CONCURRENCY_LIMIT, parallelProcess } from "../utils/parallel";
+import { withTimeout } from "../utils/limiter";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
+/**
+ * `checkLinks`: checks every unique link once, first with `fetch` or the GitHub API, then re-checks failures that
+ * might be caused by the check method in a browser (see `shouldRecheckWithPlaywright`).
+ */
+import { checkLinkWithGithubApi } from "./github_api_check";
 import { hasHash, stripHash } from "./hash";
-import { withTimeout } from "./limiter";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { shouldRecheckWithPlaywright } from "./verdict";
 

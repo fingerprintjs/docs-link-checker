@@ -10,8 +10,7 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
-import { parseHostConcurrency } from "./check/limiter";
-import { checkReadmesInGithubOrg, getGithubOrgSiteName, OrgListingError } from "./github/get_links";
+import { getSampleRate } from "./parallel";
 import { formatFileProblems, formatTargetGroups, formatVerdict } from "./report/cli";
 import { loadPreviousReport } from "./report/compare";
 import { formatLocation } from "./report/format";
@@ -31,6 +30,11 @@ import {
 } from "./report/report";
 import { type RunDeps, withRun } from "./run";
 import {
+  checkReadmesInGithubOrg,
+  getGithubOrgSiteName,
+  OrgListingError,
+} from "./sources/github_org";
+import {
   checkLocalFiles,
   collectLinksFromFiles,
   LOCAL_FILES_SITE_NAME,
@@ -40,7 +44,7 @@ import { checkWebsite, createPrefixFilter } from "./sources/website";
 import { createTerminal, type Terminal } from "./terminal";
 import type { LinkWithResult } from "./types";
 import { getErrorMessage } from "./utils/errors";
-import { getSampleRate } from "./utils/parallel";
+import { parseHostConcurrency } from "./utils/limiter";
 
 type CommonOptions = {
   sampleRate: number;

@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import pLimit, { type LimitFunction } from "p-limit";
 import type { Browser, BrowserType } from "playwright";
-import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./check/limiter";
 import type { GithubApi } from "./github/client";
 import { createSilentTerminal, formatDuration, type Terminal } from "./terminal";
+import { DEFAULT_HOST_CONCURRENCY, HostLimiter } from "./utils/limiter";
 
 // How many Playwright pages (browser contexts) are open at the same time
 export const PLAYWRIGHT_CONCURRENCY_LIMIT = 5;

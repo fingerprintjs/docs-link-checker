@@ -1,8 +1,8 @@
 import { checkLinks } from "../check/link";
+import { sampleItems } from "../parallel";
 import { getTerminal, timePhase } from "../run";
 import { plural } from "../terminal";
 import type { Link, LinkWithResult } from "../types";
-import { sampleItems } from "../utils/parallel";
 import { getLinksFromPages } from "./page";
 import { getWebsitePages } from "./sitemap";
 

@@ -1,9 +1,9 @@
 import pLimit from "p-limit";
-import type { ConcurrentError } from "../check/limiter";
-import { getTerminal } from "../run";
-import { formatDuration } from "../terminal";
-import { getErrorMessage } from "./errors";
-import { compareStrings } from "./strings";
+import { getTerminal } from "./run";
+import { formatDuration } from "./terminal";
+import { getErrorMessage } from "./utils/errors";
+import type { ConcurrentError } from "./utils/limiter";
+import { compareStrings } from "./utils/strings";
 
 /**
  * Human-readable description of an item that failed processing:

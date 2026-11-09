@@ -1,4 +1,4 @@
-import type { MarkdownLink } from "./markdown";
+import type { MarkdownLink } from "../check/markdown";
 
 /**
  * Finds absolute links in source code (JSX/TSX, JS, Vue...), for example docs links in `href` attributes or strings.

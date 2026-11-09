@@ -1,13 +1,13 @@
 import { fetchWithHostLimit } from "../check/http";
 import { checkLinks } from "../check/link";
+import { extractMarkdownLinks } from "../check/markdown";
+import { getRepo, githubRequest } from "../github/client";
+import { parallelProcess, sampleItems } from "../parallel";
 import { getTerminal, timePhase } from "../run";
-import { extractMarkdownLinks } from "../sources/markdown";
-import { filterOutIrrelevantLinks } from "../sources/page";
 import { plural } from "../terminal";
 import type { Link, LinkWithResult } from "../types";
 import { getErrorMessage } from "../utils/errors";
-import { parallelProcess, sampleItems } from "../utils/parallel";
-import { getRepo, githubRequest } from "./client";
+import { filterOutIrrelevantLinks } from "./page";
 
 /** Deprecated integrations: READMEs are unmaintained and would only add noise to org-wide checks. */
 const GITHUB_ORG_EXCLUDED_REPOS = new Set(["fingerprint-pro-segment-source-function"]);
