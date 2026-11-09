@@ -461,19 +461,6 @@ const ByLinkTable = ({
   </table>
 );
 
-const groupByPage = (links: LinkWithResult[]): Map<string, LinkWithResult[]> => {
-  const pages = new Map<string, LinkWithResult[]>();
-  for (const link of links) {
-    const pageLinks = pages.get(link.page);
-    if (pageLinks) {
-      pageLinks.push(link);
-    } else {
-      pages.set(link.page, [link]);
-    }
-  }
-  return pages;
-};
-
 /** Links grouped by the page they are on (a page is a heading row, its links follow) */
 const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }) => {
   // The line column is only for local files
@@ -489,7 +476,7 @@ const ByPageTable = ({ links, ...view }: ViewProps & { links: LinkWithResult[] }
           <th>Copy row</th>
         </tr>
       </thead>
-      {[...groupByPage(links)].map(([page, pageLinks]) => {
+      {[...Map.groupBy(links, (link) => link.page)].map(([page, pageLinks]) => {
         const url = isHttpUrl(page)
           ? safeHref(page)
           : getLocalFileUrl(view.options.sourceBaseUrl, page);
