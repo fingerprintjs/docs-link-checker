@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
+    "target": "ES2024",
     "module": "Preserve",
-    "lib": ["ES2023", "ESNext.Intl", "DOM"],
+    "lib": ["ES2024", "ESNext.Intl", "DOM"],
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,

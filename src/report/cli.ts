@@ -6,7 +6,6 @@ import { stripVTControlCharacters } from "node:util";
  * - other commands: grouped by target with the pages under it, fixing the target once fixes every page.
  */
 import { formatCount, formatDuration, type Paint, plural } from "../terminal";
-import type { LinkWithResult } from "../types";
 import { compareStrings } from "../utils/strings";
 import {
   countByKind,
@@ -55,16 +54,7 @@ const paintNote = (paint: Paint, link: IgnoredLink, reason = "") => {
 export const formatFileProblems = (report: LinkCheckReport, paint: Paint): string[] => {
   const links = getLinksToFix(report);
   const labelWidth = Math.max(0, ...links.map((link) => problemLabel(link).length));
-  const files = new Map<string, LinkWithResult[]>();
-  for (const link of links) {
-    const group = files.get(link.page);
-    if (group) {
-      group.push(link);
-    } else {
-      files.set(link.page, [link]);
-    }
-  }
-  return [...files.entries()]
+  return [...Map.groupBy(links, (link) => link.page)]
     .toSorted(([a], [b]) => compareStrings(a, b))
     .flatMap(([, fileLinks]) => {
       const locationWidth = Math.max(...fileLinks.map((link) => safe(formatLocation(link)).length));
