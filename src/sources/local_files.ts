@@ -4,13 +4,13 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { decodeHash } from "../check/hash";
 import { checkLineAnchor, countLines, parseLineAnchor } from "../check/line_anchor";
 import { checkLinks } from "../check/link";
+import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "../check/markdown";
 import { safeDecode } from "../github/url";
 import { sampleItems } from "../parallel";
 import { getTerminal, timePhase } from "../run";
 import { plural } from "../terminal";
 import type { Link, LinkCheckResult, LinkWithResult } from "../types";
 import { compareStrings } from "../utils/strings";
-import { extractMarkdownLinks, getMarkdownAnchors, hasMatchingAnchor } from "./markdown";
 import { filterOutIrrelevantLinks } from "./page";
 import { extractSourceCodeLinks } from "./source_code";
 
