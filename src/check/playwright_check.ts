@@ -7,10 +7,10 @@ import type { Page, Response as PlaywrightResponse } from "playwright";
 import { isGithubCodeLineLink } from "../github/url";
 import { getHostLimiter, incrementMetric } from "../run";
 import type { LinkCheckResult } from "../types";
+import { withTimeout } from "../utils/limiter";
 import { withPage } from "./browser";
 import { getHashSelectors } from "./hash";
 import { getRedirectTarget, getUserAgent, pauseHostForRetry } from "./http";
-import { withTimeout } from "./limiter";
 import { judgeLink, judgePage, type PageVerdict, planRetry, type RetryPlan } from "./verdict";
 
 // Timeout of every Playwright page operation (a navigation, a wait...), so each check is bounded on its own

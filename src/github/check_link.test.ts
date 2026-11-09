@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTimeout } from "../check/limiter";
 import { getRunContext, withRun } from "../run";
+import { withTimeout } from "../utils/limiter";
 import { checkLinkWithGithubApi } from "./check_link";
 import {
   answerAfter,

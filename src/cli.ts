@@ -10,7 +10,6 @@ import {
   updateBaseline,
   writeBaseline,
 } from "./baseline";
-import { parseHostConcurrency } from "./check/limiter";
 import { checkReadmesInGithubOrg, getGithubOrgSiteName, OrgListingError } from "./github/get_links";
 import { formatFileProblems, formatTargetGroups, formatVerdict } from "./report/cli";
 import { loadPreviousReport } from "./report/compare";
@@ -40,6 +39,7 @@ import { checkWebsite, createPrefixFilter } from "./sources/website";
 import { createTerminal, type Terminal } from "./terminal";
 import type { LinkWithResult } from "./types";
 import { getErrorMessage } from "./utils/errors";
+import { parseHostConcurrency } from "./utils/limiter";
 import { getSampleRate } from "./utils/parallel";
 
 type CommonOptions = {

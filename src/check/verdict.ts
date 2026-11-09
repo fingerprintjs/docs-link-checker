@@ -8,8 +8,8 @@
  * See `LinkCheckResult` in `../types.ts` for what each error means in the report.
  */
 import type { LinkCheckResult } from "../types";
+import { parseRetryAfter } from "../utils/limiter";
 import { getSpecialFragmentNote } from "./hash";
-import { parseRetryAfter } from "./limiter";
 
 /** Checks that load a page: plain `fetch` (first pass) or a Playwright navigation (re-check) */
 type PageChecker = "fetch" | "playwright";

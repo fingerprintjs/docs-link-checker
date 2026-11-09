@@ -14,10 +14,10 @@ import {
 import { plural } from "../terminal";
 import type { Link, LinkCheckResult, LinkWithResult } from "../types";
 import { getErrorMessage } from "../utils/errors";
+import { withTimeout } from "../utils/limiter";
 import { CONCURRENCY_LIMIT, parallelProcess } from "../utils/parallel";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { hasHash, stripHash } from "./hash";
-import { withTimeout } from "./limiter";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";
 import { shouldRecheckWithPlaywright } from "./verdict";
 

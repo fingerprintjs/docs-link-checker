@@ -1,8 +1,8 @@
 import pLimit from "p-limit";
-import type { ConcurrentError } from "../check/limiter";
 import { getTerminal } from "../run";
 import { formatDuration } from "../terminal";
 import { getErrorMessage } from "./errors";
+import type { ConcurrentError } from "./limiter";
 import { compareStrings } from "./strings";
 
 /**
