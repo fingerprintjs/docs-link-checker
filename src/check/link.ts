@@ -4,6 +4,7 @@
  */
 import { checkLinkWithGithubApi } from "../github/check_link";
 import { isGithubReservedRoute, isGithubUrl, isGithubWikiLink } from "../github/url";
+import { CONCURRENCY_LIMIT, parallelProcess } from "../parallel";
 import {
   getTerminal,
   incrementMetric,
@@ -15,7 +16,6 @@ import { plural } from "../terminal";
 import type { Link, LinkCheckResult, LinkWithResult } from "../types";
 import { getErrorMessage } from "../utils/errors";
 import { withTimeout } from "../utils/limiter";
-import { CONCURRENCY_LIMIT, parallelProcess } from "../utils/parallel";
 import { checkLinkWithFetch, PageFetchCache } from "./fetch_check";
 import { hasHash, stripHash } from "./hash";
 import { checkUrlsOnPageWithPlaywright } from "./playwright_check";

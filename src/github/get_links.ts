@@ -1,12 +1,12 @@
 import { fetchWithHostLimit } from "../check/http";
 import { checkLinks } from "../check/link";
+import { parallelProcess, sampleItems } from "../parallel";
 import { getTerminal, timePhase } from "../run";
 import { extractMarkdownLinks } from "../sources/markdown";
 import { filterOutIrrelevantLinks } from "../sources/page";
 import { plural } from "../terminal";
 import type { Link, LinkWithResult } from "../types";
 import { getErrorMessage } from "../utils/errors";
-import { parallelProcess, sampleItems } from "../utils/parallel";
 import { getRepo, githubRequest } from "./client";
 
 /** Deprecated integrations: READMEs are unmaintained and would only add noise to org-wide checks. */

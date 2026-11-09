@@ -1,8 +1,8 @@
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { withRun } from "../run";
-import { createTerminal } from "../terminal";
 import { getSampleRate, parallelProcess, sampleItems } from "./parallel";
+import { withRun } from "./run";
+import { createTerminal } from "./terminal";
 
 let errorSpy: MockInstance<typeof console.error>;
 

@@ -11,6 +11,7 @@ import {
   writeBaseline,
 } from "./baseline";
 import { checkReadmesInGithubOrg, getGithubOrgSiteName, OrgListingError } from "./github/get_links";
+import { getSampleRate } from "./parallel";
 import { formatFileProblems, formatTargetGroups, formatVerdict } from "./report/cli";
 import { loadPreviousReport } from "./report/compare";
 import { formatLocation } from "./report/format";
@@ -40,7 +41,6 @@ import { createTerminal, type Terminal } from "./terminal";
 import type { LinkWithResult } from "./types";
 import { getErrorMessage } from "./utils/errors";
 import { parseHostConcurrency } from "./utils/limiter";
-import { getSampleRate } from "./utils/parallel";
 
 type CommonOptions = {
   sampleRate: number;

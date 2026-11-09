@@ -1,8 +1,8 @@
 import * as cheerio from "cheerio";
 import { fetchWithHostLimit, USER_AGENT } from "../check/http";
+import { parallelProcess } from "../parallel";
 import { getTerminal } from "../run";
 import type { Link } from "../types";
-import { parallelProcess } from "../utils/parallel";
 
 // Only http(s) links can be checked, skip `tel:`, `javascript:`, `data:` and other schemes
 const isHttpUrl = (href: string) => {
