@@ -3,8 +3,8 @@
  * a hash points to (in HTML text or as CSS selectors for a live page).
  */
 import * as cheerio from "cheerio";
-import { isGithubCodeLineLink, safeDecode } from "../github/url";
-import { parseLineAnchor } from "./line_anchor";
+import { safeDecode } from "../github/url";
+import { isGithubCodeLineLink, parseLineAnchor } from "./line_anchor";
 
 /**
  * Removes the leading `#` and decodes percent-encoding (`#caf%C3%A9` -> `café`).

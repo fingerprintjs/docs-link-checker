@@ -1,5 +1,3 @@
-import { parseLineAnchor } from "../check/line_anchor";
-
 /**
  * Check if a URL is a GitHub URL
  * @param url - The URL to check
@@ -8,20 +6,6 @@ import { parseLineAnchor } from "../check/line_anchor";
 export const isGithubUrl = (url: string) => {
   const githubUrl = new URL(url);
   return githubUrl.hostname === "github.com";
-};
-
-/**
- * Check if a URL is a GitHub code line link like #L5, #L5-L10 or #L5C3-L10C1 (the grammar of `parseLineAnchor`)
- * @param href - The URL to check
- * @returns - True if the URL is a GitHub code line link, false otherwise
- */
-export const isGithubCodeLineLink = (href: string) => {
-  const url = new URL(href);
-  return (
-    url.host === "github.com" &&
-    url.pathname.includes("/blob/") &&
-    parseLineAnchor(safeDecode(url.hash).replace(/^#/, "")) !== undefined
-  );
 };
 
 /**

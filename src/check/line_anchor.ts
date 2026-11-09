@@ -1,3 +1,4 @@
+import { safeDecode } from "../github/url";
 import type { LinkCheckResult } from "../types";
 
 /**
@@ -15,6 +16,20 @@ export const parseLineAnchor = (
   }
   const firstLine = Number(match[1]);
   return { firstLine, lastLine: match[2] === undefined ? firstLine : Number(match[2]) };
+};
+
+/**
+ * Check if a URL is a GitHub code line link like #L5, #L5-L10 or #L5C3-L10C1 (the grammar of `parseLineAnchor`)
+ * @param href - The URL to check
+ * @returns - True if the URL is a GitHub code line link, false otherwise
+ */
+export const isGithubCodeLineLink = (href: string) => {
+  const url = new URL(href);
+  return (
+    url.host === "github.com" &&
+    url.pathname.includes("/blob/") &&
+    parseLineAnchor(safeDecode(url.hash).replace(/^#/, "")) !== undefined
+  );
 };
 
 /**
