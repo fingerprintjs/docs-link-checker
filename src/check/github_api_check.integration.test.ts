@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { closeRunBrowser } from "../run";
-import { checkLinkWithGithubApi as checkLink } from "./check_link";
+import { checkLinkWithGithubApi as checkLink } from "./github_api_check";
 
 const checkLinkWithGithubApi = (url: string) => checkLink(url, new AbortController().signal);
 

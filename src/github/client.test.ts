@@ -20,7 +20,7 @@ describe("getGithubApi()", () => {
   it("importing GitHub link checks does not require GH_TOKEN", async () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.resetModules();
-    await expect(import("./check_link")).resolves.toBeDefined();
+    await expect(import("../check/github_api_check")).resolves.toBeDefined();
     await expect(import("./get_links")).resolves.toBeDefined();
   });
 });

@@ -21,8 +21,8 @@
 - `src/cli.ts`. Commands, run, reports
 - `src/sources/`. Where links come from: `website.ts` (`site`), `local_files.ts` (`files`)
 - `src/github/get_links.ts`. `github-org`
-- `src/check/`. Checking links: `link.ts` shared pipeline, `fetch_check.ts`, `playwright_check.ts` one link, `verdict.ts` what a response means (result, retry, browser re-check)
-- `src/github/`. GitHub URL and blob checks
+- `src/check/`. Checking links: `link.ts` shared pipeline, `fetch_check.ts`, `playwright_check.ts`, `github_api_check.ts` one link, `verdict.ts` what a response means (result, retry, browser re-check)
+- `src/github/`. GitHub API client and URL helpers
 - `src/baseline.ts`. Ignore file
 - `src/report/`. JSON/HTML report, CLI output, GitHub Actions job summary and annotations
 - `action.yml`. Reusable action

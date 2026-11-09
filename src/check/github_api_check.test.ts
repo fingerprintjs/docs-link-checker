@@ -1,9 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getRunContext, withRun } from "../run";
-import { withTimeout } from "../utils/limiter";
-import { checkLinkWithGithubApi } from "./check_link";
 import {
   answerAfter,
   apiError,
@@ -14,7 +11,10 @@ import {
   graphqlError,
   largeFileContent,
   notFound,
-} from "./fake_github_api";
+} from "../github/fake_github_api";
+import { getRunContext, withRun } from "../run";
+import { withTimeout } from "../utils/limiter";
+import { checkLinkWithGithubApi } from "./github_api_check";
 
 let api: FakeGithubApi;
 // Simulates a missing `GH_TOKEN`: the client can't be created

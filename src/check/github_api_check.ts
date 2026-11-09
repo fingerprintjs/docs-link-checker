@@ -1,11 +1,11 @@
-import { checkLinkWithFetch } from "../check/fetch_check";
-import { decodeHash } from "../check/hash";
-import { checkLineAnchor, countLines, parseLineAnchor } from "../check/line_anchor";
+import { getApiErrorStatus, getRepo, githubRequest, isNotFoundApiError } from "../github/client";
+import { getGithubPathSegments } from "../github/url";
 import { getMarkdownAnchors, hasMatchingAnchor } from "../sources/markdown";
 import type { LinkCheckResult } from "../types";
 import { tryCatch } from "../utils/try_catch";
-import { getApiErrorStatus, getRepo, githubRequest, isNotFoundApiError } from "./client";
-import { getGithubPathSegments } from "./url";
+import { checkLinkWithFetch } from "./fetch_check";
+import { decodeHash } from "./hash";
+import { checkLineAnchor, countLines, parseLineAnchor } from "./line_anchor";
 
 /**
  * Checks a GitHub link with the GitHub API (`fetch` runs into github.com rate limits fast).
