@@ -1,0 +1,29 @@
+name: GitHub Actions security
+
+# zizmor audits workflows and actions: unpinned actions, credentials left on disk, template injection, token scopes.
+# Locally: `pnpm run lint:actions` (same zizmor version). Audits: https://docs.zizmor.sh/audits/
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    name: Audit workflows with zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          # Keep in sync with `lint:actions` in package.json
+          version: 1.32.0
+          # Code scanning is off in this repo, findings go to the log and fail the job
+          advanced-security: false

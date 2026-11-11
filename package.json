@@ -21,6 +21,7 @@
     "tsc": "tsc --noEmit",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "lint:actions": "uvx zizmor@1.32.0 .",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "dead-code": "fallow dead-code",

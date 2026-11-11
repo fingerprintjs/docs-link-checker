@@ -7,6 +7,8 @@
   // Report exports of entry files too (bin, scripts, bench), not only of imported modules
   "includeEntryExports": true,
   "failOnParseError": true,
+  // From uv (https://docs.astral.sh/uv/), not npm: `lint:actions` runs zizmor, a Rust tool
+  "ignoreBinaries": ["uvx"],
   "rules": {
     // Default is warn or off, which doesn't fail CI
     "unused-dev-dependencies": "error",
