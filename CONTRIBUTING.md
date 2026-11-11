@@ -12,6 +12,7 @@
 - `pnpm run test:integration`. Live sites and GitHub API. Needs network, Chromium, `GH_TOKEN` (or `.env`)
 - `pnpm run check`. Format, lint, `tsc`, unused code and dependencies (CI minus tests)
 - `pnpm run check:fix`. Apply format and safe lint fixes
+- `pnpm run lint:actions`. Security audit of workflows and actions ([zizmor](https://docs.zizmor.sh/audits/)). Needs [uv](https://docs.astral.sh/uv/). Pin new actions to a commit SHA with a version comment
 - `pnpm cli`. Same args as the [CLI](docs/cli.md)
 - `pnpm bench`. `bench/bench.ts`
 - Fix lint findings. A suppression needs a reason
