@@ -20,18 +20,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: ./.github/actions/setup-environment
+      - uses: $/.github/actions/setup-environment
         id: setup
         with:
           app_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base-checkout
+          persist-credentials: false
 
       # The base needs its own node_modules, its src/ runs against them. Moved out of this checkout first:
       # inside it, pnpm finds this checkout's pnpm-workspace.yaml and installs here instead.

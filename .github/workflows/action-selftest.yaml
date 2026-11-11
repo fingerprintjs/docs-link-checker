@@ -24,11 +24,13 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check the fixture with the baseline (passes, broken links are ignored)
         id: with-baseline
-        uses: ./
+        uses: $/
         with:
           files: ${{ env.FIXTURE_FILES }}
           baseline: ${{ env.FIXTURE_BASELINE }}
@@ -37,7 +39,7 @@ jobs:
 
       - name: Check the fixture without the baseline (reports broken links, doesn't fail)
         id: without-baseline
-        uses: ./
+        uses: $/
         with:
           files: ${{ env.FIXTURE_FILES }}
           fail-on-broken: false
@@ -46,7 +48,7 @@ jobs:
       - name: Check the fixture with fail-on-broken (fails)
         id: failing
         continue-on-error: true
-        uses: ./
+        uses: $/
         with:
           files: ${{ env.FIXTURE_FILES }}
           # Already annotated by the previous step
