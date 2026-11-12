@@ -45,9 +45,14 @@ async function findReadmeFilesInRepo(owner: string, repo: string): Promise<MdFil
     (api, params) => api.git.getTree(params),
   );
 
-  // Filter only markdown files
+  // README files only, except test fixtures, which contain deliberately broken links
   const mdFiles = treeData.tree
-    .filter((item) => item.type === "blob" && item.path.toLowerCase().endsWith("readme.md"))
+    .filter(
+      (item) =>
+        item.type === "blob" &&
+        item.path.toLowerCase().endsWith("readme.md") &&
+        !`/${item.path}`.includes("/__fixtures__/"),
+    )
     .map((item) => ({
       sourcePath: `https://github.com/${owner}/${repo}/blob/${defaultBranch}/${item.path}`,
       downloadUrl: `https://raw.githubusercontent.com/${owner}/${repo}/${defaultBranch}/${item.path}`,
