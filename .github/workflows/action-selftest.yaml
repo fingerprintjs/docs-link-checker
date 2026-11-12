@@ -1,5 +1,6 @@
 name: Action self-test
-# Runs the reusable action (action.yml) from this repository on an offline fixture (relative links and anchors only)
+# Runs the reusable action (action.yml) from this repository on an offline fixture (relative links and anchors only),
+# and on this repository's own docs
 
 on:
   push:
@@ -77,3 +78,20 @@ jobs:
             [ "$ignored" = "0" ] || fail "Without the baseline: expected 0 ignored links, got '$ignored'."
           fi
           exit "$failed"
+
+  docs:
+    name: Check links in this repository's docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Not the default **/*.md: the fixtures under src/__fixtures__ contain deliberately broken links
+      - name: Check the docs (fails on broken links)
+        uses: $/
+        with:
+          files: "*.md docs/**/*.md"
+          artifact-name: docs-link-report
