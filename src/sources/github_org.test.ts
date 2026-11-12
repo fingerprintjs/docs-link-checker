@@ -79,6 +79,24 @@ describe("getReadmesFromOrg()", () => {
     expect(readmes.some((readme) => readme.sourcePath.includes("/org/old/"))).toBe(false);
   });
 
+  it("skips test fixture READMEs, which contain deliberately broken links", async () => {
+    octokit.paginate.mockResolvedValue([repos[0]]);
+    octokit.git.getTree.mockResolvedValue({
+      data: {
+        tree: [
+          { type: "blob", path: "README.md" },
+          { type: "blob", path: "__fixtures__/readme.md" },
+          { type: "blob", path: "src/__fixtures__/local/README.md" },
+        ],
+      },
+    });
+
+    const readmes = await run(() => getReadmesFromOrg("org"));
+    expect(readmes.map((readme) => readme.sourcePath)).toEqual([
+      "https://github.com/org/repo-c/blob/main/README.md",
+    ]);
+  });
+
   it("throws a clear error when the repositories cannot be listed", async () => {
     octokit.paginate.mockRejectedValue(new Error("Bad credentials"));
     await expect(run(() => getReadmesFromOrg("org"))).rejects.toMatchObject({
