@@ -43,7 +43,7 @@ jobs:
       - uses: $/.github/actions/setup-environment
         id: setup
         with:
-          app_id: ${{ vars.APP_ID }}
+          client_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
       # The reports of the previous deployment, to show what changed. A missing one (first run) is fine.
@@ -86,7 +86,7 @@ jobs:
       - uses: $/.github/actions/setup-environment
         id: setup
         with:
-          app_id: ${{ vars.APP_ID }}
+          client_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
       # The reports of the previous deployment, to show what changed. A missing one (first run) is fine.
@@ -129,7 +129,7 @@ jobs:
       - uses: $/.github/actions/setup-environment
         id: setup
         with:
-          app_id: ${{ vars.APP_ID }}
+          client_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
       # The reports of the previous deployment, to show what changed. A missing one (first run) is fine.

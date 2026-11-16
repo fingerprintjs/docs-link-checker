@@ -27,7 +27,7 @@ jobs:
       - uses: $/.github/actions/setup-environment
         id: setup
         with:
-          app_id: ${{ vars.APP_ID }}
+          client_id: ${{ vars.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

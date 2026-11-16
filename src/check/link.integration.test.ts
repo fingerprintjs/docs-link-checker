@@ -119,7 +119,7 @@ describe("checkLinkWithPlaywright()", () => {
     },
     async () => {
       const result = await checkLinkWithPlaywright(
-        "https://docs.fingerprint.com/reference/server-api-get-event#response-ip-info-v6-address",
+        "https://docs.fingerprint.com/reference/server-api-get-event#response-one-of-0-ip-info-v6-address",
       );
       expect(result).toEqual({ ok: true, status: 200 });
     },
